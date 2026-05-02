@@ -135,10 +135,12 @@ The browser demo has been adjusted toward the user's four-way shuttle reference:
 
 - Default layout is a single-level orthogonal aisle grid: no diagonal vehicle movement.
 - The middle storage area is a contiguous 6x8 block of adjacent drivable pallet cells.
-- FIFO storage behavior is modeled at row level: inbound pushes storage from the right-side infeed direction; outbound drains from the left-side outfeed direction.
+- FIFO storage behavior is modeled at row level: inbound places from the right-side infeed direction into the deepest reachable empty cell; outbound drains from the left-side outfeed direction.
+- The simulator does not perform hidden row compaction. Stored pallet `nodeId` changes only through explicit vehicle/lift transfer in this branch; push-lane mechanics are deferred until they can be represented with time, reservations, and events.
 - Lift behavior is modeled only as black-box ports, not as multi-level lift physics.
 - Dedicated inbound ports: `inbound-lift-a`, `inbound-lift-b`.
 - Dedicated outbound ports: `outbound-lift-a`, `outbound-lift-b`.
+- Dedicated lift ports expose queue length, active task id, waiting task ids, and utilization in traffic diagnostics.
 - The 3D view renders low black-box ports, dense track-cell storage, side aisles, and roller conveyor entry/exit pads.
 - Runtime playback speed supports `1x`, `2x`, `4x`, and `10x`.
 - The checked-in `config/shuttle/phase0-scenario.json` has been synced to the same current default dense-layout scenario so `loadScenario` and reviewers do not see the old sparse demo.

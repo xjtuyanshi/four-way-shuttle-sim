@@ -45,18 +45,18 @@ function putVehicleOnMainEntryEdge(
   reservations: Array<Reservation['resourceType']>
 ): void {
   const vehicle = candidate.state.vehicles[0]!;
-  const from = node(candidate.scenario, 'inbound');
-  const to = node(candidate.scenario, 'x-main');
+  const from = node(candidate.scenario, 'x-main');
+  const to = node(candidate.scenario, 'right-row-03');
   vehicle.state = 'moving-to-pickup';
-  vehicle.currentNodeId = 'inbound';
-  vehicle.currentEdgeId = 'inbound-x-main';
-  vehicle.targetNodeId = 'x-main';
+  vehicle.currentNodeId = 'x-main';
+  vehicle.currentEdgeId = 'x-main-right-row-03';
+  vehicle.targetNodeId = 'right-row-03';
   vehicle.x = (from.x + to.x) / 2;
   vehicle.z = (from.z + to.z) / 2;
   vehicle.speedMps = 0.2;
   candidate.state.reservations = reservations.map((resourceType) => {
-    if (resourceType === 'edge') return reservation('edge', 'inbound-x-main');
-    if (resourceType === 'node') return reservation('node', 'x-main');
+    if (resourceType === 'edge') return reservation('edge', 'x-main-right-row-03');
+    if (resourceType === 'node') return reservation('node', 'right-row-03');
     return reservation('zone', 'zone-x-main');
   });
 }

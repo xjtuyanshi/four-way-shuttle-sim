@@ -119,10 +119,10 @@ describe('shuttle phase 0 SimCore', () => {
     const storageXs = storageNodes.map((node) => node.x);
     const storageRows = [...new Set(storageNodes.map((node) => node.z))].sort((left, right) => left - right);
     const storageColumns = [...new Set(storageNodes.map((node) => node.x))].sort((left, right) => left - right);
-    const inboundX = nodes.get('inbound')!.x;
-    const outboundX = nodes.get('outbound')!.x;
     const inboundLifts = ['inbound-lift-a', 'inbound-lift-b'].map((nodeId) => nodes.get(nodeId)!);
     const outboundLifts = ['outbound-lift-a', 'outbound-lift-b'].map((nodeId) => nodes.get(nodeId)!);
+    const inboundX = inboundLifts[0]!.x;
+    const outboundX = outboundLifts[0]!.x;
 
     expect(storageRows).toHaveLength(6);
     expect(storageColumns).toHaveLength(8);
@@ -134,6 +134,8 @@ describe('shuttle phase 0 SimCore', () => {
     expect(storageRows.slice(1).every((z, index) => z - storageRows[index]! <= 1.25)).toBe(true);
     expect(Math.max(...storageXs)).toBeLessThan(inboundX);
     expect(Math.min(...storageXs)).toBeGreaterThan(outboundX);
+    expect(scenario.layout.nodes.some((node) => node.id === 'inbound' || node.id === 'outbound')).toBe(false);
+    expect(scenario.layout.edges.some((edge) => edge.id === 'inbound-x-main' || edge.id === 'x-outbound-outbound')).toBe(false);
     expect(inboundLifts.every((node) => node.x === inboundX)).toBe(true);
     expect(outboundLifts.every((node) => node.x === outboundX)).toBe(true);
     expect(inboundLifts.every((node) => Math.abs(node.z) > 0)).toBe(true);
@@ -227,6 +229,10 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.kpis.deadlockCount).toBe(0);
     expect(state.tasks.every((task) => task.kind !== 'inbound' || task.pickupNodeId.startsWith('inbound-lift-'))).toBe(true);
     expect(state.tasks.every((task) => task.kind !== 'outbound' || task.dropoffNodeId.startsWith('outbound-lift-'))).toBe(true);
+    expect(state.traffic.liftPorts).toHaveLength(4);
+    expect(state.traffic.liftPorts.some((port) => port.queueLength > 0)).toBe(true);
+    expect(state.traffic.liftPorts.some((port) => port.kind === 'inbound' && port.utilization > 0)).toBe(true);
+    expect(Object.keys(state.kpis.blockedTimeByReasonSec).some((reason) => reason.startsWith('inbound-lift-busy:'))).toBe(true);
   });
 
   it('defers outbound work instead of creating phantom pallets when FIFO storage is empty', () => {
@@ -286,6 +292,7 @@ describe('shuttle phase 0 SimCore', () => {
       ['storage-r01-c01', 'load-0001']
     ]);
     expect(state.loads.find((load) => load.id === 'load-0001')).toMatchObject({ state: 'delivered', nodeId: expect.stringMatching(/^outbound-lift-/) });
+    expect(storageOccupancy.some((entry) => entry.nodeId === 'storage-r01-c01')).toBe(false);
     expect(storageOccupancy).toEqual(expect.arrayContaining([
       { nodeId: 'storage-r01-c02', loadId: 'load-0007' },
       { nodeId: 'storage-r02-c01', loadId: 'load-0002' },

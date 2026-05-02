@@ -223,14 +223,12 @@ function createDefaultLayout(): ShuttleScenario['layout'] {
   const nodes: LayoutNode[] = [
     { id: 'outbound-lift-a', type: 'lift-blackbox', x: outboundX, y: 0, z: rowZs[0]!, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'outbound-lift-b', type: 'lift-blackbox', x: outboundX, y: 0, z: rowZs[rowZs.length - 1]!, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-    { id: 'outbound', type: 'outbound', x: outboundX, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'x-outbound', type: 'intersection', x: leftSpineX, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'left-top', type: 'aisle', x: leftSpineX, y: 0, z: topZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'left-bottom', type: 'aisle', x: leftSpineX, y: 0, z: bottomZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'right-top', type: 'aisle', x: rightSpineX, y: 0, z: topZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'right-bottom', type: 'aisle', x: rightSpineX, y: 0, z: bottomZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'x-main', type: 'intersection', x: rightSpineX, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-    { id: 'inbound', type: 'inbound', x: inboundX, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'inbound-lift-a', type: 'lift-blackbox', x: inboundX, y: 0, z: rowZs[0]!, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'inbound-lift-b', type: 'lift-blackbox', x: inboundX, y: 0, z: rowZs[rowZs.length - 1]!, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'parking-a', type: 'parking', x: rightSpineX, y: 0, z: parkingTopZ, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
@@ -262,8 +260,6 @@ function createDefaultLayout(): ShuttleScenario['layout'] {
   const edges: LayoutEdge[] = [
     { id: 'inbound-lift-a-right-row-01', from: 'inbound-lift-a', to: 'right-row-01', lengthM: Math.abs(inboundX - rightSpineX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'inbound-lift-a-dock', noParking: true },
     { id: `inbound-lift-b-right-row-${String(DEFAULT_STORAGE_ROWS).padStart(2, '0')}`, from: 'inbound-lift-b', to: `right-row-${String(DEFAULT_STORAGE_ROWS).padStart(2, '0')}`, lengthM: Math.abs(inboundX - rightSpineX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'inbound-lift-b-dock', noParking: true },
-    { id: 'inbound-x-main', from: 'inbound', to: 'x-main', lengthM: Math.abs(inboundX - rightSpineX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'right-infeed', noParking: true },
-    { id: 'x-outbound-outbound', from: 'x-outbound', to: 'outbound', lengthM: Math.abs(leftSpineX - outboundX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'left-outfeed', noParking: true },
     { id: 'outbound-lift-a-left-row-01', from: 'outbound-lift-a', to: 'left-row-01', lengthM: Math.abs(leftSpineX - outboundX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'outbound-lift-a-dock', noParking: true },
     { id: `outbound-lift-b-left-row-${String(DEFAULT_STORAGE_ROWS).padStart(2, '0')}`, from: 'outbound-lift-b', to: `left-row-${String(DEFAULT_STORAGE_ROWS).padStart(2, '0')}`, lengthM: Math.abs(leftSpineX - outboundX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'outbound-lift-b-dock', noParking: true },
     { id: 'parking-a-right-top', from: 'parking-a', to: 'right-top', lengthM: Math.abs(parkingTopZ - topZ), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'parking-approach', noParking: true },
@@ -346,7 +342,7 @@ function createDefaultLayout(): ShuttleScenario['layout'] {
       id: 'zone-x-main',
       type: 'intersection',
       nodeIds: ['x-main'],
-      edgeIds: ['inbound-x-main', `x-main-right-row-${String(upperMiddleRow + 1).padStart(2, '0')}`, `x-main-right-row-${String(lowerMiddleRow + 1).padStart(2, '0')}`],
+      edgeIds: [`x-main-right-row-${String(upperMiddleRow + 1).padStart(2, '0')}`, `x-main-right-row-${String(lowerMiddleRow + 1).padStart(2, '0')}`],
       noStop: true,
       noParking: true,
       capacity: 1,
@@ -356,7 +352,7 @@ function createDefaultLayout(): ShuttleScenario['layout'] {
       id: 'zone-x-outbound',
       type: 'intersection',
       nodeIds: ['x-outbound'],
-      edgeIds: ['x-outbound-outbound', `x-outbound-left-row-${String(upperMiddleRow + 1).padStart(2, '0')}`, `x-outbound-left-row-${String(lowerMiddleRow + 1).padStart(2, '0')}`],
+      edgeIds: [`x-outbound-left-row-${String(upperMiddleRow + 1).padStart(2, '0')}`, `x-outbound-left-row-${String(lowerMiddleRow + 1).padStart(2, '0')}`],
       noStop: true,
       noParking: true,
       capacity: 1,
@@ -584,6 +580,7 @@ export class ShuttleSimCore {
   private livelockCount = 0;
   private blockedTimeByReasonSec = new Map<string, number>();
   private deferredTaskReasons: Record<'inbound' | 'outbound', string | null> = { inbound: null, outbound: null };
+  private liftPortBusyTimeSec = new Map<string, number>();
   private error: string | null = null;
 
   constructor(scenario: ShuttleScenario = createDefaultShuttleScenario()) {
@@ -627,6 +624,7 @@ export class ShuttleSimCore {
     this.livelockCount = 0;
     this.blockedTimeByReasonSec = new Map();
     this.deferredTaskReasons = { inbound: null, outbound: null };
+    this.liftPortBusyTimeSec = new Map();
     this.error = null;
     this.rng = makeRng(seed);
     this.scenario = { ...this.scenario, seed };
@@ -754,8 +752,9 @@ export class ShuttleSimCore {
     this.reservations = this.reservations.filter((reservation) => reservation.endTimeSec >= this.simTimeSec - 1);
 
     this.generateDueTasks(stepSec);
-    this.assignQueuedTasks();
+    this.assignQueuedTasks(stepSec);
     this.advanceVehicles(stepSec);
+    this.updateLiftPortUtilization(stepSec);
     this.updateDeadlockSmokeCounters();
 
     if (this.simTimeSec >= this.scenario.durationSec) {
@@ -975,7 +974,7 @@ export class ShuttleSimCore {
   }
 
   private selectLiftPortNodeId(kind: 'inbound' | 'outbound', relatedNodeId: string): string {
-    const fallbackNodeId = kind;
+    const fallbackNodeId = this.scenario.layout.nodes.find((node) => node.type === kind)?.id ?? relatedNodeId;
     const relatedNode = this.scenario.layout.nodes.find((node) => node.id === relatedNodeId);
     const liftNodes = this.scenario.layout.nodes
       .filter((node) => node.type === 'lift-blackbox' && node.id.startsWith(`${kind}-lift`))
@@ -988,15 +987,33 @@ export class ShuttleSimCore {
     return candidates[0]!;
   }
 
+  private taskLiftPortNodeId(task: TaskStateRecord): string | null {
+    if (task.kind === 'inbound' && task.pickupNodeId.startsWith('inbound-lift')) {
+      return task.pickupNodeId;
+    }
+    if (task.kind === 'outbound' && task.dropoffNodeId.startsWith('outbound-lift')) {
+      return task.dropoffNodeId;
+    }
+    return null;
+  }
+
   private isLiftPortBusyForAssignment(kind: 'inbound' | 'outbound', liftNodeId: string): boolean {
-    return this.tasks.some(
-      (task) =>
-        task.kind === kind &&
-        task.state !== 'queued' &&
-        task.state !== 'completed' &&
-        task.state !== 'failed' &&
-        (kind === 'inbound' ? task.pickupNodeId === liftNodeId : task.dropoffNodeId === liftNodeId)
-    );
+    return this.tasks.some((task) => this.isTaskUsingLiftPortResource(task, kind, liftNodeId));
+  }
+
+  private isTaskUsingLiftPortResource(task: TaskStateRecord, kind: 'inbound' | 'outbound', liftNodeId: string): boolean {
+    if (task.kind !== kind || task.state === 'queued' || task.state === 'completed' || task.state === 'failed') {
+      return false;
+    }
+    const taskLiftPortId = this.taskLiftPortNodeId(task);
+    if (taskLiftPortId !== liftNodeId) {
+      return false;
+    }
+    if (kind === 'outbound') {
+      return true;
+    }
+    const load = this.loads.find((candidate) => candidate.id === task.loadId);
+    return load?.state === 'waiting' && load.nodeId === liftNodeId;
   }
 
   private deferTask(kind: 'inbound' | 'outbound', reason: string, dtSec: number): void {
@@ -1061,7 +1078,13 @@ export class ShuttleSimCore {
     const occupancy = this.storageNodeLoadOccupancy(true);
     for (let offset = 0; offset < lanes.length; offset += 1) {
       const lane = lanes[(this.taskSequence + offset) % lanes.length]!;
-      const candidate = lane.find((node) => !occupancy.has(node.id));
+      const candidate = lane.find((node, index) => {
+        if (occupancy.has(node.id)) {
+          return false;
+        }
+        const nodesBetweenCandidateAndInfeed = lane.slice(index + 1);
+        return nodesBetweenCandidateAndInfeed.every((rightSideNode) => !occupancy.has(rightSideNode.id));
+      });
       if (candidate) {
         return { nodeId: candidate.id, loadId: '' };
       }
@@ -1091,31 +1114,18 @@ export class ShuttleSimCore {
     return null;
   }
 
-  private compactStorageLanes(): void {
-    const pendingInboundTargets = new Set(
-      this.tasks
-        .filter((task) => task.kind === 'inbound' && task.state !== 'completed' && task.state !== 'failed')
-        .map((task) => task.dropoffNodeId)
-    );
-
-    for (const lane of this.storageLanes()) {
-      const storedLoads = lane
-        .map((node) => this.loads.find((load) => load.state === 'stored' && load.nodeId === node.id))
-        .filter((load): load is LoadStateRecord => Boolean(load));
-      const availableNodes = lane.filter((node) => !pendingInboundTargets.has(node.id));
-      storedLoads.forEach((load, index) => {
-        const targetNode = availableNodes[index];
-        if (targetNode) {
-          load.nodeId = targetNode.id;
-        }
-      });
+  private assignQueuedTasks(dtSec: number): void {
+    for (const task of this.tasks.filter((candidate) => candidate.state === 'queued')) {
+      const reason = this.liftPortBlockReason(task);
+      task.waitReason = reason;
+      if (reason) {
+        this.blockedTimeByReasonSec.set(reason, round((this.blockedTimeByReasonSec.get(reason) ?? 0) + dtSec));
+      }
     }
-  }
 
-  private assignQueuedTasks(): void {
     const idleVehicles = this.vehicles.filter((vehicle) => vehicle.state === 'idle');
     for (const vehicle of idleVehicles) {
-      const task = this.tasks.find((candidate) => candidate.state === 'queued' && !this.isTaskBlockedByDedicatedLift(candidate));
+      const task = this.tasks.find((candidate) => candidate.state === 'queued' && !this.liftPortBlockReason(candidate));
       if (!task) {
         return;
       }
@@ -1132,20 +1142,21 @@ export class ShuttleSimCore {
       task.state = 'assigned';
       task.vehicleId = vehicle.id;
       task.assignedAtSec = this.simTimeSec;
+      task.waitReason = null;
       this.logEvent('task-assigned', vehicle.id, task.id, task.loadId, vehicle.currentNodeId, task.pickupNodeId, 'nearest-idle', this.vehiclePosition(vehicle), {
         route: route.join('>')
       });
     }
   }
 
-  private isTaskBlockedByDedicatedLift(task: TaskStateRecord): boolean {
+  private liftPortBlockReason(task: TaskStateRecord): string | null {
     if (task.kind === 'inbound' && task.pickupNodeId.startsWith('inbound-lift')) {
-      return this.isLiftPortBusyForAssignment('inbound', task.pickupNodeId);
+      return this.isLiftPortBusyForAssignment('inbound', task.pickupNodeId) ? `inbound-lift-busy:${task.pickupNodeId}` : null;
     }
     if (task.kind === 'outbound' && task.dropoffNodeId.startsWith('outbound-lift')) {
-      return this.isLiftPortBusyForAssignment('outbound', task.dropoffNodeId);
+      return this.isLiftPortBusyForAssignment('outbound', task.dropoffNodeId) ? `outbound-lift-busy:${task.dropoffNodeId}` : null;
     }
-    return false;
+    return null;
   }
 
   private planRoute(currentNodeId: string, pickupNodeId: string, dropoffNodeId: string, parkingNodeId: string): string[] {
@@ -1210,7 +1221,11 @@ export class ShuttleSimCore {
   private parkingNodeFor(vehicleId: string): string {
     const parkingNodes = this.scenario.layout.nodes.filter((node) => node.type === 'parking');
     if (parkingNodes.length === 0) {
-      return 'inbound';
+      const fallbackNode = this.scenario.layout.nodes.find((node) => !node.noParking) ?? this.scenario.layout.nodes[0];
+      if (!fallbackNode) {
+        throw new Error('Scenario has no nodes available for vehicle parking.');
+      }
+      return fallbackNode.id;
     }
     const vehicleNumber = Number(vehicleId.replace(/\D+/g, '')) || 1;
     return parkingNodes[(vehicleNumber - 1) % parkingNodes.length]!.id;
@@ -1313,9 +1328,6 @@ export class ShuttleSimCore {
         load.state = 'carried';
         load.nodeId = null;
         load.vehicleId = vehicle.id;
-      }
-      if (task.kind === 'outbound') {
-        this.compactStorageLanes();
       }
       vehicle.state = 'assigned';
       this.logEvent('lift-complete', vehicle.id, task.id, task.loadId, task.pickupNodeId, vehicle.currentNodeId, 'lift-time-elapsed', this.vehiclePosition(vehicle), {});
@@ -1602,6 +1614,41 @@ export class ShuttleSimCore {
     return this.reservations.find((reservation) => reservation.id === reservationId)?.vehicleId ?? null;
   }
 
+  private liftPortNodes(): Array<{ nodeId: string; kind: 'inbound' | 'outbound' }> {
+    return this.scenario.layout.nodes
+      .filter((node) => node.type === 'lift-blackbox' && (node.id.startsWith('inbound-lift') || node.id.startsWith('outbound-lift')))
+      .map((node) => ({ nodeId: node.id, kind: node.id.startsWith('inbound-lift') ? 'inbound' as const : 'outbound' as const }))
+      .sort((left, right) => left.nodeId.localeCompare(right.nodeId));
+  }
+
+  private updateLiftPortUtilization(dtSec: number): void {
+    for (const port of this.liftPortNodes()) {
+      if (this.isLiftPortBusyForAssignment(port.kind, port.nodeId)) {
+        this.liftPortBusyTimeSec.set(port.nodeId, round((this.liftPortBusyTimeSec.get(port.nodeId) ?? 0) + dtSec));
+      }
+    }
+  }
+
+  private liftPortDiagnostics(): ShuttleSimState['traffic']['liftPorts'] {
+    return this.liftPortNodes().map((port) => {
+      const waitingTaskIds = this.tasks
+        .filter((task) => task.state === 'queued' && task.kind === port.kind && this.taskLiftPortNodeId(task) === port.nodeId)
+        .map((task) => task.id)
+        .sort();
+      const activeTask = this.tasks
+        .filter((task) => this.isTaskUsingLiftPortResource(task, port.kind, port.nodeId))
+        .sort((left, right) => left.id.localeCompare(right.id))[0];
+      return {
+        nodeId: port.nodeId,
+        kind: port.kind,
+        queueLength: waitingTaskIds.length,
+        waitingTaskIds,
+        activeTaskId: activeTask?.id ?? null,
+        utilization: round((this.liftPortBusyTimeSec.get(port.nodeId) ?? 0) / Math.max(this.simTimeSec, 1), 4)
+      };
+    });
+  }
+
   private vehiclePosition(vehicle: MutableVehicle): { x: number; y: number; z: number } {
     return { x: vehicle.x, y: vehicle.y, z: vehicle.z };
   }
@@ -1678,6 +1725,7 @@ export class ShuttleSimCore {
     return {
       activeReservationCount: this.reservations.length,
       waitingVehicles,
+      liftPorts: this.liftPortDiagnostics(),
       deadlockCandidateVehicleIds,
       minVehicleSeparationM: minVehicleSeparationM === null ? null : round(minVehicleSeparationM),
       maxObservedSpeedMps: round(Math.max(0, ...this.vehicles.map((vehicle) => vehicle.speedMps))),

@@ -74,6 +74,7 @@ function state(overrides: Partial<ShuttleSimState> = {}): ShuttleSimState {
     traffic: {
       activeReservationCount: 0,
       waitingVehicles: [],
+      liftPorts: [],
       deadlockCandidateVehicleIds: [],
       minVehicleSeparationM: null,
       maxObservedSpeedMps: 0,

@@ -90,6 +90,7 @@ type Phase0ValidationResult = {
     noDeadlocksInSweep: boolean;
     eventLogsPresent: boolean;
     noPhysicalSafetyViolations: boolean;
+    noReservationCoverageViolations: boolean;
     pass: boolean;
   };
 };
@@ -466,6 +467,9 @@ function StreamingPane({
 function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
   const traffic = state?.traffic;
   const waiting = traffic?.waitingVehicles ?? [];
+  const liftPorts = traffic?.liftPorts ?? [];
+  const queuedLiftTasks = liftPorts.reduce((sum, port) => sum + port.queueLength, 0);
+  const activeLiftPorts = liftPorts.filter((port) => port.activeTaskId).length;
 
   return (
     <section className="traffic-diagnostics" aria-label="Traffic diagnostics">
@@ -485,6 +489,11 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
         <span>Physical violations</span>
         <strong className={traffic?.physicalViolationCount ? 'blocked' : 'ready'}>{traffic?.physicalViolationCount ?? 0}</strong>
       </div>
+      <div>
+        <span>Lift ports</span>
+        <strong>{activeLiftPorts}/{liftPorts.length}</strong>
+        <small>{queuedLiftTasks} queued</small>
+      </div>
       <div className="traffic-wait-list">
         {waiting.length === 0 ? (
           <small>No waiting vehicles</small>
@@ -492,6 +501,17 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
           waiting.map((vehicle) => (
             <small key={vehicle.vehicleId}>
               {vehicle.vehicleId} / {vehicle.waitReason ?? 'blocked'} / {vehicle.blockingVehicleId ?? vehicle.blockingReservationId ?? 'resource'}
+            </small>
+          ))
+        )}
+      </div>
+      <div className="traffic-lift-list">
+        {liftPorts.length === 0 ? (
+          <small>No lift ports</small>
+        ) : (
+          liftPorts.map((port) => (
+            <small key={port.nodeId}>
+              {port.nodeId} / {port.kind} / q{port.queueLength} / {Math.round(port.utilization * 100)}%
             </small>
           ))
         )}
@@ -650,6 +670,10 @@ function ValidationPanel({
           <div>
             <span>Physical safety</span>
             <strong>{validation.acceptance.noPhysicalSafetyViolations ? 'clear' : 'violations'}</strong>
+          </div>
+          <div>
+            <span>Reservation coverage</span>
+            <strong>{validation.acceptance.noReservationCoverageViolations ? 'clear' : 'violations'}</strong>
           </div>
           <div>
             <span>Max accel</span>

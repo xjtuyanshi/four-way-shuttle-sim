@@ -519,7 +519,7 @@ input[type="range"] {
 
 .traffic-diagnostics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(220px, 1.2fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr)) repeat(2, minmax(220px, 1.2fr));
   gap: 10px;
 }
 
@@ -542,11 +542,13 @@ input[type="range"] {
   font-size: 20px;
 }
 
-.traffic-wait-list {
+.traffic-wait-list,
+.traffic-lift-list {
   align-content: start;
 }
 
-.traffic-wait-list small {
+.traffic-wait-list small,
+.traffic-lift-list small {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
