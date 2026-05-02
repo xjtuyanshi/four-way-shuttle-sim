@@ -1,4 +1,4 @@
-import type { ShuttleScenario } from '@four-way-shuttle/schemas';
+import type { ShuttleScenario, ShuttleSimState } from '@four-way-shuttle/schemas';
 import { ShuttleSimCore, hashEventLog } from '@four-way-shuttle/sim-core';
 
 export type Phase0ValidationRun = {
@@ -12,6 +12,10 @@ export type Phase0ValidationRun = {
   outboundPph: number;
   reservationConflictCount: number;
   deadlockCount: number;
+  maxObservedSpeedMps: number;
+  maxObservedAccelerationMps2: number;
+  minVehicleSeparationM: number | null;
+  physicalViolationCount: number;
 };
 
 export type Phase0ValidationResult = {
@@ -36,6 +40,7 @@ export type Phase0ValidationResult = {
     sameSeedEventHashStable: boolean;
     noDeadlocksInSweep: boolean;
     eventLogsPresent: boolean;
+    noPhysicalSafetyViolations: boolean;
     pass: boolean;
   };
 };
@@ -51,9 +56,49 @@ function round(value: number, decimals = 4): number {
   return Math.round(value * factor) / factor;
 }
 
+function inspectPhysicalState(scenario: ShuttleScenario, state: ShuttleSimState): {
+  maxObservedSpeedMps: number;
+  minVehicleSeparationM: number | null;
+  violationCount: number;
+} {
+  void scenario;
+
+  return {
+    maxObservedSpeedMps: round(state.traffic.maxObservedSpeedMps),
+    minVehicleSeparationM: state.traffic.minVehicleSeparationM,
+    violationCount: state.traffic.physicalViolationCount
+  };
+}
+
 function runOnce(scenario: ShuttleScenario, seed: number, durationSec: number): Phase0ValidationRun {
   const sim = new ShuttleSimCore({ ...scenario, seed, durationSec });
-  sim.runToEnd(durationSec);
+  sim.start();
+  let maxObservedSpeedMps = 0;
+  let maxObservedAccelerationMps2 = 0;
+  let minVehicleSeparationM: number | null = null;
+  let physicalViolationCount = 0;
+  let previousSpeeds = new Map<string, number>();
+  while (sim.getState().status === 'running') {
+    const state = sim.step(scenario.timeStepSec);
+    const physical = inspectPhysicalState(scenario, state);
+    maxObservedSpeedMps = Math.max(maxObservedSpeedMps, physical.maxObservedSpeedMps);
+    for (const vehicle of state.vehicles) {
+      const previousSpeed = previousSpeeds.get(vehicle.id) ?? vehicle.speedMps;
+      const accelerationMps2 = Math.abs(vehicle.speedMps - previousSpeed) / scenario.timeStepSec;
+      maxObservedAccelerationMps2 = Math.max(maxObservedAccelerationMps2, accelerationMps2);
+      if (accelerationMps2 > scenario.physicsParams.accelerationMps2 + 1e-6) {
+        physicalViolationCount += 1;
+      }
+    }
+    previousSpeeds = new Map(state.vehicles.map((vehicle) => [vehicle.id, vehicle.speedMps]));
+    minVehicleSeparationM =
+      physical.minVehicleSeparationM === null
+        ? minVehicleSeparationM
+        : minVehicleSeparationM === null
+          ? physical.minVehicleSeparationM
+          : Math.min(minVehicleSeparationM, physical.minVehicleSeparationM);
+    physicalViolationCount += physical.violationCount;
+  }
   const state = sim.getState();
   const eventLog = sim.getEventLog();
 
@@ -67,7 +112,11 @@ function runOnce(scenario: ShuttleScenario, seed: number, durationSec: number): 
     inboundPph: state.kpis.inboundPph,
     outboundPph: state.kpis.outboundPph,
     reservationConflictCount: state.kpis.reservationConflictCount,
-    deadlockCount: state.kpis.deadlockCount
+    deadlockCount: state.kpis.deadlockCount,
+    maxObservedSpeedMps: round(maxObservedSpeedMps),
+    maxObservedAccelerationMps2: round(maxObservedAccelerationMps2),
+    minVehicleSeparationM: minVehicleSeparationM === null ? null : round(minVehicleSeparationM),
+    physicalViolationCount
   };
 }
 
@@ -88,6 +137,7 @@ export function validatePhase0Scenario(
   const sameSeedEventHashStable = new Set(hashes).size === 1;
   const noDeadlocksInSweep = seedSweepRuns.every((run) => run.deadlockCount === 0);
   const eventLogsPresent = [...repeatRuns, ...seedSweepRuns].every((run) => run.eventCount > 0);
+  const noPhysicalSafetyViolations = [...repeatRuns, ...seedSweepRuns].every((run) => run.physicalViolationCount === 0);
 
   return {
     checkedAt: new Date().toISOString(),
@@ -111,7 +161,8 @@ export function validatePhase0Scenario(
       sameSeedEventHashStable,
       noDeadlocksInSweep,
       eventLogsPresent,
-      pass: sameSeedEventHashStable && noDeadlocksInSweep && eventLogsPresent
+      noPhysicalSafetyViolations,
+      pass: sameSeedEventHashStable && noDeadlocksInSweep && eventLogsPresent && noPhysicalSafetyViolations
     }
   };
 }

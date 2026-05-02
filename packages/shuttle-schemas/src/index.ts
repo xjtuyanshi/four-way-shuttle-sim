@@ -174,8 +174,16 @@ export const VehicleStateSchema = z.object({
   taskId: z.string().nullable(),
   targetNodeId: z.string().nullable(),
   currentNodeId: z.string(),
+  currentEdgeId: z.string().nullable(),
   routeNodeIds: z.array(z.string()),
+  routeIndex: z.number().int().nonnegative(),
+  legRemainingM: z.number().nonnegative(),
+  legElapsedSec: z.number().nonnegative(),
+  legTravelSec: z.number().nonnegative(),
+  phaseRemainingSec: z.number().nonnegative(),
   waitReason: z.string().nullable(),
+  blockingReservationId: z.string().nullable(),
+  blockingVehicleId: z.string().nullable(),
   blockedTimeSec: z.number().nonnegative(),
   idleTimeSec: z.number().nonnegative(),
   busyTimeSec: z.number().nonnegative()
@@ -257,6 +265,26 @@ export const EventLogEntrySchema = z.object({
   details: z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])).default({})
 });
 
+export const TrafficWaitingVehicleSchema = z.object({
+  vehicleId: z.string(),
+  currentNodeId: z.string(),
+  targetNodeId: z.string().nullable(),
+  waitReason: z.string().nullable(),
+  blockedTimeSec: z.number().nonnegative(),
+  waitingSinceSec: z.number().nonnegative().nullable(),
+  blockingReservationId: z.string().nullable(),
+  blockingVehicleId: z.string().nullable()
+});
+
+export const TrafficDiagnosticsSchema = z.object({
+  activeReservationCount: z.number().int().nonnegative(),
+  waitingVehicles: z.array(TrafficWaitingVehicleSchema),
+  deadlockCandidateVehicleIds: z.array(z.string()),
+  minVehicleSeparationM: z.number().nonnegative().nullable(),
+  maxObservedSpeedMps: z.number().nonnegative(),
+  physicalViolationCount: z.number().int().nonnegative()
+});
+
 export const ShuttleSimStateSchema = z.object({
   schemaVersion: z.literal('shuttle.phase0.state.v0'),
   scenarioId: z.string(),
@@ -269,6 +297,7 @@ export const ShuttleSimStateSchema = z.object({
   tasks: z.array(TaskStateRecordSchema),
   loads: z.array(LoadStateRecordSchema),
   reservations: z.array(ReservationSchema),
+  traffic: TrafficDiagnosticsSchema,
   kpis: KpiSnapshotSchema,
   recentEvents: z.array(EventLogEntrySchema),
   error: z.string().nullable()
@@ -299,6 +328,7 @@ export type VehicleState = z.infer<typeof VehicleStateSchema>;
 export type TaskStateRecord = z.infer<typeof TaskStateRecordSchema>;
 export type LoadStateRecord = z.infer<typeof LoadStateRecordSchema>;
 export type Reservation = z.infer<typeof ReservationSchema>;
+export type TrafficDiagnostics = z.infer<typeof TrafficDiagnosticsSchema>;
 export type KpiSnapshot = z.infer<typeof KpiSnapshotSchema>;
 export type EventLogEntry = z.infer<typeof EventLogEntrySchema>;
 export type ShuttleSimState = z.infer<typeof ShuttleSimStateSchema>;

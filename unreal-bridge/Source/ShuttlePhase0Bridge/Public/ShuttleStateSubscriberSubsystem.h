@@ -33,6 +33,7 @@ public:
 private:
     void HandleMessage(const FString& Message);
     FShuttleVisualVehicleState ParseVehicleState(const TSharedPtr<FJsonObject>& Object) const;
+    TArray<FString> ParseStringArray(const TSharedPtr<FJsonObject>& Object, const FString& FieldName) const;
     EShuttleVisualOperationalState ParseState(const FString& Value) const;
 
     TSharedPtr<IWebSocket> Socket;

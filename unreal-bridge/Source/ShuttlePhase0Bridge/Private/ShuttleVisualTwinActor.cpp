@@ -25,6 +25,11 @@ void AShuttleVisualTwinActor::Tick(float DeltaSeconds)
 
 void AShuttleVisualTwinActor::ApplyAuthoritativeState(const FShuttleVisualVehicleState& NextState)
 {
+    if (!VehicleId.IsEmpty() && VehicleId != NextState.Id)
+    {
+        return;
+    }
+
     CurrentState = NextState;
     VehicleId = NextState.Id;
 

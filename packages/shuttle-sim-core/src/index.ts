@@ -17,10 +17,7 @@ import {
 type RuntimeStatus = ShuttleSimState['status'];
 
 type MutableVehicle = VehicleState & {
-  phaseRemainingSec: number;
-  legRemainingM: number;
-  routeIndex: number;
-  currentEdgeId: string | null;
+  targetSpeedMps: number;
   waitingSinceSec: number | null;
 };
 
@@ -127,6 +124,67 @@ function reverseEdgeKey(from: string, to: string): string {
   return `${to}->${from}`;
 }
 
+function calculateTravelTimeSec(distanceM: number, maxSpeedMps: number, accelerationMps2: number): number {
+  const acceleration = Math.max(0.001, accelerationMps2);
+  const speed = Math.max(0.001, maxSpeedMps);
+  const accelerateDistanceM = (speed * speed) / (2 * acceleration);
+  if (distanceM <= accelerateDistanceM * 2) {
+    return 2 * Math.sqrt(distanceM / acceleration);
+  }
+  return (2 * speed) / acceleration + (distanceM - accelerateDistanceM * 2) / speed;
+}
+
+function motionProfileAt(
+  elapsedSec: number,
+  distanceM: number,
+  maxSpeedMps: number,
+  accelerationMps2: number
+): { distanceM: number; speedMps: number } {
+  const acceleration = Math.max(0.001, accelerationMps2);
+  const speed = Math.max(0.001, maxSpeedMps);
+  const accelerateDistanceM = (speed * speed) / (2 * acceleration);
+  if (distanceM <= accelerateDistanceM * 2) {
+    const peakSpeedMps = Math.sqrt(distanceM * acceleration);
+    const accelerateTimeSec = peakSpeedMps / acceleration;
+    const totalTimeSec = accelerateTimeSec * 2;
+    const elapsed = Math.min(totalTimeSec, Math.max(0, elapsedSec));
+    if (elapsed <= accelerateTimeSec) {
+      return {
+        distanceM: 0.5 * acceleration * elapsed * elapsed,
+        speedMps: acceleration * elapsed
+      };
+    }
+    const decelElapsedSec = elapsed - accelerateTimeSec;
+    return {
+      distanceM: distanceM - 0.5 * acceleration * Math.max(0, totalTimeSec - elapsed) ** 2,
+      speedMps: Math.max(0, peakSpeedMps - acceleration * decelElapsedSec)
+    };
+  }
+
+  const accelerateTimeSec = speed / acceleration;
+  const cruiseDistanceM = distanceM - accelerateDistanceM * 2;
+  const cruiseTimeSec = cruiseDistanceM / speed;
+  const totalTimeSec = accelerateTimeSec * 2 + cruiseTimeSec;
+  const elapsed = Math.min(totalTimeSec, Math.max(0, elapsedSec));
+  if (elapsed <= accelerateTimeSec) {
+    return {
+      distanceM: 0.5 * acceleration * elapsed * elapsed,
+      speedMps: acceleration * elapsed
+    };
+  }
+  if (elapsed <= accelerateTimeSec + cruiseTimeSec) {
+    return {
+      distanceM: accelerateDistanceM + (elapsed - accelerateTimeSec) * speed,
+      speedMps: speed
+    };
+  }
+  const remainingSec = totalTimeSec - elapsed;
+  return {
+    distanceM: distanceM - 0.5 * acceleration * remainingSec * remainingSec,
+    speedMps: Math.max(0, acceleration * remainingSec)
+  };
+}
+
 export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides = {}): ShuttleScenario {
   const base: ShuttleScenario = {
     schemaVersion: 'shuttle.phase0.v0',
@@ -166,6 +224,8 @@ export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides
       edges: [
         { id: 'parking-a-inbound', from: 'parking-a', to: 'inbound', lengthM: 4.47, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'west-yard', noParking: true },
         { id: 'parking-b-inbound', from: 'parking-b', to: 'inbound', lengthM: 4.47, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'west-yard', noParking: true },
+        { id: 'parking-a-x-main', from: 'parking-a', to: 'x-main', lengthM: 5, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'west-yard', noParking: true },
+        { id: 'parking-b-x-main', from: 'parking-b', to: 'x-main', lengthM: 5, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'west-yard', noParking: true },
         { id: 'inbound-x-main', from: 'inbound', to: 'x-main', lengthM: 5, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'main-aisle', noParking: true },
         { id: 'x-main-storage-a', from: 'x-main', to: 'storage-a', lengthM: 5.83, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'storage-fan', noParking: true },
         { id: 'x-main-storage-b', from: 'x-main', to: 'storage-b', lengthM: 5.83, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'storage-fan', noParking: true },
@@ -177,7 +237,7 @@ export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides
           id: 'zone-x-main',
           type: 'intersection',
           nodeIds: ['x-main'],
-          edgeIds: ['inbound-x-main', 'x-main-storage-a', 'x-main-storage-b', 'x-main-outbound'],
+          edgeIds: ['inbound-x-main', 'parking-a-x-main', 'parking-b-x-main', 'x-main-storage-a', 'x-main-storage-b', 'x-main-outbound'],
           noStop: true,
           noParking: true,
           capacity: 1,
@@ -436,15 +496,20 @@ export class ShuttleSimCore {
         taskId: null,
         targetNodeId: null,
         currentNodeId: parking.id,
+        currentEdgeId: null,
         routeNodeIds: [],
+        routeIndex: 0,
+        legRemainingM: 0,
+        legElapsedSec: 0,
+        legTravelSec: 0,
+        phaseRemainingSec: 0,
         waitReason: null,
+        blockingReservationId: null,
+        blockingVehicleId: null,
         blockedTimeSec: 0,
         idleTimeSec: 0,
         busyTimeSec: 0,
-        phaseRemainingSec: 0,
-        legRemainingM: 0,
-        routeIndex: 0,
-        currentEdgeId: null,
+        targetSpeedMps: 0,
         waitingSinceSec: null
       };
     });
@@ -567,6 +632,7 @@ export class ShuttleSimCore {
       tasks: structuredClone(this.tasks),
       loads: structuredClone(this.loads),
       reservations: structuredClone(this.reservations),
+      traffic: this.calculateTrafficDiagnostics(),
       kpis: this.calculateKpis(),
       recentEvents: structuredClone(this.recentEvents),
       error: this.error
@@ -659,6 +725,8 @@ export class ShuttleSimCore {
       vehicle.targetNodeId = route[1] ?? null;
       vehicle.state = 'assigned';
       vehicle.waitReason = null;
+      vehicle.blockingReservationId = null;
+      vehicle.blockingVehicleId = null;
       task.state = 'assigned';
       task.vehicleId = vehicle.id;
       task.assignedAtSec = this.simTimeSec;
@@ -806,6 +874,15 @@ export class ShuttleSimCore {
       vehicle.routeNodeIds = [];
       vehicle.routeIndex = 0;
       vehicle.targetNodeId = null;
+      vehicle.currentEdgeId = null;
+      vehicle.legRemainingM = 0;
+      vehicle.legElapsedSec = 0;
+      vehicle.legTravelSec = 0;
+      vehicle.phaseRemainingSec = 0;
+      vehicle.targetSpeedMps = 0;
+      vehicle.waitReason = null;
+      vehicle.blockingReservationId = null;
+      vehicle.blockingVehicleId = null;
       this.logEvent('vehicle-parked', vehicle.id, null, null, vehicle.currentNodeId, null, 'idle-parking', this.vehiclePosition(vehicle), {});
     }
   }
@@ -820,6 +897,9 @@ export class ShuttleSimCore {
         vehicle.phaseRemainingSec = 0;
       } else {
         vehicle.state = 'idle';
+        vehicle.waitReason = null;
+        vehicle.blockingReservationId = null;
+        vehicle.blockingVehicleId = null;
       }
       return;
     }
@@ -828,14 +908,39 @@ export class ShuttleSimCore {
     if (!edge) {
       vehicle.state = 'faulted';
       vehicle.waitReason = 'route-edge-missing';
+      vehicle.blockingReservationId = null;
+      vehicle.blockingVehicleId = null;
       this.error = `Missing route edge ${fromNodeId} -> ${toNodeId}`;
       this.logEvent('vehicle-faulted', vehicle.id, vehicle.taskId, null, fromNodeId, toNodeId, 'route-edge-missing', this.vehiclePosition(vehicle), {});
       return;
     }
 
+    const targetPosition = nodePosition(this.scenario, toNodeId);
+    const occupiedTarget = this.vehicles.find((other) => {
+      if (other.id === vehicle.id || other.currentNodeId !== toNodeId) {
+        return false;
+      }
+      return Math.hypot(other.x - targetPosition.x, other.z - targetPosition.z) <= this.scenario.vehicles.safetyRadiusM;
+    });
+    if (occupiedTarget) {
+      this.reservationConflictCount += 1;
+      vehicle.state = 'waiting-blocked';
+      vehicle.speedMps = 0;
+      vehicle.waitReason = 'node-occupied';
+      vehicle.blockingReservationId = null;
+      vehicle.blockingVehicleId = occupiedTarget.id;
+      vehicle.waitingSinceSec ??= this.simTimeSec;
+      vehicle.blockedTimeSec = round(vehicle.blockedTimeSec + dtSec);
+      this.blockedTimeByReasonSec.set('node-occupied', round((this.blockedTimeByReasonSec.get('node-occupied') ?? 0) + dtSec));
+      this.logEvent('vehicle-waiting', vehicle.id, vehicle.taskId, null, fromNodeId, toNodeId, 'node-occupied', this.vehiclePosition(vehicle), {
+        blockingVehicleId: occupiedTarget.id
+      });
+      return;
+    }
+
     const speedLimit = vehicle.loaded ? edge.speedLimitLoadedMps ?? this.scenario.physicsParams.loadedSpeedMps : edge.speedLimitEmptyMps ?? this.scenario.physicsParams.emptySpeedMps;
     const speed = Math.min(speedLimit, vehicle.loaded ? this.scenario.physicsParams.loadedSpeedMps : this.scenario.physicsParams.emptySpeedMps);
-    const travelSec = edge.lengthM / speed;
+    const travelSec = calculateTravelTimeSec(edge.lengthM, speed, this.scenario.physicsParams.accelerationMps2);
     const priority = this.priorityFor(vehicle);
     const attempt = this.traffic.reserveMove({
       vehicleId: vehicle.id,
@@ -853,6 +958,8 @@ export class ShuttleSimCore {
       vehicle.state = 'waiting-blocked';
       vehicle.speedMps = 0;
       vehicle.waitReason = attempt.reasonCode;
+      vehicle.blockingReservationId = attempt.blockingReservationId;
+      vehicle.blockingVehicleId = null;
       vehicle.waitingSinceSec ??= this.simTimeSec;
       vehicle.blockedTimeSec = round(vehicle.blockedTimeSec + dtSec);
       this.blockedTimeByReasonSec.set(attempt.reasonCode, round((this.blockedTimeByReasonSec.get(attempt.reasonCode) ?? 0) + dtSec));
@@ -865,11 +972,15 @@ export class ShuttleSimCore {
     this.reservations.push(...attempt.reservations);
     vehicle.waitingSinceSec = null;
     vehicle.waitReason = null;
+    vehicle.blockingReservationId = null;
+    vehicle.blockingVehicleId = null;
     vehicle.state = vehicle.loaded ? 'loaded-moving' : 'moving-to-pickup';
     vehicle.targetNodeId = toNodeId;
     vehicle.legRemainingM = edge.lengthM;
+    vehicle.legElapsedSec = 0;
+    vehicle.legTravelSec = travelSec;
     vehicle.currentEdgeId = edge.id;
-    vehicle.speedMps = speed;
+    vehicle.targetSpeedMps = speed;
     this.logEvent('reservation-created', vehicle.id, vehicle.taskId, null, fromNodeId, toNodeId, 'route-leg', this.vehiclePosition(vehicle), {
       edgeId: edge.id,
       reservationIds: attempt.reservations.map((reservation) => reservation.id).join(',')
@@ -887,9 +998,17 @@ export class ShuttleSimCore {
     const to = nodePosition(this.scenario, toNodeId);
     const edge = this.traffic.findEdge(fromNodeId, toNodeId);
     const lengthM = edge?.lengthM ?? Math.hypot(to.x - from.x, to.z - from.z);
-    const moved = Math.min(vehicle.legRemainingM, vehicle.speedMps * dtSec);
-    vehicle.legRemainingM = round(vehicle.legRemainingM - moved);
-    const progress = lengthM <= 0 ? 1 : 1 - vehicle.legRemainingM / lengthM;
+    vehicle.legElapsedSec = round(Math.min(vehicle.legTravelSec, vehicle.legElapsedSec + dtSec));
+    const profile = motionProfileAt(
+      vehicle.legElapsedSec,
+      lengthM,
+      vehicle.targetSpeedMps,
+      this.scenario.physicsParams.accelerationMps2
+    );
+    const traveledM = Math.min(lengthM, profile.distanceM);
+    vehicle.legRemainingM = round(Math.max(0, lengthM - traveledM));
+    vehicle.speedMps = round(vehicle.legRemainingM <= 0 ? 0 : profile.speedMps);
+    const progress = lengthM <= 0 ? 1 : traveledM / lengthM;
     vehicle.x = round(from.x + (to.x - from.x) * progress);
     vehicle.y = SHUTTLE_Y_M;
     vehicle.z = round(from.z + (to.z - from.z) * progress);
@@ -904,6 +1023,9 @@ export class ShuttleSimCore {
     vehicle.routeIndex += 1;
     vehicle.targetNodeId = null;
     vehicle.currentEdgeId = null;
+    vehicle.targetSpeedMps = 0;
+    vehicle.legElapsedSec = 0;
+    vehicle.legTravelSec = 0;
     vehicle.speedMps = 0;
     const task = vehicle.taskId ? this.tasks.find((candidate) => candidate.id === vehicle.taskId) : null;
     this.logEvent('vehicle-arrived', vehicle.id, task?.id ?? null, task?.loadId ?? null, previousNode, toNodeId, 'route-arrival', this.vehiclePosition(vehicle), {});
@@ -974,11 +1096,76 @@ export class ShuttleSimCore {
       taskId: vehicle.taskId,
       targetNodeId: vehicle.targetNodeId,
       currentNodeId: vehicle.currentNodeId,
+      currentEdgeId: vehicle.currentEdgeId,
       routeNodeIds: [...vehicle.routeNodeIds],
+      routeIndex: vehicle.routeIndex,
+      legRemainingM: round(vehicle.legRemainingM),
+      legElapsedSec: round(vehicle.legElapsedSec),
+      legTravelSec: round(vehicle.legTravelSec),
+      phaseRemainingSec: round(vehicle.phaseRemainingSec),
       waitReason: vehicle.waitReason,
+      blockingReservationId: vehicle.blockingReservationId,
+      blockingVehicleId: vehicle.blockingVehicleId,
       blockedTimeSec: round(vehicle.blockedTimeSec),
       idleTimeSec: round(vehicle.idleTimeSec),
       busyTimeSec: round(vehicle.busyTimeSec)
+    };
+  }
+
+  private calculateTrafficDiagnostics(): ShuttleSimState['traffic'] {
+    const waitingVehicles = this.vehicles
+      .filter((vehicle) => vehicle.state === 'waiting-blocked')
+      .map((vehicle) => ({
+        vehicleId: vehicle.id,
+        currentNodeId: vehicle.currentNodeId,
+        targetNodeId: vehicle.targetNodeId,
+        waitReason: vehicle.waitReason,
+        blockedTimeSec: round(vehicle.blockedTimeSec),
+        waitingSinceSec: vehicle.waitingSinceSec,
+        blockingReservationId: vehicle.blockingReservationId,
+        blockingVehicleId: vehicle.blockingVehicleId
+      }));
+    const oldestWait =
+      waitingVehicles.length > 0
+        ? Math.min(...waitingVehicles.map((vehicle) => vehicle.waitingSinceSec ?? this.simTimeSec))
+        : null;
+    const deadlockCandidateVehicleIds =
+      oldestWait !== null && this.simTimeSec - oldestWait >= this.scenario.trafficPolicy.deadlockDetectSec
+        ? waitingVehicles.map((vehicle) => vehicle.vehicleId)
+        : [];
+    let minVehicleSeparationM: number | null = null;
+    let physicalViolationCount = 0;
+    const minCenterSeparationM = this.scenario.vehicles.safetyRadiusM * 2;
+    const maxConfiguredSpeedMps = Math.max(this.scenario.physicsParams.emptySpeedMps, this.scenario.physicsParams.loadedSpeedMps);
+
+    for (const vehicle of this.vehicles) {
+      if (![vehicle.x, vehicle.y, vehicle.z, vehicle.yaw, vehicle.speedMps].every(Number.isFinite)) {
+        physicalViolationCount += 1;
+      }
+      if (vehicle.speedMps > maxConfiguredSpeedMps + 1e-6) {
+        physicalViolationCount += 1;
+      }
+    }
+
+    for (let leftIndex = 0; leftIndex < this.vehicles.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < this.vehicles.length; rightIndex += 1) {
+        const left = this.vehicles[leftIndex]!;
+        const right = this.vehicles[rightIndex]!;
+        const separationM = Math.hypot(left.x - right.x, left.z - right.z);
+        minVehicleSeparationM = minVehicleSeparationM === null ? separationM : Math.min(minVehicleSeparationM, separationM);
+        if (separationM + 1e-6 < minCenterSeparationM) {
+          physicalViolationCount += 1;
+        }
+      }
+    }
+
+    return {
+      activeReservationCount: this.reservations.length,
+      waitingVehicles,
+      deadlockCandidateVehicleIds,
+      minVehicleSeparationM: minVehicleSeparationM === null ? null : round(minVehicleSeparationM),
+      maxObservedSpeedMps: round(Math.max(0, ...this.vehicles.map((vehicle) => vehicle.speedMps))),
+      physicalViolationCount
     };
   }
 

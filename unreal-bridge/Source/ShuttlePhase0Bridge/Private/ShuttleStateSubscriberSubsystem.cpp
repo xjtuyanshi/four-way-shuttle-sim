@@ -104,9 +104,54 @@ FShuttleVisualVehicleState UShuttleStateSubscriberSubsystem::ParseVehicleState(c
     State.bLoaded = Object->GetBoolField(TEXT("loaded"));
     Object->TryGetStringField(TEXT("taskId"), State.TaskId);
     Object->TryGetStringField(TEXT("currentNodeId"), State.CurrentNodeId);
+    Object->TryGetStringField(TEXT("currentEdgeId"), State.CurrentEdgeId);
     Object->TryGetStringField(TEXT("targetNodeId"), State.TargetNodeId);
+    State.RouteNodeIds = ParseStringArray(Object, TEXT("routeNodeIds"));
+    double NumberValue = 0.0;
+    if (Object->TryGetNumberField(TEXT("routeIndex"), NumberValue))
+    {
+        State.RouteIndex = static_cast<int32>(NumberValue);
+    }
+    if (Object->TryGetNumberField(TEXT("legRemainingM"), NumberValue))
+    {
+        State.LegRemainingM = static_cast<float>(NumberValue);
+    }
+    if (Object->TryGetNumberField(TEXT("legElapsedSec"), NumberValue))
+    {
+        State.LegElapsedSec = static_cast<float>(NumberValue);
+    }
+    if (Object->TryGetNumberField(TEXT("legTravelSec"), NumberValue))
+    {
+        State.LegTravelSec = static_cast<float>(NumberValue);
+    }
+    if (Object->TryGetNumberField(TEXT("phaseRemainingSec"), NumberValue))
+    {
+        State.PhaseRemainingSec = static_cast<float>(NumberValue);
+    }
     Object->TryGetStringField(TEXT("waitReason"), State.WaitReason);
+    Object->TryGetStringField(TEXT("blockingReservationId"), State.BlockingReservationId);
+    Object->TryGetStringField(TEXT("blockingVehicleId"), State.BlockingVehicleId);
     return State;
+}
+
+TArray<FString> UShuttleStateSubscriberSubsystem::ParseStringArray(const TSharedPtr<FJsonObject>& Object, const FString& FieldName) const
+{
+    TArray<FString> Values;
+    const TArray<TSharedPtr<FJsonValue>>* JsonValues = nullptr;
+    if (!Object->TryGetArrayField(FieldName, JsonValues))
+    {
+        return Values;
+    }
+
+    for (const TSharedPtr<FJsonValue>& JsonValue : *JsonValues)
+    {
+        FString Value;
+        if (JsonValue.IsValid() && JsonValue->TryGetString(Value))
+        {
+            Values.Add(Value);
+        }
+    }
+    return Values;
 }
 
 EShuttleVisualOperationalState UShuttleStateSubscriberSubsystem::ParseState(const FString& Value) const
