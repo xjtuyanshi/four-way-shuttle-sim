@@ -29,10 +29,15 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
   - `invalidCoordinate`
 - Replaced the default demo layout with an orthogonal four-way shuttle grid inspired by the reference video: no diagonal edges, two vertical side aisles, top/bottom cross aisles, center storage cells, right-side infeed, left-side outfeed, and one-way FIFO storage lanes.
 - Added a regression test that fails if the default demo reintroduces diagonal edges or non-FIFO storage-lane directions.
+- Added authoritative FIFO pallet occupancy in SimCore:
+  - outbound tasks are deferred with `storage-empty` instead of creating phantom pallets;
+  - inbound tasks reserve the next FIFO storage cell;
+  - outbound tasks reuse existing stored loads from the left-side outlet;
+  - stored pallets compact toward the outlet after an outbound pickup.
+- Exposed `storageNodeOccupancy` in debug state for tests, and added regression coverage for empty-storage deferral plus FIFO fill/drain behavior.
 
 ## Next TODO
 
-- Model pallet occupancy separately from shuttle occupancy so the shuttle can lift from underneath, carry, lower, and leave the pallet in a storage cell.
-- Add lane-level FIFO inventory rules: fill each row from the right-side infeed, drain from the left-side outfeed, and expose blocked/full/empty reasons in the dashboard.
+- Surface lane-level FIFO inventory and blocked/full/empty reasons directly in the dashboard instead of only in event logs and KPI reason maps.
 - Upgrade the 3D dashboard scene to make racks, pallets, under-lift shuttles, and FIFO lane state visually obvious before starting Unreal runtime work.
 - Prepare the Unreal bridge/scene plan after the browser demo shows the correct four-way shuttle behavior.

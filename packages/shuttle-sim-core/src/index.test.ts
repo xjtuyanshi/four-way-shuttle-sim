@@ -205,6 +205,73 @@ describe('shuttle phase 0 SimCore', () => {
     expect(sim.getEventLog().some((entry) => entry.eventType === 'vehicle-waiting' && entry.reason?.includes('reserved'))).toBe(true);
   });
 
+  it('defers outbound work instead of creating phantom pallets when FIFO storage is empty', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario({
+      durationSec: 10,
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 3600,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 3
+      }
+    }));
+
+    sim.start();
+    sim.step(1);
+    const state = sim.getState();
+
+    expect(state.tasks).toHaveLength(0);
+    expect(state.loads).toHaveLength(0);
+    expect(state.kpis.blockedTimeByReasonSec['storage-empty']).toBeGreaterThan(0);
+    expect(sim.getEventLog().some((entry) => entry.eventType === 'task-deferred' && entry.reason === 'storage-empty')).toBe(true);
+  });
+
+  it('fills and drains FIFO storage lanes using existing pallet loads', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario({
+      durationSec: 240,
+      taskGeneration: {
+        inboundRatePerHour: 720,
+        outboundRatePerHour: 720,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 8
+      },
+      physicsParams: {
+        emptySpeedMps: 3,
+        loadedSpeedMps: 2.5,
+        accelerationMps2: 2,
+        switchDirectionSec: 0,
+        liftTimeSec: 0.2,
+        lowerTimeSec: 0.2,
+        loadedClearanceM: 0.2,
+        reservationClearanceSec: 0.2
+      }
+    }));
+
+    sim.start();
+    for (let index = 0; index < 2000 && sim.getState().kpis.completedOutbound < 2; index += 1) {
+      sim.step(0.2);
+    }
+    const state = sim.getState();
+    const outboundTasks = state.tasks.filter((task) => task.kind === 'outbound');
+    const storageOccupancy = sim.getDebugState().storageNodeOccupancy;
+
+    expect(state.kpis.completedOutbound).toBeGreaterThanOrEqual(2);
+    expect(outboundTasks.slice(0, 2).map((task) => [task.pickupNodeId, task.loadId])).toEqual([
+      ['storage-a', 'load-0001'],
+      ['storage-b', 'load-0002']
+    ]);
+    expect(state.loads.find((load) => load.id === 'load-0001')).toMatchObject({ state: 'delivered', nodeId: 'outbound' });
+    expect(state.loads.find((load) => load.id === 'load-0002')).toMatchObject({ state: 'delivered', nodeId: 'outbound' });
+    expect(storageOccupancy).toEqual([
+      { nodeId: 'storage-a', loadId: 'load-0003' },
+      { nodeId: 'storage-b', loadId: 'load-0004' },
+      { nodeId: 'storage-c', loadId: 'load-0005' },
+      { nodeId: 'storage-d', loadId: 'load-0007' }
+    ]);
+  });
+
   it('accepts dashboard-style parameter updates through JSON pointers', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario());
     const result = sim.setParam('/physicsParams/loadedSpeedMps', 1.25);

@@ -47,6 +47,7 @@ type ReservationAttempt =
 
 export type ShuttleSimDebugState = {
   currentNodeOccupancy: Array<{ nodeId: string; vehicleId: string }>;
+  storageNodeOccupancy: Array<{ nodeId: string; loadId: string }>;
 };
 
 type Rng = {
@@ -477,6 +478,7 @@ export class ShuttleSimCore {
   private deadlockCount = 0;
   private livelockCount = 0;
   private blockedTimeByReasonSec = new Map<string, number>();
+  private deferredTaskReasons: Record<'inbound' | 'outbound', string | null> = { inbound: null, outbound: null };
   private error: string | null = null;
 
   constructor(scenario: ShuttleScenario = createDefaultShuttleScenario()) {
@@ -519,6 +521,7 @@ export class ShuttleSimCore {
     this.deadlockCount = 0;
     this.livelockCount = 0;
     this.blockedTimeByReasonSec = new Map();
+    this.deferredTaskReasons = { inbound: null, outbound: null };
     this.error = null;
     this.rng = makeRng(seed);
     this.scenario = { ...this.scenario, seed };
@@ -645,7 +648,7 @@ export class ShuttleSimCore {
     this.simTimeSec = round(this.simTimeSec + stepSec);
     this.reservations = this.reservations.filter((reservation) => reservation.endTimeSec >= this.simTimeSec - 1);
 
-    this.generateDueTasks();
+    this.generateDueTasks(stepSec);
     this.assignQueuedTasks();
     this.advanceVehicles(stepSec);
     this.updateDeadlockSmokeCounters();
@@ -697,7 +700,10 @@ export class ShuttleSimCore {
     return {
       currentNodeOccupancy: [...this.currentNodeOccupancy.entries()]
         .sort(([left], [right]) => left.localeCompare(right))
-        .map(([nodeId, vehicleId]) => ({ nodeId, vehicleId }))
+        .map(([nodeId, vehicleId]) => ({ nodeId, vehicleId })),
+      storageNodeOccupancy: [...this.storageNodeLoadOccupancy(true).entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([nodeId, loadId]) => ({ nodeId, loadId }))
     };
   }
 
@@ -779,18 +785,30 @@ export class ShuttleSimCore {
     return 3600 / ratePerHour;
   }
 
-  private generateDueTasks(): void {
+  private generateDueTasks(dtSec: number): void {
     if (this.tasks.length >= this.scenario.taskGeneration.maxTasks) {
       return;
     }
 
     while (this.simTimeSec >= this.nextInboundSec && this.tasks.length < this.scenario.taskGeneration.maxTasks) {
-      this.createTask('inbound');
+      const result = this.createTask('inbound');
+      if (!result.created) {
+        this.deferTask('inbound', result.reason, dtSec);
+        this.nextInboundSec = this.simTimeSec + this.scenario.timeStepSec;
+        break;
+      }
+      this.deferredTaskReasons.inbound = null;
       this.nextInboundSec += this.nextArrivalInterval('inbound');
     }
 
     while (this.simTimeSec >= this.nextOutboundSec && this.tasks.length < this.scenario.taskGeneration.maxTasks) {
-      this.createTask('outbound');
+      const result = this.createTask('outbound');
+      if (!result.created) {
+        this.deferTask('outbound', result.reason, dtSec);
+        this.nextOutboundSec = this.simTimeSec + this.scenario.timeStepSec;
+        break;
+      }
+      this.deferredTaskReasons.outbound = null;
       this.nextOutboundSec += this.nextArrivalInterval('outbound');
     }
   }
@@ -805,20 +823,18 @@ export class ShuttleSimCore {
     return -Math.log(u) * deterministic;
   }
 
-  private createTask(kind: 'inbound' | 'outbound'): void {
+  private createTask(kind: 'inbound' | 'outbound'): { created: true } | { created: false; reason: string } {
+    const storageSelection = kind === 'inbound' ? this.selectInboundStorageNode() : this.selectOutboundLoad();
+    if (!storageSelection) {
+      return { created: false, reason: kind === 'inbound' ? 'storage-full' : 'storage-empty' };
+    }
+
     this.taskSequence += 1;
     const taskId = `task-${String(this.taskSequence).padStart(4, '0')}`;
-    const loadId = `load-${String(this.taskSequence).padStart(4, '0')}`;
-    const storageNodeId = this.storageNodeForTask(kind);
-    const pickupNodeId = kind === 'inbound' ? 'inbound' : storageNodeId;
-    const dropoffNodeId = kind === 'inbound' ? storageNodeId : 'outbound';
-    const load: LoadStateRecord = {
-      id: loadId,
-      state: 'waiting',
-      nodeId: pickupNodeId,
-      vehicleId: null,
-      weightKg: 450 + Math.round(this.rng.next() * 350)
-    };
+    const generatedLoadId = `load-${String(this.taskSequence).padStart(4, '0')}`;
+    const loadId = kind === 'inbound' ? generatedLoadId : storageSelection.loadId;
+    const pickupNodeId = kind === 'inbound' ? 'inbound' : storageSelection.nodeId;
+    const dropoffNodeId = kind === 'inbound' ? storageSelection.nodeId : 'outbound';
     const task: TaskStateRecord = {
       id: taskId,
       kind,
@@ -834,25 +850,135 @@ export class ShuttleSimCore {
       replanCount: 0,
       waitReason: null
     };
-    this.loads.push(load);
+    if (kind === 'inbound') {
+      const load: LoadStateRecord = {
+        id: loadId,
+        state: 'waiting',
+        nodeId: pickupNodeId,
+        vehicleId: null,
+        weightKg: 450 + Math.round(this.rng.next() * 350)
+      };
+      this.loads.push(load);
+    }
     this.tasks.push(task);
-    this.logEvent('task-created', null, task.id, load.id, null, pickupNodeId, 'task-generation', nodePosition(this.scenario, pickupNodeId), { kind });
+    this.logEvent('task-created', null, task.id, loadId, null, pickupNodeId, 'task-generation', nodePosition(this.scenario, pickupNodeId), {
+      kind,
+      fifoNodeId: storageSelection.nodeId
+    });
+    return { created: true };
   }
 
-  private storageNodeForTask(kind: 'inbound' | 'outbound'): string {
-    const storageNodes = this.scenario.layout.nodes.filter((node) => node.type === 'storage');
-    if (storageNodes.length === 0) {
-      return kind === 'inbound' ? 'inbound' : 'outbound';
+  private deferTask(kind: 'inbound' | 'outbound', reason: string, dtSec: number): void {
+    this.blockedTimeByReasonSec.set(reason, round((this.blockedTimeByReasonSec.get(reason) ?? 0) + dtSec));
+    if (this.deferredTaskReasons[kind] === reason) {
+      return;
     }
 
-    const extremeX = kind === 'inbound'
-      ? Math.max(...storageNodes.map((node) => node.x))
-      : Math.min(...storageNodes.map((node) => node.x));
-    const laneEndpoints = storageNodes
-      .filter((node) => Math.abs(node.x - extremeX) < 1e-6)
-      .sort((left, right) => left.z - right.z || left.id.localeCompare(right.id));
+    this.deferredTaskReasons[kind] = reason;
+    this.logEvent('task-deferred', null, null, null, null, null, reason, null, { kind });
+  }
 
-    return laneEndpoints[(this.taskSequence - 1) % laneEndpoints.length]?.id ?? storageNodes[0]!.id;
+  private isStorageNode(nodeId: string): boolean {
+    return this.scenario.layout.nodes.some((node) => node.id === nodeId && node.type === 'storage');
+  }
+
+  private storageLanes(): ShuttleScenario['layout']['nodes'][] {
+    const laneByZ = new Map<number, ShuttleScenario['layout']['nodes']>();
+    for (const node of this.scenario.layout.nodes.filter((candidate) => candidate.type === 'storage')) {
+      const lane = laneByZ.get(node.z) ?? [];
+      lane.push(node);
+      laneByZ.set(node.z, lane);
+    }
+
+    return [...laneByZ.entries()]
+      .sort(([leftZ], [rightZ]) => leftZ - rightZ)
+      .map(([, lane]) => lane.sort((left, right) => left.x - right.x || left.id.localeCompare(right.id)));
+  }
+
+  private storageNodeLoadOccupancy(includePendingInbound: boolean): Map<string, string> {
+    const occupancy = new Map<string, string>();
+    for (const load of this.loads) {
+      if (load.nodeId && load.state === 'stored' && this.isStorageNode(load.nodeId)) {
+        occupancy.set(load.nodeId, load.id);
+      }
+    }
+
+    if (!includePendingInbound) {
+      return occupancy;
+    }
+
+    for (const task of this.tasks) {
+      if (
+        task.kind === 'inbound' &&
+        task.state !== 'completed' &&
+        task.state !== 'failed' &&
+        this.isStorageNode(task.dropoffNodeId)
+      ) {
+        occupancy.set(task.dropoffNodeId, task.loadId);
+      }
+    }
+
+    return occupancy;
+  }
+
+  private selectInboundStorageNode(): { nodeId: string; loadId: string } | null {
+    const lanes = this.storageLanes();
+    if (lanes.length === 0) {
+      return null;
+    }
+
+    const occupancy = this.storageNodeLoadOccupancy(true);
+    for (let offset = 0; offset < lanes.length; offset += 1) {
+      const lane = lanes[(this.taskSequence + offset) % lanes.length]!;
+      const candidate = lane.find((node) => !occupancy.has(node.id));
+      if (candidate) {
+        return { nodeId: candidate.id, loadId: '' };
+      }
+    }
+    return null;
+  }
+
+  private selectOutboundLoad(): { nodeId: string; loadId: string } | null {
+    const lanes = this.storageLanes();
+    const assignedOutboundLoadIds = new Set(
+      this.tasks
+        .filter((task) => task.kind === 'outbound' && task.state !== 'completed' && task.state !== 'failed')
+        .map((task) => task.loadId)
+    );
+
+    for (let offset = 0; offset < lanes.length; offset += 1) {
+      const lane = lanes[(this.taskSequence + offset) % lanes.length]!;
+      for (const node of lane) {
+        const load = this.loads.find(
+          (candidate) => candidate.state === 'stored' && candidate.nodeId === node.id && !assignedOutboundLoadIds.has(candidate.id)
+        );
+        if (load) {
+          return { nodeId: node.id, loadId: load.id };
+        }
+      }
+    }
+    return null;
+  }
+
+  private compactStorageLanes(): void {
+    const pendingInboundTargets = new Set(
+      this.tasks
+        .filter((task) => task.kind === 'inbound' && task.state !== 'completed' && task.state !== 'failed')
+        .map((task) => task.dropoffNodeId)
+    );
+
+    for (const lane of this.storageLanes()) {
+      const storedLoads = lane
+        .map((node) => this.loads.find((load) => load.state === 'stored' && load.nodeId === node.id))
+        .filter((load): load is LoadStateRecord => Boolean(load));
+      const availableNodes = lane.filter((node) => !pendingInboundTargets.has(node.id));
+      storedLoads.forEach((load, index) => {
+        const targetNode = availableNodes[index];
+        if (targetNode) {
+          load.nodeId = targetNode.id;
+        }
+      });
+    }
   }
 
   private assignQueuedTasks(): void {
@@ -1047,6 +1173,9 @@ export class ShuttleSimCore {
         load.nodeId = null;
         load.vehicleId = vehicle.id;
       }
+      if (task.kind === 'outbound') {
+        this.compactStorageLanes();
+      }
       vehicle.state = 'assigned';
       this.logEvent('lift-complete', vehicle.id, task.id, task.loadId, task.pickupNodeId, vehicle.currentNodeId, 'lift-time-elapsed', this.vehiclePosition(vehicle), {});
       return;
@@ -1190,7 +1319,7 @@ export class ShuttleSimCore {
     vehicle.waitReason = null;
     vehicle.blockingReservationId = null;
     vehicle.blockingVehicleId = null;
-    vehicle.state = vehicle.loaded ? 'loaded-moving' : 'moving-to-pickup';
+    vehicle.state = vehicle.loaded ? 'loaded-moving' : vehicle.taskId ? 'moving-to-pickup' : 'returning';
     vehicle.targetNodeId = toNodeId;
     vehicle.legRemainingM = edge.lengthM;
     vehicle.legElapsedSec = 0;
