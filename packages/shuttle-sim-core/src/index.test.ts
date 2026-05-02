@@ -272,6 +272,40 @@ describe('shuttle phase 0 SimCore', () => {
     ]);
   });
 
+  it('defers inbound work when FIFO storage cells are stored or already reserved', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario({
+      durationSec: 260,
+      taskGeneration: {
+        inboundRatePerHour: 720,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 8
+      },
+      physicsParams: {
+        emptySpeedMps: 3,
+        loadedSpeedMps: 2.5,
+        accelerationMps2: 2,
+        switchDirectionSec: 0,
+        liftTimeSec: 0.2,
+        lowerTimeSec: 0.2,
+        loadedClearanceM: 0.2,
+        reservationClearanceSec: 0.2
+      }
+    }));
+
+    sim.start();
+    for (let index = 0; index < 2000 && !(sim.getState().kpis.blockedTimeByReasonSec['storage-full'] > 0); index += 1) {
+      sim.step(0.2);
+    }
+    const state = sim.getState();
+
+    expect(state.tasks).toHaveLength(6);
+    expect(sim.getDebugState().storageNodeOccupancy).toHaveLength(6);
+    expect(state.kpis.blockedTimeByReasonSec['storage-full']).toBeGreaterThan(0);
+    expect(sim.getEventLog().some((entry) => entry.eventType === 'task-deferred' && entry.reason === 'storage-full')).toBe(true);
+  });
+
   it('accepts dashboard-style parameter updates through JSON pointers', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario());
     const result = sim.setParam('/physicsParams/loadedSpeedMps', 1.25);

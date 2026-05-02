@@ -36,9 +36,9 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
   - stored pallets compact toward the outlet after an outbound pickup.
 - Exposed `storageNodeOccupancy` in debug state for tests, and added regression coverage for empty-storage deferral plus FIFO fill/drain behavior.
 - Surfaced FIFO row inventory in the dashboard, including per-cell stored/reserved/empty state and cumulative `storage-empty` / `storage-full` wait time.
+- Added a high-pressure inbound regression test that fills or reserves every FIFO storage cell, then verifies new inbound work is deferred with `storage-full` instead of overbooking the storage grid.
 
 ## Next TODO
 
-- Add higher-pressure FIFO queue scenarios that intentionally hit full rows, then verify the Dashboard and validation report make the full/empty transitions obvious.
 - Improve the 3D dashboard scene camera/framing so the FIFO lanes, pallets, and under-lift shuttles remain visible across desktop and mobile viewports.
 - Prepare the Unreal bridge/scene plan after the browser demo shows the correct four-way shuttle behavior.
