@@ -6,7 +6,7 @@ Use this packet to review the current branch:
 - Base branch: `main`
 - Base commit: `15f185a Add Phase 0 validation gate`
 - Review branch: `codex/p1-p5-physics-traffic-3d`
-- Review branch head: `92550a6 Document review hardening coverage`
+- Review branch head: latest pushed commit on `codex/p1-p5-physics-traffic-3d`
 - Local path used by Codex: `/Users/luke/codex projects/DES Sim/four-way-shuttle-sim`
 
 ## Product Direction
