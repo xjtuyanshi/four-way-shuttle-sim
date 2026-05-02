@@ -19,7 +19,8 @@ This is the working visual reference for the Phase 0 dashboard scene. The goal i
 - The current visual cell footprint is 1.25 m x 1.20 m so cells touch as a dense grid instead of appearing as sparse isolated bays.
 - Inbound is on the right side of the storage field and outbound is on the left side.
 - FIFO lanes are one-way in the storage field: the shuttle enters from the right, places/pushes loads toward the left end first, and outbound picks from the left.
-- The CAD texture labels storage field span, cell pitch, row pitch, and node ids so the visual can be checked against a future real CAD import.
+- The browser 3D twin draws the storage field as a continuous rack block with rail geometry, cross-track cell hints, side-aisle track beds, roller conveyors at inbound/outbound, parking pads, and a lift tower placeholder.
+- The CAD texture stays label-light: visual dimensions come from the SimCore meter grid, while detailed cell names and occupancy are shown in the dashboard inventory panel.
 
 ## Next Calibration Inputs Needed
 
