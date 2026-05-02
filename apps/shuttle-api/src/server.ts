@@ -12,7 +12,7 @@ import { validatePhase0Scenario } from './validation.js';
 
 const port = Number(process.env.SHUTTLE_PORT ?? process.env.PORT ?? 8791);
 const tickMs = Number(process.env.SHUTTLE_TICK_MS ?? 250);
-const realtimeSpeed = Number(process.env.SHUTTLE_SPEED ?? 1);
+let playbackSpeed = Number(process.env.SHUTTLE_SPEED ?? 1);
 
 const app = express();
 app.use(cors());
@@ -69,6 +69,20 @@ app.get('/api/shuttle/scenario', (_request: Request, response: Response) => {
 
 app.get('/api/shuttle/state', (_request: Request, response: Response) => {
   response.json(sim.getState());
+});
+
+app.get('/api/shuttle/playbackSpeed', (_request: Request, response: Response) => {
+  response.json({ speed: playbackSpeed });
+});
+
+app.post('/api/shuttle/playbackSpeed', (request: Request, response: Response) => {
+  const speed = Number(request.body?.speed);
+  if (!Number.isFinite(speed) || speed <= 0 || speed > 20) {
+    response.status(422).json({ ok: false, error: 'Playback speed must be greater than 0 and at most 20.' });
+    return;
+  }
+  playbackSpeed = speed;
+  response.json({ ok: true, speed: playbackSpeed, state: sim.getState() });
 });
 
 app.get('/api/shuttle/exportLog', (_request: Request, response: Response) => {
@@ -187,7 +201,7 @@ wss.on('connection', (socket) => {
 
 setInterval(() => {
   if (sim.getState().status === 'running') {
-    sim.step((tickMs / 1000) * realtimeSpeed);
+    sim.step((tickMs / 1000) * playbackSpeed);
     broadcastState();
   }
 }, tickMs).unref();

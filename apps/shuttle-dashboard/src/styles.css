@@ -135,6 +135,25 @@ input:focus-visible {
   gap: 8px;
 }
 
+.speed-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.speed-row button {
+  min-height: 32px;
+  padding: 0 8px;
+  color: var(--muted);
+}
+
+.speed-row button.active {
+  color: var(--text);
+  border-color: rgba(86, 169, 201, 0.78);
+  background: rgba(86, 169, 201, 0.16);
+}
+
 .status-line {
   margin-top: 10px;
   min-height: 38px;
@@ -313,14 +332,15 @@ input[type="range"] {
 
 .main-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(420px, 0.9fr);
-  grid-template-rows: minmax(360px, 52vh) minmax(260px, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.65fr);
+  grid-template-rows: minmax(520px, 62vh) minmax(260px, 1fr);
   gap: 14px;
   min-height: 0;
 }
 
 .stream-pane {
-  grid-row: span 2;
+  grid-column: 1 / -1;
+  min-height: 520px;
   background: #111820;
   overflow: hidden;
   display: flex;
@@ -373,7 +393,7 @@ input[type="range"] {
 .stream-placeholder {
   position: relative;
   flex: 1;
-  min-height: 340px;
+  min-height: 460px;
   background:
     linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
     linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
@@ -495,20 +515,22 @@ input[type="range"] {
 
 .stream-copy {
   position: absolute;
-  left: 24px;
-  bottom: 24px;
-  max-width: 520px;
+  left: 16px;
+  bottom: 16px;
+  max-width: 300px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 14px;
-  background: rgba(13, 17, 22, 0.9);
+  padding: 10px 12px;
+  background: rgba(13, 17, 22, 0.82);
   display: grid;
-  gap: 7px;
+  gap: 5px;
+  font-size: 13px;
 }
 
 .stream-copy span {
   color: var(--muted);
   line-height: 1.45;
+  font-size: 12px;
 }
 
 .vehicle-panel,
@@ -819,6 +841,10 @@ th {
 
   .run-row {
     grid-template-columns: 1fr;
+  }
+
+  .speed-row {
+    grid-template-columns: repeat(2, 1fr);
   }
 
   .event-row {

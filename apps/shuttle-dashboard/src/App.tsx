@@ -46,6 +46,10 @@ type CommandStatus = {
   tone: 'idle' | 'ok' | 'warn' | 'error';
 };
 
+type PlaybackSpeedResponse = {
+  speed: number;
+};
+
 type Phase0ValidationRun = {
   seed: number;
   durationSec: number;
@@ -139,6 +143,8 @@ const CONTROLLED_PARAMS = [
     unit: 'PPH'
   }
 ] as const;
+
+const PLAYBACK_SPEEDS = [1, 2, 4, 10] as const;
 
 async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const response = await fetch(input, {
@@ -665,6 +671,7 @@ export function App() {
   const [validation, setValidation] = useState<Phase0ValidationResult | null>(null);
   const [validating, setValidating] = useState(false);
   const [commandStatus, setCommandStatus] = useState<CommandStatus>({ label: 'ready', tone: 'idle' });
+  const [playbackSpeed, setPlaybackSpeedState] = useState(1);
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
   const [sceneLayers, setSceneLayers] = useState<SceneLayers>({
     traffic: true,
@@ -694,14 +701,16 @@ export function App() {
     Promise.all([
       requestJson<ShuttleScenario>('/api/shuttle/scenario'),
       requestJson<ShuttleSimState>('/api/shuttle/state'),
-      requestJson<PrerequisiteReport>('/api/shuttle/prerequisites')
+      requestJson<PrerequisiteReport>('/api/shuttle/prerequisites'),
+      requestJson<PlaybackSpeedResponse>('/api/shuttle/playbackSpeed')
     ])
-      .then(([nextScenario, nextState, report]) => {
+      .then(([nextScenario, nextState, report, speedReport]) => {
         if (cancelled) return;
         setScenario(nextScenario);
         setState(nextState);
         setEvents(nextState.recentEvents);
         setPrerequisites(report);
+        setPlaybackSpeedState(speedReport.speed);
       })
       .catch((error) => setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' }));
     return () => {
@@ -793,6 +802,11 @@ export function App() {
     setScenario(nextScenario);
   }
 
+  async function setPlaybackSpeed(speed: number): Promise<void> {
+    setPlaybackSpeedState(speed);
+    await postCommand('/api/shuttle/playbackSpeed', { speed });
+  }
+
   async function runValidation(): Promise<void> {
     setValidating(true);
     setCommandStatus({ label: 'running validation...', tone: 'idle' });
@@ -837,9 +851,22 @@ export function App() {
             <button type="button" onClick={() => postCommand('/api/shuttle/pause')}>Pause</button>
             <button type="button" onClick={() => postCommand('/api/shuttle/reset', { seed: state?.seed })}>Reset</button>
           </div>
+          <div className="speed-row" aria-label="Playback speed">
+            {PLAYBACK_SPEEDS.map((speed) => (
+              <button
+                className={playbackSpeed === speed ? 'active' : ''}
+                key={speed}
+                type="button"
+                onClick={() => setPlaybackSpeed(speed)}
+                aria-pressed={playbackSpeed === speed}
+              >
+                {speed}x
+              </button>
+            ))}
+          </div>
           <div className={`status-line ${commandStatus.tone}`}>
             <span>{state?.status ?? 'loading'}</span>
-            <strong>{commandStatus.label}{isPending ? ' / rendering' : ''}</strong>
+            <strong>{commandStatus.label} / {playbackSpeed}x{isPending ? ' / rendering' : ''}</strong>
           </div>
         </section>
 

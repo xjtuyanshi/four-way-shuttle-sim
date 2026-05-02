@@ -112,22 +112,6 @@ function createSegment(
   return segment;
 }
 
-function createDirectionMarker(
-  from: { x: number; z: number },
-  to: { x: number; z: number },
-  markerMaterial: THREE.Material
-): THREE.Mesh | null {
-  const direction = new THREE.Vector3(to.x - from.x, 0, to.z - from.z);
-  if (direction.length() < 0.001) {
-    return null;
-  }
-
-  const marker = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.42, 18), markerMaterial);
-  marker.position.set((from.x + to.x) / 2, 0.24, (from.z + to.z) / 2);
-  marker.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
-  return marker;
-}
-
 function nodeColor(node: ShuttleNode): number {
   switch (node.type) {
     case 'inbound':
@@ -147,10 +131,10 @@ function nodeColor(node: ShuttleNode): number {
   }
 }
 
-function createPalletLoadObject(widthM: number, depthM: number, crateColor = 0xe2b84b): THREE.Group {
+function createPalletLoadObject(widthM: number, depthM: number, crateColor = 0x8d969c): THREE.Group {
   const group = new THREE.Group();
 
-  const pallet = new THREE.Mesh(new THREE.BoxGeometry(widthM, 0.08, depthM), material(0x8a6b42, 0.8, 0.02));
+  const pallet = new THREE.Mesh(new THREE.BoxGeometry(widthM, 0.08, depthM), material(0x6f777d, 0.82, 0.08));
   pallet.position.y = 0.04;
   pallet.castShadow = true;
   pallet.receiveShadow = true;
@@ -173,45 +157,37 @@ function createPalletLoadObject(widthM: number, depthM: number, crateColor = 0xe
   return group;
 }
 
-function createStorageBay(node: ShuttleNode): THREE.Group {
+function createStorageTrackCell(node: ShuttleNode): THREE.Group {
   const group = new THREE.Group();
   group.position.set(node.x, 0, node.z);
 
-  const base = new THREE.Mesh(new THREE.BoxGeometry(1.12, 0.06, 0.9), material(0x2f4f43, 0.78, 0.04));
+  const base = new THREE.Mesh(new THREE.BoxGeometry(1.18, 0.035, 0.86), material(0x20292f, 0.88, 0.04));
   base.position.y = 0.03;
   base.receiveShadow = true;
   group.add(base);
 
-  const railMaterial = material(0x60717f, 0.64, 0.16);
+  const railMaterial = material(0x6e7b84, 0.58, 0.22);
   for (const z of [-0.32, 0.32]) {
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(1.18, 0.05, 0.05), railMaterial);
-    rail.position.set(0, 0.11, z);
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(1.24, 0.045, 0.045), railMaterial);
+    rail.position.set(0, 0.085, z);
     rail.castShadow = true;
     group.add(rail);
   }
 
-  const postGeometry = new THREE.BoxGeometry(0.06, 0.82, 0.06);
-  const postMaterial = material(0x455462, 0.6, 0.18);
-  for (const x of [-0.58, 0.58]) {
-    for (const z of [-0.45, 0.45]) {
-      const post = new THREE.Mesh(postGeometry, postMaterial);
-      post.position.set(x, 0.43, z);
-      post.castShadow = true;
-      group.add(post);
-    }
+  const crossTieMaterial = material(0x38454e, 0.76, 0.12);
+  for (const x of [-0.42, 0, 0.42]) {
+    const tie = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.032, 0.78), crossTieMaterial);
+    tie.position.set(x, 0.062, 0);
+    tie.receiveShadow = true;
+    group.add(tie);
   }
-
-  const top = new THREE.Mesh(new THREE.BoxGeometry(1.24, 0.05, 0.96), material(0x354553, 0.7, 0.1));
-  top.position.y = 0.86;
-  top.castShadow = true;
-  group.add(top);
 
   return group;
 }
 
 function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   const group = new THREE.Group();
-  const bodyMaterial = material(0x2f8d86, 0.5, 0.22);
+  const bodyMaterial = material(0x287f78, 0.5, 0.22);
   const ringMaterial = new THREE.MeshBasicMaterial({
     color: 0x56a9c9,
     transparent: true,
@@ -300,9 +276,9 @@ function applyVehicleState(group: THREE.Group, vehicle: VehicleState, layers: Sh
 }
 
 function createLoadMesh(load: LoadStateRecord, node: ShuttleNode, index: number): THREE.Group {
-  const loadMesh = createPalletLoadObject(0.76, 0.58);
-  const offset = index % 2 === 0 ? 0.38 : -0.38;
-  loadMesh.position.set(node.x + offset, 0.18, node.z + 0.42);
+  const loadMesh = createPalletLoadObject(0.78, 0.62, load.state === 'waiting' ? 0xb98a4a : 0x8d969c);
+  const offset = node.type === 'storage' ? 0 : index % 2 === 0 ? 0.38 : -0.38;
+  loadMesh.position.set(node.x + offset, 0.13, node.z + (node.type === 'storage' ? 0 : 0.42));
   loadMesh.userData.loadId = load.id;
   return loadMesh;
 }
@@ -432,20 +408,19 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario): voi
   const bounds = computeBounds(scenario.layout.nodes);
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(bounds.width, bounds.depth),
-    new THREE.MeshStandardMaterial({ color: 0x17212b, roughness: 0.92, metalness: 0.02 })
+    new THREE.MeshStandardMaterial({ color: 0x151b20, roughness: 0.94, metalness: 0.02 })
   );
   floor.rotation.x = -Math.PI / 2;
   floor.position.set(bounds.centerX, FLOOR_Y, bounds.centerZ);
   floor.receiveShadow = true;
   runtime.staticGroup.add(floor);
 
-  const grid = new THREE.GridHelper(bounds.size, 18, 0x334251, 0x273440);
+  const grid = new THREE.GridHelper(bounds.size, 12, 0x26323b, 0x1d272f);
   grid.position.set(bounds.centerX, FLOOR_Y + 0.006, bounds.centerZ);
   runtime.staticGroup.add(grid);
 
-  const edgeMaterial = new THREE.MeshStandardMaterial({ color: 0x536271, roughness: 0.84, metalness: 0.08 });
-  const fifoEdgeMaterial = new THREE.MeshStandardMaterial({ color: 0x3f9c77, roughness: 0.78, metalness: 0.06 });
-  const fifoMarkerMaterial = new THREE.MeshStandardMaterial({ color: 0xaedbc4, roughness: 0.58, metalness: 0.08 });
+  const edgeMaterial = new THREE.MeshStandardMaterial({ color: 0x4f5b64, roughness: 0.82, metalness: 0.12 });
+  const fifoEdgeMaterial = new THREE.MeshStandardMaterial({ color: 0x687782, roughness: 0.76, metalness: 0.14 });
   for (const edge of scenario.layout.edges) {
     const from = runtime.nodeById.get(edge.from);
     const to = runtime.nodeById.get(edge.to);
@@ -453,25 +428,19 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario): voi
       continue;
     }
     const isFifoLane = edge.conflictGroup?.startsWith('fifo-lane') ?? false;
-    const segment = createSegment(from, to, isFifoLane ? 0.075 : 0.055, isFifoLane ? fifoEdgeMaterial : edgeMaterial, 0.07);
+    const segment = createSegment(from, to, isFifoLane ? 0.058 : 0.048, isFifoLane ? fifoEdgeMaterial : edgeMaterial, 0.07);
     if (segment) {
       runtime.staticGroup.add(segment);
-    }
-    if (edge.directionMode === 'oneWay') {
-      const marker = createDirectionMarker(from, to, fifoMarkerMaterial);
-      if (marker) {
-        runtime.staticGroup.add(marker);
-      }
     }
   }
 
   for (const node of scenario.layout.nodes) {
     const isStorage = node.type === 'storage';
     if (isStorage) {
-      runtime.staticGroup.add(createStorageBay(node));
+      runtime.staticGroup.add(createStorageTrackCell(node));
     } else {
-      const nodeMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.16, 24), material(nodeColor(node), 0.66, 0.1));
-      nodeMesh.position.set(node.x, 0.09, node.z);
+      const nodeMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.08, 24), material(nodeColor(node), 0.66, 0.1));
+      nodeMesh.position.set(node.x, 0.045, node.z);
       nodeMesh.castShadow = true;
       nodeMesh.receiveShadow = true;
       runtime.staticGroup.add(nodeMesh);
