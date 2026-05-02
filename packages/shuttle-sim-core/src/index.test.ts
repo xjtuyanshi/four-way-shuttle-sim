@@ -98,6 +98,18 @@ describe('shuttle phase 0 SimCore', () => {
     expect(parsed.layout.zones.some((zone) => zone.noStop && zone.noParking)).toBe(true);
   });
 
+  it('rejects multi-capacity traffic resources for Phase 0', () => {
+    expect(() =>
+      ShuttleScenarioSchema.parse({
+        ...createDefaultShuttleScenario(),
+        trafficPolicy: {
+          ...createDefaultShuttleScenario().trafficPolicy,
+          edgeCapacity: 2
+        }
+      })
+    ).toThrow(/edgeCapacity=1/);
+  });
+
   it('produces the same event log hash for the same seed', () => {
     const scenario = createDefaultShuttleScenario({ durationSec: 180, taskGeneration: { maxTasks: 8 } });
     const hashes = Array.from({ length: 3 }, () => {
