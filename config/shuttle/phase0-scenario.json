@@ -36,6 +36,8 @@
     "edges": [
       { "id": "parking-a-inbound", "from": "parking-a", "to": "inbound", "lengthM": 4.47, "directionMode": "twoWay", "reservationType": "edge", "conflictGroup": "west-yard", "noParking": true },
       { "id": "parking-b-inbound", "from": "parking-b", "to": "inbound", "lengthM": 4.47, "directionMode": "twoWay", "reservationType": "edge", "conflictGroup": "west-yard", "noParking": true },
+      { "id": "parking-a-x-main", "from": "parking-a", "to": "x-main", "lengthM": 5, "directionMode": "twoWay", "reservationType": "edge", "conflictGroup": "west-yard", "noParking": true },
+      { "id": "parking-b-x-main", "from": "parking-b", "to": "x-main", "lengthM": 5, "directionMode": "twoWay", "reservationType": "edge", "conflictGroup": "west-yard", "noParking": true },
       { "id": "inbound-x-main", "from": "inbound", "to": "x-main", "lengthM": 5, "directionMode": "twoWay", "reservationType": "edge", "conflictGroup": "main-aisle", "noParking": true },
       { "id": "x-main-storage-a", "from": "x-main", "to": "storage-a", "lengthM": 5.83, "directionMode": "twoWay", "reservationType": "edge", "conflictGroup": "storage-fan", "noParking": true },
       { "id": "x-main-storage-b", "from": "x-main", "to": "storage-b", "lengthM": 5.83, "directionMode": "twoWay", "reservationType": "edge", "conflictGroup": "storage-fan", "noParking": true },
@@ -47,7 +49,7 @@
         "id": "zone-x-main",
         "type": "intersection",
         "nodeIds": ["x-main"],
-        "edgeIds": ["inbound-x-main", "x-main-storage-a", "x-main-storage-b", "x-main-outbound"],
+        "edgeIds": ["inbound-x-main", "parking-a-x-main", "parking-b-x-main", "x-main-storage-a", "x-main-storage-b", "x-main-outbound"],
         "noStop": true,
         "noParking": true,
         "capacity": 1,

@@ -12,7 +12,7 @@ Phase 0 validates the architecture before high-fidelity warehouse production wor
 - `packages/shuttle-schemas`: zod schemas for scenarios, vehicle state, reservations, event logs, commands, and stream messages.
 - `packages/shuttle-sim-core`: deterministic SimCore with seed/reset/pause/resume, task generation, routing, reservations, event logs, and KPI snapshots.
 - `apps/shuttle-api`: HTTP/WebSocket server for dashboard and Unreal bridge consumers.
-- `apps/shuttle-dashboard`: React/Vite dashboard for command control, KPI display, vehicle state, event log, and Pixel Streaming readiness.
+- `apps/shuttle-dashboard`: React/Vite dashboard for command control, KPI display, vehicle state, event log, traffic diagnostics, local Three.js visual twin preview, and Pixel Streaming readiness.
 - `unreal-bridge`: source-only Unreal plugin scaffold for WebSocket subscription and placeholder actor interpolation.
 
 ## Commands
@@ -47,6 +47,14 @@ HTTP commands:
 - `POST /api/shuttle/validatePhase0`
 - `GET /api/shuttle/exportLog`
 
+Runtime state now includes `traffic` diagnostics alongside vehicles, tasks, loads, reservations, and KPIs. The dashboard and Unreal bridge should treat `vehicles[*]` as the actor pose stream, and `traffic` / `reservations` as debug overlays:
+
+- `vehicles[*].currentEdgeId`, `routeNodeIds`, `routeIndex`, `legRemainingM`, `legElapsedSec`, and `legTravelSec`
+- `vehicles[*].waitReason`, `blockingReservationId`, and `blockingVehicleId`
+- `traffic.activeReservationCount`, `waitingVehicles`, `deadlockCandidateVehicleIds`, `minVehicleSeparationM`, `maxObservedSpeedMps`, and `physicalViolationCount`
+
+`traffic.physicalViolationCount` is an instantaneous count for the current state snapshot. The validation gate owns cumulative aggregation and reports `physicalViolationsByCode` plus the first `physicalViolationExamples`.
+
 WebSocket stream messages:
 
 - `connectionRecovered`
@@ -63,12 +71,15 @@ The Phase 0 traffic model includes the data structure needed for the harder Phas
 - edge reservations
 - node reservations
 - zone/intersection reservations
+- explicit current-node occupancy ownership for stopped vehicles
 - time windows
 - priorities with aging hook
 - conflict groups
 - no-stop/no-parking flags
 - wait reason codes
 - deadlock/livelock counters and detector placeholders
+
+Phase 0 enforces edge, node, and zone reservation capacity as `1`. It also requires at least one parking node per vehicle so reset can initialize one authoritative current-node occupant per shuttle. Multi-capacity reservation accounting is intentionally deferred to Phase 1.
 
 This is still a smoke implementation. It validates deterministic blocking and wait reason logging; it is not the final multi-agent traffic controller.
 
@@ -88,7 +99,8 @@ That means the API/dashboard/SimCore protocol can run now, but actual Pixel Stre
 - Event log hash: implemented with SHA-256 over stable event fields.
 - Reset without UE process restart: implemented at API/SimCore level.
 - Dashboard control path: implemented for resume, pause, reset, and parameter updates.
-- Validation gate: implemented for same-seed hash stability and seed sweep health.
+- Validation gate: implemented for same-seed hash stability, seed sweep health, deadlock absence, and physical safety checks.
+- Local 3D preview: implemented in the dashboard as a browser-side visual twin driven by the same SimCore state stream that Unreal consumes.
 - WebSocket reconnect: dashboard reconnects and consumes `connectionRecovered`.
 - Unreal visual twin: source scaffold implemented, pending UE installation and compile.
 - 30-minute Pixel Streaming validation: blocked by missing UE/full Xcode.
@@ -99,5 +111,6 @@ That means the API/dashboard/SimCore protocol can run now, but actual Pixel Stre
 2. Run `pnpm shuttle:prereq` until Unreal and Xcode are both `ready`.
 3. Create a blank UE project and copy `unreal-bridge` into `Plugins/ShuttlePhase0Bridge`.
 4. Enable Pixel Streaming and WebSockets.
-5. Bind placeholder actors to `UShuttleStateSubscriberSubsystem`.
-6. Run the 30-minute 1080p single-user Pixel Streaming test and record resource metrics.
+5. Bind placeholder actors to `UShuttleStateSubscriberSubsystem`; each `AShuttleVisualTwinActor` can be preassigned a `VehicleId` and will ignore other vehicle states.
+6. Use the new route, blocker, and timing fields on `FShuttleVisualVehicleState` for Blueprint debug overlays.
+7. Run the 30-minute 1080p single-user Pixel Streaming test and record resource metrics.

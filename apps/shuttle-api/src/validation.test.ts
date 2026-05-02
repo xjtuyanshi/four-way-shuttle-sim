@@ -13,6 +13,11 @@ describe('phase 0 validation', () => {
     expect(result.deterministic.pass).toBe(true);
     expect(new Set(result.deterministic.hashes).size).toBe(1);
     expect(result.seedSweep.runs).toHaveLength(2);
+    expect(result.acceptance.noPhysicalSafetyViolations).toBe(true);
+    expect(result.acceptance.noReservationCoverageViolations).toBe(true);
+    expect(result.seedSweep.runs.every((run) => run.physicalViolationCount === 0)).toBe(true);
+    expect(result.seedSweep.runs.every((run) => run.physicalViolationsByCode.unreservedEdgeOccupancy === 0)).toBe(true);
+    expect(result.seedSweep.runs.every((run) => run.physicalViolationExamples.length === 0)).toBe(true);
     expect(result.acceptance.pass).toBe(true);
   });
 });

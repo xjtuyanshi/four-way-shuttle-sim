@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 
 import type {
   EventLogEntry,
@@ -8,6 +8,10 @@ import type {
   ShuttleStreamMessage,
   VehicleState
 } from '@four-way-shuttle/schemas';
+
+const ShuttleScene3D = lazy(() =>
+  import('./ShuttleScene3D.js').then((module) => ({ default: module.ShuttleScene3D }))
+);
 
 type PrerequisiteReport = {
   checkedAt: string;
@@ -53,6 +57,10 @@ type Phase0ValidationRun = {
   outboundPph: number;
   reservationConflictCount: number;
   deadlockCount: number;
+  maxObservedSpeedMps: number;
+  maxObservedAccelerationMps2: number;
+  minVehicleSeparationM: number | null;
+  physicalViolationCount: number;
 };
 
 type Phase0ValidationResult = {
@@ -77,8 +85,16 @@ type Phase0ValidationResult = {
     sameSeedEventHashStable: boolean;
     noDeadlocksInSweep: boolean;
     eventLogsPresent: boolean;
+    noPhysicalSafetyViolations: boolean;
     pass: boolean;
   };
+};
+
+type SceneLayers = {
+  traffic: boolean;
+  physics: boolean;
+  loads: boolean;
+  routes: boolean;
 };
 
 const CONTROLLED_PARAMS = [
@@ -171,6 +187,44 @@ function mergeEvents(previous: EventLogEntry[], next: EventLogEntry[]): EventLog
   return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence).slice(-80);
 }
 
+export function mergeVehicleStateUpdate(
+  previous: ShuttleSimState | null,
+  vehicles: VehicleState[],
+  simTimeSec: number
+): ShuttleSimState | null {
+  if (!previous) {
+    return previous;
+  }
+  const incomingById = new Map(vehicles.map((vehicle) => [vehicle.id, vehicle]));
+  const existingIds = new Set(previous.vehicles.map((vehicle) => vehicle.id));
+  const nextVehicles = previous.vehicles.map((vehicle) => incomingById.get(vehicle.id) ?? vehicle);
+  for (const vehicle of vehicles) {
+    if (!existingIds.has(vehicle.id)) {
+      nextVehicles.push(vehicle);
+    }
+  }
+  return {
+    ...previous,
+    simTimeSec,
+    vehicles: nextVehicles
+  };
+}
+
+export function mergeKpiUpdate(
+  previous: ShuttleSimState | null,
+  kpis: KpiSnapshot,
+  simTimeSec: number
+): ShuttleSimState | null {
+  if (!previous) {
+    return previous;
+  }
+  return {
+    ...previous,
+    simTimeSec,
+    kpis
+  };
+}
+
 function KpiStrip({ kpis }: { kpis: KpiSnapshot | null }) {
   const items = [
     ['Total PPH', kpis ? formatNumber(kpis.totalPph, 1) : '--'],
@@ -193,7 +247,15 @@ function KpiStrip({ kpis }: { kpis: KpiSnapshot | null }) {
   );
 }
 
-function VehicleTable({ vehicles }: { vehicles: VehicleState[] }) {
+function VehicleTable({
+  vehicles,
+  selectedVehicleId,
+  onSelectVehicle
+}: {
+  vehicles: VehicleState[];
+  selectedVehicleId: string | null;
+  onSelectVehicle: (vehicleId: string) => void;
+}) {
   return (
     <section className="panel vehicle-panel">
       <div className="panel-head">
@@ -214,13 +276,17 @@ function VehicleTable({ vehicles }: { vehicles: VehicleState[] }) {
           </thead>
           <tbody>
             {vehicles.map((vehicle) => (
-              <tr key={vehicle.id}>
+              <tr
+                className={selectedVehicleId === vehicle.id ? 'selected' : ''}
+                key={vehicle.id}
+                onClick={() => onSelectVehicle(vehicle.id)}
+              >
                 <td>{vehicle.id}</td>
                 <td><span className={`state-pill ${vehicle.state}`}>{vehicle.state}</span></td>
                 <td>{vehicle.currentNodeId}</td>
                 <td>{vehicle.targetNodeId ?? '--'}</td>
                 <td>{vehicle.speedMps.toFixed(2)}</td>
-                <td>{vehicle.waitReason ?? '--'}</td>
+                <td>{vehicle.waitReason ?? vehicle.blockingVehicleId ?? vehicle.blockingReservationId ?? '--'}</td>
               </tr>
             ))}
           </tbody>
@@ -331,11 +397,17 @@ function AuthoritativeMap({ scenario, state }: { scenario: ShuttleScenario | nul
 function StreamingPane({
   prerequisites,
   scenario,
-  state
+  state,
+  layers,
+  selectedVehicleId,
+  onToggleLayer
 }: {
   prerequisites: PrerequisiteReport | null;
   scenario: ShuttleScenario | null;
   state: ShuttleSimState | null;
+  layers: SceneLayers;
+  selectedVehicleId: string | null;
+  onToggleLayer: (layer: keyof SceneLayers) => void;
 }) {
   const unrealReady = prerequisites?.unreal.status === 'ready';
   const xcodeReady = prerequisites?.xcode.status === 'ready';
@@ -345,17 +417,74 @@ function StreamingPane({
     <section className="stream-pane">
       <div className="stream-header">
         <div>
-          <h2>Pixel Streaming View</h2>
-          <p>Browser video channel for the Unreal visual twin. Core state still comes from SimCore.</p>
+          <h2>3D SimCore View</h2>
+          <p>Browser-side visual twin preview driven by the same authoritative state stream Unreal will consume.</p>
         </div>
-        <span className={`readiness ${ready ? 'ready' : 'blocked'}`}>{ready ? 'ready for UE hookup' : 'blocked prerequisite'}</span>
+        <div className="scene-layer-controls">
+          {(Object.keys(layers) as Array<keyof SceneLayers>).map((layer) => (
+            <button
+              className={layers[layer] ? 'active' : ''}
+              key={layer}
+              type="button"
+              onClick={() => onToggleLayer(layer)}
+              aria-pressed={layers[layer]}
+            >
+              {layer}
+            </button>
+          ))}
+          <span className={`readiness ${ready ? 'ready' : 'blocked'}`}>{ready ? 'ready for UE hookup' : 'blocked prerequisite'}</span>
+        </div>
       </div>
       <div className="stream-placeholder">
-        <AuthoritativeMap scenario={scenario} state={state} />
+        <Suspense fallback={<div className="shuttle-scene-loading" />}>
+          <ShuttleScene3D
+            scenario={scenario}
+            state={state}
+            layers={layers}
+            selectedVehicleId={selectedVehicleId}
+          />
+        </Suspense>
         <div className="stream-copy">
-          <strong>{ready ? 'Ready for Unreal visual twin hookup' : 'Unreal stream is not attached yet'}</strong>
-          <span>{ready ? 'The map below is still SimCore truth; Unreal should subscribe to the same state stream.' : 'Install UE 5.7.4 and full Xcode, enable Pixel Streaming, then point this pane at the signalling server page.'}</span>
+          <strong>{ready ? 'Ready for Unreal visual twin hookup' : 'Local 3D preview is active'}</strong>
+          <span>{ready ? 'Unreal should subscribe to this same WebSocket state stream.' : 'Unreal and Pixel Streaming remain gated by local prerequisites.'}</span>
         </div>
+      </div>
+    </section>
+  );
+}
+
+function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
+  const traffic = state?.traffic;
+  const waiting = traffic?.waitingVehicles ?? [];
+
+  return (
+    <section className="traffic-diagnostics" aria-label="Traffic diagnostics">
+      <div>
+        <span>Reservations</span>
+        <strong>{traffic?.activeReservationCount ?? '--'}</strong>
+      </div>
+      <div>
+        <span>Waiting</span>
+        <strong>{waiting.length}</strong>
+      </div>
+      <div>
+        <span>Min separation</span>
+        <strong>{traffic?.minVehicleSeparationM === null || traffic?.minVehicleSeparationM === undefined ? '--' : `${traffic.minVehicleSeparationM.toFixed(2)}m`}</strong>
+      </div>
+      <div>
+        <span>Physical violations</span>
+        <strong className={traffic?.physicalViolationCount ? 'blocked' : 'ready'}>{traffic?.physicalViolationCount ?? 0}</strong>
+      </div>
+      <div className="traffic-wait-list">
+        {waiting.length === 0 ? (
+          <small>No waiting vehicles</small>
+        ) : (
+          waiting.map((vehicle) => (
+            <small key={vehicle.vehicleId}>
+              {vehicle.vehicleId} / {vehicle.waitReason ?? 'blocked'} / {vehicle.blockingVehicleId ?? vehicle.blockingReservationId ?? 'resource'}
+            </small>
+          ))
+        )}
       </div>
     </section>
   );
@@ -424,6 +553,14 @@ function ValidationPanel({
             <strong>{formatNumber(validation.seedSweep.totalPphMean, 1)} avg</strong>
           </div>
           <div>
+            <span>Physical safety</span>
+            <strong>{validation.acceptance.noPhysicalSafetyViolations ? 'clear' : 'violations'}</strong>
+          </div>
+          <div>
+            <span>Max accel</span>
+            <strong>{formatNumber(Math.max(...validation.seedSweep.runs.map((run) => run.maxObservedAccelerationMps2)), 2)} m/s2</strong>
+          </div>
+          <div>
             <span>Hash</span>
             <strong>{validation.deterministic.hashes[0]?.slice(0, 12) ?? '--'}</strong>
           </div>
@@ -443,12 +580,29 @@ export function App() {
   const [validation, setValidation] = useState<Phase0ValidationResult | null>(null);
   const [validating, setValidating] = useState(false);
   const [commandStatus, setCommandStatus] = useState<CommandStatus>({ label: 'ready', tone: 'idle' });
+  const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
+  const [sceneLayers, setSceneLayers] = useState<SceneLayers>({
+    traffic: true,
+    physics: true,
+    loads: true,
+    routes: true
+  });
   const [isPending, startTransition] = useTransition();
   const reconnectAttemptRef = useRef(0);
 
   const kpis = state?.kpis ?? null;
   const vehicles = state?.vehicles ?? [];
   const statusTone = state?.status === 'running' ? 'ok' : state?.status === 'paused' ? 'warn' : 'idle';
+
+  useEffect(() => {
+    if (vehicles.length === 0) {
+      setSelectedVehicleId(null);
+      return;
+    }
+    if (!selectedVehicleId || !vehicles.some((vehicle) => vehicle.id === selectedVehicleId)) {
+      setSelectedVehicleId(vehicles[0]!.id);
+    }
+  }, [selectedVehicleId, vehicles]);
 
   useEffect(() => {
     let cancelled = false;
@@ -486,6 +640,16 @@ export function App() {
           startTransition(() => {
             setState(message.state);
             setEvents(message.state.recentEvents);
+          });
+        }
+        if (message.type === 'vehicleState') {
+          startTransition(() => {
+            setState((previous) => mergeVehicleStateUpdate(previous, message.vehicles, message.simTimeSec));
+          });
+        }
+        if (message.type === 'kpiUpdate') {
+          startTransition(() => {
+            setState((previous) => mergeKpiUpdate(previous, message.kpis, message.simTimeSec));
           });
         }
         if (message.type === 'taskEvent') {
@@ -564,6 +728,13 @@ export function App() {
     }
   }
 
+  function toggleSceneLayer(layer: keyof SceneLayers): void {
+    setSceneLayers((current) => ({
+      ...current,
+      [layer]: !current[layer]
+    }));
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -627,9 +798,21 @@ export function App() {
         </header>
 
         <KpiStrip kpis={kpis} />
+        <TrafficDiagnosticsPanel state={state} />
         <div className="main-grid">
-          <StreamingPane prerequisites={prerequisites} scenario={scenario} state={state} />
-          <VehicleTable vehicles={vehicles} />
+          <StreamingPane
+            prerequisites={prerequisites}
+            scenario={scenario}
+            state={state}
+            layers={sceneLayers}
+            selectedVehicleId={selectedVehicleId}
+            onToggleLayer={toggleSceneLayer}
+          />
+          <VehicleTable
+            vehicles={vehicles}
+            selectedVehicleId={selectedVehicleId}
+            onSelectVehicle={setSelectedVehicleId}
+          />
           <EventLog events={events} />
         </div>
       </section>
