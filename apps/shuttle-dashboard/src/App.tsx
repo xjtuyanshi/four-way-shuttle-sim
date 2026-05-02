@@ -490,7 +490,7 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
         <strong className={traffic?.physicalViolationCount ? 'blocked' : 'ready'}>{traffic?.physicalViolationCount ?? 0}</strong>
       </div>
       <div>
-        <span>Lift ports</span>
+        <span>Port allocation</span>
         <strong>{activeLiftPorts}/{liftPorts.length}</strong>
         <small>{queuedLiftTasks} queued</small>
       </div>
@@ -511,7 +511,7 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
         ) : (
           liftPorts.map((port) => (
             <small key={port.nodeId}>
-              {port.nodeId} / {port.kind} / q{port.queueLength} / {Math.round(port.utilization * 100)}%
+              {port.nodeId} / {port.kind} / q{port.queueLength} / allocated {Math.round(port.utilization * 100)}%
             </small>
           ))
         )}

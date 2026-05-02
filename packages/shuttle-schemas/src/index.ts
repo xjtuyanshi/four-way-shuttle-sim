@@ -345,7 +345,7 @@ export const LiftPortDiagnosticsSchema = z.object({
 export const TrafficDiagnosticsSchema = z.object({
   activeReservationCount: z.number().int().nonnegative(),
   waitingVehicles: z.array(TrafficWaitingVehicleSchema),
-  liftPorts: z.array(LiftPortDiagnosticsSchema),
+  liftPorts: z.array(LiftPortDiagnosticsSchema).default([]),
   deadlockCandidateVehicleIds: z.array(z.string()),
   minVehicleSeparationM: z.number().nonnegative().nullable(),
   maxObservedSpeedMps: z.number().nonnegative(),

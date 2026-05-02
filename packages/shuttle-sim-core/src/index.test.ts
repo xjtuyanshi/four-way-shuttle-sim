@@ -1,4 +1,4 @@
-import { ShuttleScenarioSchema, type ShuttleScenario } from '@four-way-shuttle/schemas';
+import { ShuttleScenarioSchema, ShuttleSimStateSchema, type ShuttleScenario } from '@four-way-shuttle/schemas';
 
 import {
   ShuttleSimCore,
@@ -101,6 +101,16 @@ describe('shuttle phase 0 SimCore', () => {
       'outbound-lift-b'
     ]);
     expect(parsed.layout.zones.some((zone) => zone.noStop && zone.noParking)).toBe(true);
+  });
+
+  it('parses legacy state diagnostics without lift-port allocation details', () => {
+    const state = new ShuttleSimCore(createDefaultShuttleScenario()).getState();
+    const legacyTraffic: Record<string, unknown> = { ...state.traffic };
+    delete legacyTraffic.liftPorts;
+
+    const parsed = ShuttleSimStateSchema.parse({ ...state, traffic: legacyTraffic });
+
+    expect(parsed.traffic.liftPorts).toEqual([]);
   });
 
   it('keeps the default demo on orthogonal four-way shuttle aisles', () => {
