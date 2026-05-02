@@ -18,6 +18,7 @@ pnpm test
 pnpm typecheck
 pnpm build
 pnpm shuttle:prereq
+pnpm shuttle:validate
 pnpm dev:api
 pnpm dev:dashboard
 ```
@@ -29,3 +30,5 @@ Default local URLs:
 - Dashboard: `http://localhost:5179`
 
 Unreal / Pixel Streaming validation is blocked until Unreal Engine 5.7.4 and full Xcode are installed on the Mac.
+
+`pnpm shuttle:validate` runs the Phase 0 acceptance gate without rendering: same-seed event-log hash stability, a small seed sweep, prerequisite inspection, and KPI summary.

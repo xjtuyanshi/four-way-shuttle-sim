@@ -23,8 +23,9 @@ From the repo root:
 pnpm install
 pnpm test:shuttle
 pnpm shuttle:prereq
-pnpm dev:shuttle-api
-pnpm dev:shuttle-dashboard
+pnpm shuttle:validate
+pnpm dev:api
+pnpm dev:dashboard
 ```
 
 Default local URLs:
@@ -43,6 +44,7 @@ HTTP commands:
 - `POST /api/shuttle/resume`
 - `POST /api/shuttle/setParam`
 - `POST /api/shuttle/startRun`
+- `POST /api/shuttle/validatePhase0`
 - `GET /api/shuttle/exportLog`
 
 WebSocket stream messages:
@@ -86,6 +88,7 @@ That means the API/dashboard/SimCore protocol can run now, but actual Pixel Stre
 - Event log hash: implemented with SHA-256 over stable event fields.
 - Reset without UE process restart: implemented at API/SimCore level.
 - Dashboard control path: implemented for resume, pause, reset, and parameter updates.
+- Validation gate: implemented for same-seed hash stability and seed sweep health.
 - WebSocket reconnect: dashboard reconnects and consumes `connectionRecovered`.
 - Unreal visual twin: source scaffold implemented, pending UE installation and compile.
 - 30-minute Pixel Streaming validation: blocked by missing UE/full Xcode.

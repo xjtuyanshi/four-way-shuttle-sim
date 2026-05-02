@@ -4,5 +4,6 @@ coverage
 output
 test-results
 tmp-qa
+.playwright-cli
 .cache
 .DS_Store

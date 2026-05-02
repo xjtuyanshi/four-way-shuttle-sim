@@ -8,6 +8,7 @@ import { ShuttleCommandSchema, type ShuttleStreamMessage } from '@four-way-shutt
 import { ShuttleSimCore, createDefaultShuttleScenario, hashEventLog } from '@four-way-shuttle/sim-core';
 
 import { collectPrerequisites } from './prerequisites.js';
+import { validatePhase0Scenario } from './validation.js';
 
 const port = Number(process.env.SHUTTLE_PORT ?? process.env.PORT ?? 8791);
 const tickMs = Number(process.env.SHUTTLE_TICK_MS ?? 250);
@@ -72,6 +73,23 @@ app.get('/api/shuttle/state', (_request: Request, response: Response) => {
 
 app.get('/api/shuttle/exportLog', (_request: Request, response: Response) => {
   response.json({ eventLog: sim.getEventLog(), hash: hashEventLog(sim.getEventLog()) });
+});
+
+app.post('/api/shuttle/validatePhase0', async (request: Request, response: Response, next: NextFunction) => {
+  try {
+    const durationSec = Number.isFinite(Number(request.body?.durationSec)) ? Number(request.body.durationSec) : undefined;
+    const repeatCount = Number.isFinite(Number(request.body?.repeatCount)) ? Number(request.body.repeatCount) : undefined;
+    const sweepSeeds = Array.isArray(request.body?.sweepSeeds)
+      ? request.body.sweepSeeds.map(Number).filter((value: number) => Number.isInteger(value) && value >= 0)
+      : undefined;
+    response.json({
+      ok: true,
+      prerequisites: await collectPrerequisites(),
+      validation: validatePhase0Scenario(sim.getScenario(), { durationSec, repeatCount, sweepSeeds })
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post('/api/shuttle/loadScenario', (request: Request, response: Response, next: NextFunction) => {

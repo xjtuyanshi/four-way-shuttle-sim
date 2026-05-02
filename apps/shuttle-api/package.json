@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "tsx src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "prereq": "tsx src/prerequisites.ts"
+    "prereq": "tsx src/prerequisites.ts",
+    "validate:phase0": "tsx src/cli.ts"
   },
   "dependencies": {
     "@four-way-shuttle/schemas": "workspace:*",

@@ -42,6 +42,45 @@ type CommandStatus = {
   tone: 'idle' | 'ok' | 'warn' | 'error';
 };
 
+type Phase0ValidationRun = {
+  seed: number;
+  durationSec: number;
+  status: string;
+  eventLogHash: string;
+  eventCount: number;
+  totalPph: number;
+  inboundPph: number;
+  outboundPph: number;
+  reservationConflictCount: number;
+  deadlockCount: number;
+};
+
+type Phase0ValidationResult = {
+  checkedAt: string;
+  scenarioId: string;
+  deterministic: {
+    seed: number;
+    repeatCount: number;
+    pass: boolean;
+    hashes: string[];
+  };
+  seedSweep: {
+    seeds: number[];
+    durationSec: number;
+    runs: Phase0ValidationRun[];
+    totalPphMean: number;
+    totalPphMin: number;
+    totalPphMax: number;
+    totalPphRange: number;
+  };
+  acceptance: {
+    sameSeedEventHashStable: boolean;
+    noDeadlocksInSweep: boolean;
+    eventLogsPresent: boolean;
+    pass: boolean;
+  };
+};
+
 const CONTROLLED_PARAMS = [
   {
     label: 'Loaded speed',
@@ -212,7 +251,92 @@ function EventLog({ events }: { events: EventLogEntry[] }) {
   );
 }
 
-function StreamingPane({ prerequisites }: { prerequisites: PrerequisiteReport | null }) {
+function AuthoritativeMap({ scenario, state }: { scenario: ShuttleScenario | null; state: ShuttleSimState | null }) {
+  const geometry = useMemo(() => {
+    const nodes = scenario?.layout.nodes ?? [];
+    const xValues = nodes.map((node) => node.x);
+    const zValues = nodes.map((node) => node.z);
+    const minX = Math.min(...xValues, 0) - 2;
+    const maxX = Math.max(...xValues, 1) + 2;
+    const minZ = Math.min(...zValues, -1) - 2;
+    const maxZ = Math.max(...zValues, 1) + 2;
+    const width = Math.max(1, maxX - minX);
+    const depth = Math.max(1, maxZ - minZ);
+    const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+
+    const project = (point: { x: number; z: number }) => ({
+      left: `${((point.x - minX) / width) * 100}%`,
+      top: `${(1 - (point.z - minZ) / depth) * 100}%`
+    });
+
+    return { nodes, nodeMap, edges: scenario?.layout.edges ?? [], project };
+  }, [scenario]);
+
+  const loads = state?.loads.filter((load) => load.nodeId && load.state !== 'carried') ?? [];
+  const activeReservations = state?.reservations ?? [];
+
+  return (
+    <div className="authoritative-map" aria-label="Authoritative state map">
+      {geometry.edges.map((edge) => {
+        const from = geometry.nodeMap.get(edge.from);
+        const to = geometry.nodeMap.get(edge.to);
+        if (!from || !to) return null;
+        const fromPoint = geometry.project(from);
+        const toPoint = geometry.project(to);
+        const left = parseFloat(fromPoint.left);
+        const top = parseFloat(fromPoint.top);
+        const dx = parseFloat(toPoint.left) - left;
+        const dy = parseFloat(toPoint.top) - top;
+        const length = Math.hypot(dx, dy);
+        const angle = Math.atan2(dy, dx);
+        const reserved = activeReservations.some((reservation) => reservation.resourceId === edge.id);
+        return (
+          <span
+            className={`map-edge ${reserved ? 'reserved' : ''}`}
+            key={edge.id}
+            style={{
+              left: fromPoint.left,
+              top: fromPoint.top,
+              width: `${length}%`,
+              transform: `rotate(${angle}rad)`
+            }}
+          />
+        );
+      })}
+      {geometry.nodes.map((node) => (
+        <span className={`map-node ${node.type}`} key={node.id} style={geometry.project(node)}>
+          {node.id}
+        </span>
+      ))}
+      {loads.map((load) => {
+        const node = load.nodeId ? geometry.nodeMap.get(load.nodeId) : null;
+        return node ? <span className={`map-load ${load.state}`} key={load.id} style={geometry.project(node)} /> : null;
+      })}
+      {(state?.vehicles ?? []).map((vehicle) => (
+        <span
+          className={`map-vehicle ${vehicle.state}`}
+          key={vehicle.id}
+          style={{
+            ...geometry.project(vehicle),
+            transform: `translate(-50%, -50%) rotate(${vehicle.yaw}rad)`
+          }}
+        >
+          {vehicle.id}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function StreamingPane({
+  prerequisites,
+  scenario,
+  state
+}: {
+  prerequisites: PrerequisiteReport | null;
+  scenario: ShuttleScenario | null;
+  state: ShuttleSimState | null;
+}) {
   const unrealReady = prerequisites?.unreal.status === 'ready';
   const xcodeReady = prerequisites?.xcode.status === 'ready';
   const ready = unrealReady && xcodeReady;
@@ -227,15 +351,10 @@ function StreamingPane({ prerequisites }: { prerequisites: PrerequisiteReport | 
         <span className={`readiness ${ready ? 'ready' : 'blocked'}`}>{ready ? 'ready for UE hookup' : 'blocked prerequisite'}</span>
       </div>
       <div className="stream-placeholder">
-        <div className="warehouse-grid" aria-hidden="true">
-          <span className="shuttle-dot dot-a" />
-          <span className="shuttle-dot dot-b" />
-          <span className="load-block block-a" />
-          <span className="load-block block-b" />
-        </div>
+        <AuthoritativeMap scenario={scenario} state={state} />
         <div className="stream-copy">
-          <strong>Unreal stream is not attached yet</strong>
-          <span>Install UE 5.7.4 and full Xcode, enable Pixel Streaming, then point this pane at the signalling server page.</span>
+          <strong>{ready ? 'Ready for Unreal visual twin hookup' : 'Unreal stream is not attached yet'}</strong>
+          <span>{ready ? 'The map below is still SimCore truth; Unreal should subscribe to the same state stream.' : 'Install UE 5.7.4 and full Xcode, enable Pixel Streaming, then point this pane at the signalling server page.'}</span>
         </div>
       </div>
     </section>
@@ -275,11 +394,54 @@ function PrerequisitePanel({ report }: { report: PrerequisiteReport | null }) {
   );
 }
 
+function ValidationPanel({
+  validation,
+  validating,
+  onRun
+}: {
+  validation: Phase0ValidationResult | null;
+  validating: boolean;
+  onRun: () => void;
+}) {
+  return (
+    <section className="panel validation-panel">
+      <div className="panel-head">
+        <h2>Validation Gate</h2>
+        <button type="button" onClick={onRun} disabled={validating}>{validating ? 'Running' : 'Run'}</button>
+      </div>
+      {validation ? (
+        <div className="validation-grid">
+          <div>
+            <span>Acceptance</span>
+            <strong className={validation.acceptance.pass ? 'ready' : 'blocked'}>{validation.acceptance.pass ? 'pass' : 'fail'}</strong>
+          </div>
+          <div>
+            <span>Same-seed hash</span>
+            <strong>{validation.deterministic.pass ? 'stable' : 'unstable'}</strong>
+          </div>
+          <div>
+            <span>Seed sweep PPH</span>
+            <strong>{formatNumber(validation.seedSweep.totalPphMean, 1)} avg</strong>
+          </div>
+          <div>
+            <span>Hash</span>
+            <strong>{validation.deterministic.hashes[0]?.slice(0, 12) ?? '--'}</strong>
+          </div>
+        </div>
+      ) : (
+        <p className="muted">Run the deterministic same-seed and seed-sweep gate before a Pixel Streaming test.</p>
+      )}
+    </section>
+  );
+}
+
 export function App() {
   const [scenario, setScenario] = useState<ShuttleScenario | null>(null);
   const [state, setState] = useState<ShuttleSimState | null>(null);
   const [events, setEvents] = useState<EventLogEntry[]>([]);
   const [prerequisites, setPrerequisites] = useState<PrerequisiteReport | null>(null);
+  const [validation, setValidation] = useState<Phase0ValidationResult | null>(null);
+  const [validating, setValidating] = useState(false);
   const [commandStatus, setCommandStatus] = useState<CommandStatus>({ label: 'ready', tone: 'idle' });
   const [isPending, startTransition] = useTransition();
   const reconnectAttemptRef = useRef(0);
@@ -382,6 +544,26 @@ export function App() {
     setScenario(nextScenario);
   }
 
+  async function runValidation(): Promise<void> {
+    setValidating(true);
+    setCommandStatus({ label: 'running validation...', tone: 'idle' });
+    try {
+      const response = await requestJson<{ validation: Phase0ValidationResult }>('/api/shuttle/validatePhase0', {
+        method: 'POST',
+        body: JSON.stringify({ durationSec: 180, repeatCount: 3 })
+      });
+      setValidation(response.validation);
+      setCommandStatus({
+        label: response.validation.acceptance.pass ? 'validation passed' : 'validation failed',
+        tone: response.validation.acceptance.pass ? 'ok' : 'warn'
+      });
+    } catch (error) {
+      setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' });
+    } finally {
+      setValidating(false);
+    }
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -429,6 +611,7 @@ export function App() {
         </section>
 
         <PrerequisitePanel report={prerequisites} />
+        <ValidationPanel validation={validation} validating={validating} onRun={runValidation} />
       </aside>
 
       <section className="workspace">
@@ -445,7 +628,7 @@ export function App() {
 
         <KpiStrip kpis={kpis} />
         <div className="main-grid">
-          <StreamingPane prerequisites={prerequisites} />
+          <StreamingPane prerequisites={prerequisites} scenario={scenario} state={state} />
           <VehicleTable vehicles={vehicles} />
           <EventLog events={events} />
         </div>
