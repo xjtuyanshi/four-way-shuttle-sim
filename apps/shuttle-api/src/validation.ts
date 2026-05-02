@@ -77,6 +77,14 @@ type Phase0ValidationOptions = {
   sweepSeeds?: number[];
 };
 
+export type Phase0StateInspection = {
+  maxObservedSpeedMps: number;
+  maxObservedAccelerationMps2: number;
+  minVehicleSeparationM: number | null;
+  physicalViolationsByCode: Record<PhysicalViolationCode, number>;
+  physicalViolationExamples: PhysicalViolationExample[];
+};
+
 const VIOLATION_CODES: PhysicalViolationCode[] = [
   'unreservedEdgeOccupancy',
   'unreservedNodeOccupancy',
@@ -315,6 +323,32 @@ function inspectState(
   }
 
   return { maxObservedSpeedMps, maxObservedAccelerationMps2, minVehicleSeparationM };
+}
+
+export function inspectPhase0StateSnapshot(
+  scenario: ShuttleScenario,
+  state: ShuttleSimState,
+  debug: ShuttleSimDebugState,
+  previousSpeeds = new Map<string, number>()
+): Phase0StateInspection {
+  const physicalViolationsByCode = emptyViolationCounts();
+  const physicalViolationExamples: PhysicalViolationExample[] = [];
+  const physical = inspectState(
+    scenario,
+    state,
+    debug,
+    previousSpeeds,
+    physicalViolationsByCode,
+    physicalViolationExamples
+  );
+
+  return {
+    maxObservedSpeedMps: round(physical.maxObservedSpeedMps),
+    maxObservedAccelerationMps2: round(physical.maxObservedAccelerationMps2),
+    minVehicleSeparationM: physical.minVehicleSeparationM === null ? null : round(physical.minVehicleSeparationM),
+    physicalViolationsByCode,
+    physicalViolationExamples
+  };
 }
 
 function runOnce(scenario: ShuttleScenario, seed: number, durationSec: number): Phase0ValidationRun {
