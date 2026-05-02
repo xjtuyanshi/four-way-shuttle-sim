@@ -33,7 +33,7 @@ export type ShuttleSceneLayers = {
 type VehicleObjectUserData = {
   targetPosition: THREE.Vector3;
   targetYaw: number;
-  loadedMesh: THREE.Mesh;
+  loadedMesh: THREE.Group;
   bodyMaterial: THREE.MeshStandardMaterial;
   ringMaterial: THREE.MeshBasicMaterial;
   safetyRing: THREE.Mesh;
@@ -112,6 +112,22 @@ function createSegment(
   return segment;
 }
 
+function createDirectionMarker(
+  from: { x: number; z: number },
+  to: { x: number; z: number },
+  markerMaterial: THREE.Material
+): THREE.Mesh | null {
+  const direction = new THREE.Vector3(to.x - from.x, 0, to.z - from.z);
+  if (direction.length() < 0.001) {
+    return null;
+  }
+
+  const marker = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.42, 18), markerMaterial);
+  marker.position.set((from.x + to.x) / 2, 0.24, (from.z + to.z) / 2);
+  marker.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+  return marker;
+}
+
 function nodeColor(node: ShuttleNode): number {
   switch (node.type) {
     case 'inbound':
@@ -129,6 +145,68 @@ function nodeColor(node: ShuttleNode): number {
     default:
       return 0x8ba1b8;
   }
+}
+
+function createPalletLoadObject(widthM: number, depthM: number, crateColor = 0xe2b84b): THREE.Group {
+  const group = new THREE.Group();
+
+  const pallet = new THREE.Mesh(new THREE.BoxGeometry(widthM, 0.08, depthM), material(0x8a6b42, 0.8, 0.02));
+  pallet.position.y = 0.04;
+  pallet.castShadow = true;
+  pallet.receiveShadow = true;
+  group.add(pallet);
+
+  const crateMaterial = material(crateColor, 0.68, 0.02);
+  const crateGeometry = new THREE.BoxGeometry(widthM * 0.42, 0.28, depthM * 0.4);
+  for (const [x, z] of [
+    [-widthM * 0.22, -depthM * 0.18],
+    [widthM * 0.22, -depthM * 0.18],
+    [0, depthM * 0.2]
+  ] satisfies Array<[number, number]>) {
+    const crate = new THREE.Mesh(crateGeometry, crateMaterial);
+    crate.position.set(x, 0.22, z);
+    crate.castShadow = true;
+    crate.receiveShadow = true;
+    group.add(crate);
+  }
+
+  return group;
+}
+
+function createStorageBay(node: ShuttleNode): THREE.Group {
+  const group = new THREE.Group();
+  group.position.set(node.x, 0, node.z);
+
+  const base = new THREE.Mesh(new THREE.BoxGeometry(1.12, 0.06, 0.9), material(0x2f4f43, 0.78, 0.04));
+  base.position.y = 0.03;
+  base.receiveShadow = true;
+  group.add(base);
+
+  const railMaterial = material(0x60717f, 0.64, 0.16);
+  for (const z of [-0.32, 0.32]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(1.18, 0.05, 0.05), railMaterial);
+    rail.position.set(0, 0.11, z);
+    rail.castShadow = true;
+    group.add(rail);
+  }
+
+  const postGeometry = new THREE.BoxGeometry(0.06, 0.82, 0.06);
+  const postMaterial = material(0x455462, 0.6, 0.18);
+  for (const x of [-0.58, 0.58]) {
+    for (const z of [-0.45, 0.45]) {
+      const post = new THREE.Mesh(postGeometry, postMaterial);
+      post.position.set(x, 0.43, z);
+      post.castShadow = true;
+      group.add(post);
+    }
+  }
+
+  const top = new THREE.Mesh(new THREE.BoxGeometry(1.24, 0.05, 0.96), material(0x354553, 0.7, 0.1));
+  top.position.y = 0.86;
+  top.castShadow = true;
+  group.add(top);
+
+  return group;
 }
 
 function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
@@ -158,6 +236,17 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   nose.position.set(scenario.vehicles.lengthM / 2 + 0.04, VEHICLE_BASE_Y + scenario.vehicles.heightM / 2, 0);
   group.add(nose);
 
+  const forkMaterial = material(0xb8c5c8, 0.42, 0.28);
+  for (const z of [-scenario.vehicles.widthM * 0.24, scenario.vehicles.widthM * 0.24]) {
+    const fork = new THREE.Mesh(
+      new THREE.BoxGeometry(scenario.vehicles.lengthM * 0.78, 0.035, 0.045),
+      forkMaterial
+    );
+    fork.position.set(0.04, VEHICLE_BASE_Y + scenario.vehicles.heightM + 0.025, z);
+    fork.castShadow = true;
+    group.add(fork);
+  }
+
   const safetyRing = new THREE.Mesh(
     new THREE.RingGeometry(Math.max(0.02, scenario.vehicles.safetyRadiusM - 0.035), scenario.vehicles.safetyRadiusM, 48),
     ringMaterial
@@ -166,13 +255,9 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   safetyRing.position.y = FLOOR_Y + 0.018;
   group.add(safetyRing);
 
-  const loadedMesh = new THREE.Mesh(
-    new THREE.BoxGeometry(scenario.vehicles.lengthM * 0.58, 0.18, scenario.vehicles.widthM * 0.72),
-    material(0xe2b84b, 0.62, 0.04)
-  );
-  loadedMesh.position.y = VEHICLE_BASE_Y + scenario.vehicles.heightM + 0.12;
+  const loadedMesh = createPalletLoadObject(scenario.vehicles.lengthM * 0.72, scenario.vehicles.widthM * 0.78);
+  loadedMesh.position.y = VEHICLE_BASE_Y + scenario.vehicles.heightM + 0.05;
   loadedMesh.visible = false;
-  loadedMesh.castShadow = true;
   group.add(loadedMesh);
 
   group.userData = {
@@ -214,12 +299,11 @@ function applyVehicleState(group: THREE.Group, vehicle: VehicleState, layers: Sh
   data.ringMaterial.color.setHex(vehicle.loaded ? 0x4fc190 : 0x56a9c9);
 }
 
-function createLoadMesh(load: LoadStateRecord, node: ShuttleNode, index: number): THREE.Mesh {
-  const loadMesh = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.32, 0.42), material(0xe2b84b, 0.68, 0.02));
+function createLoadMesh(load: LoadStateRecord, node: ShuttleNode, index: number): THREE.Group {
+  const loadMesh = createPalletLoadObject(0.76, 0.58);
   const offset = index % 2 === 0 ? 0.38 : -0.38;
   loadMesh.position.set(node.x + offset, 0.18, node.z + 0.42);
   loadMesh.userData.loadId = load.id;
-  loadMesh.castShadow = true;
   return loadMesh;
 }
 
@@ -360,28 +444,38 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario): voi
   runtime.staticGroup.add(grid);
 
   const edgeMaterial = new THREE.MeshStandardMaterial({ color: 0x536271, roughness: 0.84, metalness: 0.08 });
+  const fifoEdgeMaterial = new THREE.MeshStandardMaterial({ color: 0x3f9c77, roughness: 0.78, metalness: 0.06 });
+  const fifoMarkerMaterial = new THREE.MeshStandardMaterial({ color: 0xaedbc4, roughness: 0.58, metalness: 0.08 });
   for (const edge of scenario.layout.edges) {
     const from = runtime.nodeById.get(edge.from);
     const to = runtime.nodeById.get(edge.to);
     if (!from || !to) {
       continue;
     }
-    const segment = createSegment(from, to, 0.055, edgeMaterial, 0.07);
+    const isFifoLane = edge.conflictGroup?.startsWith('fifo-lane') ?? false;
+    const segment = createSegment(from, to, isFifoLane ? 0.075 : 0.055, isFifoLane ? fifoEdgeMaterial : edgeMaterial, 0.07);
     if (segment) {
       runtime.staticGroup.add(segment);
+    }
+    if (edge.directionMode === 'oneWay') {
+      const marker = createDirectionMarker(from, to, fifoMarkerMaterial);
+      if (marker) {
+        runtime.staticGroup.add(marker);
+      }
     }
   }
 
   for (const node of scenario.layout.nodes) {
     const isStorage = node.type === 'storage';
-    const geometry = isStorage
-      ? new THREE.BoxGeometry(0.72, 0.18, 0.72)
-      : new THREE.CylinderGeometry(0.28, 0.28, 0.16, 24);
-    const nodeMesh = new THREE.Mesh(geometry, material(nodeColor(node), 0.66, 0.1));
-    nodeMesh.position.set(node.x, 0.09, node.z);
-    nodeMesh.castShadow = true;
-    nodeMesh.receiveShadow = true;
-    runtime.staticGroup.add(nodeMesh);
+    if (isStorage) {
+      runtime.staticGroup.add(createStorageBay(node));
+    } else {
+      const nodeMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.16, 24), material(nodeColor(node), 0.66, 0.1));
+      nodeMesh.position.set(node.x, 0.09, node.z);
+      nodeMesh.castShadow = true;
+      nodeMesh.receiveShadow = true;
+      runtime.staticGroup.add(nodeMesh);
+    }
   }
 
   runtime.camera.position.set(

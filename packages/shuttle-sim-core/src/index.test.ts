@@ -98,6 +98,28 @@ describe('shuttle phase 0 SimCore', () => {
     expect(parsed.layout.zones.some((zone) => zone.noStop && zone.noParking)).toBe(true);
   });
 
+  it('keeps the default demo on orthogonal four-way shuttle aisles', () => {
+    const scenario = createDefaultShuttleScenario();
+    const nodes = new Map(scenario.layout.nodes.map((node) => [node.id, node]));
+
+    for (const edge of scenario.layout.edges) {
+      const from = nodes.get(edge.from)!;
+      const to = nodes.get(edge.to)!;
+      expect(from.x === to.x || from.z === to.z).toBe(true);
+      expect(from.x === to.x && from.z === to.z).toBe(false);
+    }
+
+    const fifoLaneEdges = scenario.layout.edges.filter((edge) => edge.conflictGroup?.startsWith('fifo-lane'));
+    const storageXs = scenario.layout.nodes.filter((node) => node.type === 'storage').map((node) => node.x);
+    const inboundX = nodes.get('inbound')!.x;
+    const outboundX = nodes.get('outbound')!.x;
+
+    expect(fifoLaneEdges).toHaveLength(8);
+    expect(fifoLaneEdges.every((edge) => edge.directionMode === 'oneWay')).toBe(true);
+    expect(Math.max(...storageXs)).toBeLessThan(inboundX);
+    expect(Math.min(...storageXs)).toBeGreaterThan(outboundX);
+  });
+
   it('rejects multi-capacity traffic resources for Phase 0', () => {
     expect(() =>
       ShuttleScenarioSchema.parse({
