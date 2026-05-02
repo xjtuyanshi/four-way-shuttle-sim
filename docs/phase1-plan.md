@@ -40,7 +40,7 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 - Replaced rack-like storage bay visuals with flat track-cell visuals so storage locations read as drivable grid positions, and added runtime playback speed control (`1x`, `2x`, `4x`, `10x`) through the API/dashboard.
 - Added a CAD-style generated floor texture for the 3D view so the visual background comes from meter-based SimCore nodes/edges instead of a decorative scene; references and dimensional assumptions are tracked in `docs/layout-reference.md`.
 - Replaced the sparse 2x3 storage demo with a contiguous 6x8 storage matrix so the center storage field reads as a dense block of adjacent drivable cells.
-- Hardened the browser visual twin toward an engineering rack view: continuous storage rack block, cross-track cell rails, side-aisle rail beds, roller conveyors at inbound/outbound, parking pads, lift tower placeholder, and a cleaner CAD floor without oversized explanatory labels.
+- Hardened the browser visual twin toward an engineering rack view: continuous storage rack block, cross-track cell rails, side-aisle rail beds, roller conveyors at inbound/outbound, parking pads, dedicated single-level black-box lift ports for inbound/outbound, and a cleaner CAD floor without oversized explanatory labels.
 
 ## Next TODO
 

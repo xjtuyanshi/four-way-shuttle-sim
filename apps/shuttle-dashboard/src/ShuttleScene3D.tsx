@@ -538,32 +538,45 @@ function createConveyor(node: ShuttleNode, color: number): THREE.Group {
   return group;
 }
 
-function createLiftTower(node: ShuttleNode): THREE.Group {
+function createLiftBlackboxPort(node: ShuttleNode): THREE.Group {
   const group = new THREE.Group();
   group.position.set(node.x, 0, node.z);
 
-  const postMaterial = material(0x4c5964, 0.58, 0.28);
-  const platformMaterial = material(0x222c35, 0.74, 0.14);
-  for (const x of [-0.52, 0.52]) {
-    for (const z of [-0.52, 0.52]) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.07, 2.1, 0.07), postMaterial);
-      post.position.set(x, 1.05, z);
-      post.castShadow = true;
-      group.add(post);
-    }
+  const isInbound = node.id.includes('inbound');
+  const accent = isInbound ? 0x4f8fcb : 0x6da8d6;
+  const base = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.09, 1.18), material(0x111820, 0.86, 0.08));
+  base.position.y = 0.055;
+  base.castShadow = true;
+  base.receiveShadow = true;
+  group.add(base);
+
+  const blackbox = new THREE.Mesh(new THREE.BoxGeometry(1.04, 0.28, 0.82), material(0x080d11, 0.72, 0.18));
+  blackbox.position.y = 0.23;
+  blackbox.castShadow = true;
+  blackbox.receiveShadow = true;
+  group.add(blackbox);
+
+  const rollerMaterial = material(0x96a3ad, 0.42, 0.28);
+  for (let index = 0; index < 5; index += 1) {
+    const x = -0.42 + index * 0.21;
+    const roller = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.72, 12), rollerMaterial);
+    roller.rotation.x = Math.PI / 2;
+    roller.position.set(x, 0.39, 0);
+    roller.castShadow = true;
+    group.add(roller);
   }
-  for (const y of [0.24, 1.96]) {
-    const platform = new THREE.Mesh(new THREE.BoxGeometry(1.18, 0.08, 1.18), platformMaterial);
-    platform.position.y = y;
-    platform.castShadow = true;
-    platform.receiveShadow = true;
-    group.add(platform);
+
+  for (const z of [-0.52, 0.52]) {
+    const guard = new THREE.Mesh(new THREE.BoxGeometry(1.52, 0.08, 0.05), material(0x303c45, 0.66, 0.18));
+    guard.position.set(0, 0.42, z);
+    guard.castShadow = true;
+    group.add(guard);
   }
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(0.94, 0.18, 0.94), material(0x303c45, 0.66, 0.18));
-  cabin.position.y = 0.38;
-  cabin.castShadow = true;
-  cabin.receiveShadow = true;
-  group.add(cabin);
+
+  const portPlate = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.34, 1.06), material(accent, 0.54, 0.16));
+  portPlate.position.set(isInbound ? -0.82 : 0.82, 0.26, 0);
+  portPlate.castShadow = true;
+  group.add(portPlate);
 
   return group;
 }
@@ -856,7 +869,7 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario): voi
       continue;
     }
     if (node.type === 'lift-blackbox') {
-      runtime.staticGroup.add(createLiftTower(node));
+      runtime.staticGroup.add(createLiftBlackboxPort(node));
       continue;
     }
     if (node.type === 'parking') {

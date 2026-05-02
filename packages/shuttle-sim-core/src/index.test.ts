@@ -94,7 +94,12 @@ describe('shuttle phase 0 SimCore', () => {
     const parsed = ShuttleScenarioSchema.parse(scenario);
 
     expect(parsed.schemaVersion).toBe('shuttle.phase0.v0');
-    expect(parsed.layout.nodes.some((node) => node.type === 'lift-blackbox')).toBe(true);
+    expect(parsed.layout.nodes.filter((node) => node.type === 'lift-blackbox').map((node) => node.id).sort()).toEqual([
+      'inbound-lift-a',
+      'inbound-lift-b',
+      'outbound-lift-a',
+      'outbound-lift-b'
+    ]);
     expect(parsed.layout.zones.some((zone) => zone.noStop && zone.noParking)).toBe(true);
   });
 
@@ -116,6 +121,8 @@ describe('shuttle phase 0 SimCore', () => {
     const storageColumns = [...new Set(storageNodes.map((node) => node.x))].sort((left, right) => left - right);
     const inboundX = nodes.get('inbound')!.x;
     const outboundX = nodes.get('outbound')!.x;
+    const inboundLifts = ['inbound-lift-a', 'inbound-lift-b'].map((nodeId) => nodes.get(nodeId)!);
+    const outboundLifts = ['outbound-lift-a', 'outbound-lift-b'].map((nodeId) => nodes.get(nodeId)!);
 
     expect(storageRows).toHaveLength(6);
     expect(storageColumns).toHaveLength(8);
@@ -127,6 +134,12 @@ describe('shuttle phase 0 SimCore', () => {
     expect(storageRows.slice(1).every((z, index) => z - storageRows[index]! <= 1.25)).toBe(true);
     expect(Math.max(...storageXs)).toBeLessThan(inboundX);
     expect(Math.min(...storageXs)).toBeGreaterThan(outboundX);
+    expect(inboundLifts.every((node) => node.x === inboundX)).toBe(true);
+    expect(outboundLifts.every((node) => node.x === outboundX)).toBe(true);
+    expect(inboundLifts.every((node) => Math.abs(node.z) > 0)).toBe(true);
+    expect(outboundLifts.every((node) => Math.abs(node.z) > 0)).toBe(true);
+    expect(scenario.layout.edges.some((edge) => edge.id === 'inbound-lift-a-right-row-01')).toBe(true);
+    expect(scenario.layout.edges.some((edge) => edge.id === 'outbound-lift-a-left-row-01')).toBe(true);
   });
 
   it('rejects multi-capacity traffic resources for Phase 0', () => {
@@ -195,7 +208,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(sim.getState().simTimeSec).toBeGreaterThan(paused.simTimeSec);
   });
 
-  it('records reservation conflicts and wait reasons under two-vehicle pressure', () => {
+  it('keeps dedicated lift ports from creating artificial two-vehicle deadlocks', () => {
     const scenario = createDefaultShuttleScenario({
       durationSec: 120,
       taskGeneration: {
@@ -210,8 +223,10 @@ describe('shuttle phase 0 SimCore', () => {
     sim.runToEnd(120);
     const state = sim.getState();
 
-    expect(state.kpis.reservationConflictCount).toBeGreaterThan(0);
-    expect(sim.getEventLog().some((entry) => entry.eventType === 'vehicle-waiting' && entry.reason?.includes('reserved'))).toBe(true);
+    expect(state.kpis.completedInbound).toBeGreaterThan(0);
+    expect(state.kpis.deadlockCount).toBe(0);
+    expect(state.tasks.every((task) => task.kind !== 'inbound' || task.pickupNodeId.startsWith('inbound-lift-'))).toBe(true);
+    expect(state.tasks.every((task) => task.kind !== 'outbound' || task.dropoffNodeId.startsWith('outbound-lift-'))).toBe(true);
   });
 
   it('defers outbound work instead of creating phantom pallets when FIFO storage is empty', () => {
@@ -259,25 +274,23 @@ describe('shuttle phase 0 SimCore', () => {
     }));
 
     sim.start();
-    for (let index = 0; index < 2000 && sim.getState().kpis.completedOutbound < 2; index += 1) {
+    for (let index = 0; index < 2000 && sim.getState().kpis.completedOutbound < 1; index += 1) {
       sim.step(0.2);
     }
     const state = sim.getState();
     const outboundTasks = state.tasks.filter((task) => task.kind === 'outbound');
     const storageOccupancy = sim.getDebugState().storageNodeOccupancy;
 
-    expect(state.kpis.completedOutbound).toBeGreaterThanOrEqual(2);
-    expect(outboundTasks.slice(0, 2).map((task) => [task.pickupNodeId, task.loadId])).toEqual([
-      ['storage-r01-c01', 'load-0001'],
-      ['storage-r02-c01', 'load-0002']
+    expect(state.kpis.completedOutbound).toBeGreaterThanOrEqual(1);
+    expect(outboundTasks.slice(0, 1).map((task) => [task.pickupNodeId, task.loadId])).toEqual([
+      ['storage-r01-c01', 'load-0001']
     ]);
-    expect(state.loads.find((load) => load.id === 'load-0001')).toMatchObject({ state: 'delivered', nodeId: 'outbound' });
-    expect(state.loads.find((load) => load.id === 'load-0002')).toMatchObject({ state: 'delivered', nodeId: 'outbound' });
+    expect(state.loads.find((load) => load.id === 'load-0001')).toMatchObject({ state: 'delivered', nodeId: expect.stringMatching(/^outbound-lift-/) });
     expect(storageOccupancy).toEqual(expect.arrayContaining([
-      { nodeId: 'storage-r01-c01', loadId: 'load-0007' },
+      { nodeId: 'storage-r01-c02', loadId: 'load-0007' },
+      { nodeId: 'storage-r02-c01', loadId: 'load-0002' },
       { nodeId: 'storage-r03-c01', loadId: 'load-0003' },
-      { nodeId: 'storage-r04-c01', loadId: 'load-0004' },
-      { nodeId: 'storage-r05-c01', loadId: 'load-0005' }
+      { nodeId: 'storage-r06-c01', loadId: 'load-0006' }
     ]));
   });
 

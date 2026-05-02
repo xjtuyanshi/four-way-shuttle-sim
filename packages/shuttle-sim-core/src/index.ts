@@ -221,6 +221,8 @@ function createDefaultLayout(): ShuttleScenario['layout'] {
   );
 
   const nodes: LayoutNode[] = [
+    { id: 'outbound-lift-a', type: 'lift-blackbox', x: outboundX, y: 0, z: rowZs[0]!, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'outbound-lift-b', type: 'lift-blackbox', x: outboundX, y: 0, z: rowZs[rowZs.length - 1]!, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'outbound', type: 'outbound', x: outboundX, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'x-outbound', type: 'intersection', x: leftSpineX, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'left-top', type: 'aisle', x: leftSpineX, y: 0, z: topZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
@@ -229,9 +231,10 @@ function createDefaultLayout(): ShuttleScenario['layout'] {
     { id: 'right-bottom', type: 'aisle', x: rightSpineX, y: 0, z: bottomZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'x-main', type: 'intersection', x: rightSpineX, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'inbound', type: 'inbound', x: inboundX, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'inbound-lift-a', type: 'lift-blackbox', x: inboundX, y: 0, z: rowZs[0]!, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'inbound-lift-b', type: 'lift-blackbox', x: inboundX, y: 0, z: rowZs[rowZs.length - 1]!, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'parking-a', type: 'parking', x: rightSpineX, y: 0, z: parkingTopZ, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
-    { id: 'parking-b', type: 'parking', x: rightSpineX, y: 0, z: parkingBottomZ, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
-    { id: 'lift-blackbox', type: 'lift-blackbox', x: outboundX, y: 0, z: bottomZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] }
+    { id: 'parking-b', type: 'parking', x: rightSpineX, y: 0, z: parkingBottomZ, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
   ];
 
   for (let rowIndex = 0; rowIndex < rowZs.length; rowIndex += 1) {
@@ -257,9 +260,12 @@ function createDefaultLayout(): ShuttleScenario['layout'] {
   }
 
   const edges: LayoutEdge[] = [
+    { id: 'inbound-lift-a-right-row-01', from: 'inbound-lift-a', to: 'right-row-01', lengthM: Math.abs(inboundX - rightSpineX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'inbound-lift-a-dock', noParking: true },
+    { id: `inbound-lift-b-right-row-${String(DEFAULT_STORAGE_ROWS).padStart(2, '0')}`, from: 'inbound-lift-b', to: `right-row-${String(DEFAULT_STORAGE_ROWS).padStart(2, '0')}`, lengthM: Math.abs(inboundX - rightSpineX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'inbound-lift-b-dock', noParking: true },
     { id: 'inbound-x-main', from: 'inbound', to: 'x-main', lengthM: Math.abs(inboundX - rightSpineX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'right-infeed', noParking: true },
     { id: 'x-outbound-outbound', from: 'x-outbound', to: 'outbound', lengthM: Math.abs(leftSpineX - outboundX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'left-outfeed', noParking: true },
-    { id: 'outbound-lift-blackbox', from: 'outbound', to: 'lift-blackbox', lengthM: bottomZ, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'lift-approach', noParking: true },
+    { id: 'outbound-lift-a-left-row-01', from: 'outbound-lift-a', to: 'left-row-01', lengthM: Math.abs(leftSpineX - outboundX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'outbound-lift-a-dock', noParking: true },
+    { id: `outbound-lift-b-left-row-${String(DEFAULT_STORAGE_ROWS).padStart(2, '0')}`, from: 'outbound-lift-b', to: `left-row-${String(DEFAULT_STORAGE_ROWS).padStart(2, '0')}`, lengthM: Math.abs(leftSpineX - outboundX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'outbound-lift-b-dock', noParking: true },
     { id: 'parking-a-right-top', from: 'parking-a', to: 'right-top', lengthM: Math.abs(parkingTopZ - topZ), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'parking-approach', noParking: true },
     { id: 'parking-b-right-bottom', from: 'parking-b', to: 'right-bottom', lengthM: Math.abs(parkingBottomZ - bottomZ), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'parking-approach', noParking: true },
     { id: 'left-top-right-top', from: 'left-top', to: 'right-top', lengthM: rightSpineX - leftSpineX, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'north-cross-aisle', noParking: true },
@@ -932,8 +938,9 @@ export class ShuttleSimCore {
     const taskId = `task-${String(this.taskSequence).padStart(4, '0')}`;
     const generatedLoadId = `load-${String(this.taskSequence).padStart(4, '0')}`;
     const loadId = kind === 'inbound' ? generatedLoadId : storageSelection.loadId;
-    const pickupNodeId = kind === 'inbound' ? 'inbound' : storageSelection.nodeId;
-    const dropoffNodeId = kind === 'inbound' ? storageSelection.nodeId : 'outbound';
+    const liftNodeId = this.selectLiftPortNodeId(kind, storageSelection.nodeId);
+    const pickupNodeId = kind === 'inbound' ? liftNodeId : storageSelection.nodeId;
+    const dropoffNodeId = kind === 'inbound' ? storageSelection.nodeId : liftNodeId;
     const task: TaskStateRecord = {
       id: taskId,
       kind,
@@ -965,6 +972,31 @@ export class ShuttleSimCore {
       fifoNodeId: storageSelection.nodeId
     });
     return { created: true };
+  }
+
+  private selectLiftPortNodeId(kind: 'inbound' | 'outbound', relatedNodeId: string): string {
+    const fallbackNodeId = kind;
+    const relatedNode = this.scenario.layout.nodes.find((node) => node.id === relatedNodeId);
+    const liftNodes = this.scenario.layout.nodes
+      .filter((node) => node.type === 'lift-blackbox' && node.id.startsWith(`${kind}-lift`))
+      .sort((left, right) => {
+        const leftDistance = relatedNode ? Math.abs(left.z - relatedNode.z) + Math.abs(left.x - relatedNode.x) : 0;
+        const rightDistance = relatedNode ? Math.abs(right.z - relatedNode.z) + Math.abs(right.x - relatedNode.x) : 0;
+        return leftDistance - rightDistance || left.id.localeCompare(right.id);
+      });
+    const candidates = liftNodes.length > 0 ? liftNodes.map((node) => node.id) : [fallbackNodeId];
+    return candidates[0]!;
+  }
+
+  private isLiftPortBusyForAssignment(kind: 'inbound' | 'outbound', liftNodeId: string): boolean {
+    return this.tasks.some(
+      (task) =>
+        task.kind === kind &&
+        task.state !== 'queued' &&
+        task.state !== 'completed' &&
+        task.state !== 'failed' &&
+        (kind === 'inbound' ? task.pickupNodeId === liftNodeId : task.dropoffNodeId === liftNodeId)
+    );
   }
 
   private deferTask(kind: 'inbound' | 'outbound', reason: string, dtSec: number): void {
@@ -1083,7 +1115,7 @@ export class ShuttleSimCore {
   private assignQueuedTasks(): void {
     const idleVehicles = this.vehicles.filter((vehicle) => vehicle.state === 'idle');
     for (const vehicle of idleVehicles) {
-      const task = this.tasks.find((candidate) => candidate.state === 'queued');
+      const task = this.tasks.find((candidate) => candidate.state === 'queued' && !this.isTaskBlockedByDedicatedLift(candidate));
       if (!task) {
         return;
       }
@@ -1104,6 +1136,16 @@ export class ShuttleSimCore {
         route: route.join('>')
       });
     }
+  }
+
+  private isTaskBlockedByDedicatedLift(task: TaskStateRecord): boolean {
+    if (task.kind === 'inbound' && task.pickupNodeId.startsWith('inbound-lift')) {
+      return this.isLiftPortBusyForAssignment('inbound', task.pickupNodeId);
+    }
+    if (task.kind === 'outbound' && task.dropoffNodeId.startsWith('outbound-lift')) {
+      return this.isLiftPortBusyForAssignment('outbound', task.dropoffNodeId);
+    }
+    return false;
   }
 
   private planRoute(currentNodeId: string, pickupNodeId: string, dropoffNodeId: string, parkingNodeId: string): string[] {
