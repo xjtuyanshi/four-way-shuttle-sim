@@ -709,6 +709,7 @@ export function App() {
   });
   const [isPending, startTransition] = useTransition();
   const reconnectAttemptRef = useRef(0);
+  const playbackSpeedChangedRef = useRef(false);
 
   const kpis = state?.kpis ?? null;
   const vehicles = state?.vehicles ?? [];
@@ -738,7 +739,9 @@ export function App() {
         setState(nextState);
         setEvents(nextState.recentEvents);
         setPrerequisites(report);
-        setPlaybackSpeedState(speedReport.speed);
+        if (!playbackSpeedChangedRef.current) {
+          setPlaybackSpeedState(speedReport.speed);
+        }
       })
       .catch((error) => setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' }));
     return () => {
@@ -831,8 +834,24 @@ export function App() {
   }
 
   async function setPlaybackSpeed(speed: number): Promise<void> {
+    playbackSpeedChangedRef.current = true;
     setPlaybackSpeedState(speed);
-    await postCommand('/api/shuttle/playbackSpeed', { speed });
+    const startedAt = performance.now();
+    setCommandStatus({ label: 'sending command...', tone: 'idle' });
+    try {
+      const response = await requestJson<PlaybackSpeedResponse & { state?: ShuttleSimState }>('/api/shuttle/playbackSpeed', {
+        method: 'POST',
+        body: JSON.stringify({ speed })
+      });
+      setPlaybackSpeedState(response.speed);
+      if (response.state) {
+        setState(response.state);
+      }
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      setCommandStatus({ label: `ack ${elapsedMs} ms`, tone: 'ok' });
+    } catch (error) {
+      setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' });
+    }
   }
 
   async function runValidation(): Promise<void> {

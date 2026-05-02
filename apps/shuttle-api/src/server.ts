@@ -51,6 +51,16 @@ function commandResponse(response: Response): void {
   response.json({ ok: true, state: sim.getState() });
 }
 
+function advanceLiveSimulation(deltaSec: number): void {
+  const maxStepSec = Math.max(0.001, sim.getScenario().timeStepSec);
+  let remainingSec = deltaSec;
+  while (remainingSec > 1e-9 && sim.getState().status === 'running') {
+    const stepSec = Math.min(maxStepSec, remainingSec);
+    sim.step(stepSec);
+    remainingSec -= stepSec;
+  }
+}
+
 app.get('/api/shuttle/health', (_request: Request, response: Response) => {
   response.json({ ok: true, service: 'shuttle-api', protocol: 'shuttle.phase0.v0' });
 });
@@ -201,7 +211,7 @@ wss.on('connection', (socket) => {
 
 setInterval(() => {
   if (sim.getState().status === 'running') {
-    sim.step((tickMs / 1000) * playbackSpeed);
+    advanceLiveSimulation((tickMs / 1000) * playbackSpeed);
     broadcastState();
   }
 }, tickMs).unref();

@@ -1083,7 +1083,7 @@
         "from": "right-row-01",
         "to": "storage-r01-c08",
         "lengthM": 2.75,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-01",
         "noParking": true
@@ -1093,7 +1093,7 @@
         "from": "storage-r01-c08",
         "to": "storage-r01-c07",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-01",
         "noParking": true
@@ -1103,7 +1103,7 @@
         "from": "storage-r01-c07",
         "to": "storage-r01-c06",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-01",
         "noParking": true
@@ -1113,7 +1113,7 @@
         "from": "storage-r01-c06",
         "to": "storage-r01-c05",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-01",
         "noParking": true
@@ -1123,7 +1123,7 @@
         "from": "storage-r01-c05",
         "to": "storage-r01-c04",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-01",
         "noParking": true
@@ -1133,7 +1133,7 @@
         "from": "storage-r01-c04",
         "to": "storage-r01-c03",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-01",
         "noParking": true
@@ -1143,7 +1143,7 @@
         "from": "storage-r01-c03",
         "to": "storage-r01-c02",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-01",
         "noParking": true
@@ -1153,7 +1153,7 @@
         "from": "storage-r01-c02",
         "to": "storage-r01-c01",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-01",
         "noParking": true
@@ -1163,7 +1163,7 @@
         "from": "storage-r01-c01",
         "to": "left-row-01",
         "lengthM": 2.5,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-01",
         "noParking": true
@@ -1173,7 +1173,7 @@
         "from": "right-row-02",
         "to": "storage-r02-c08",
         "lengthM": 2.75,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-02",
         "noParking": true
@@ -1183,7 +1183,7 @@
         "from": "storage-r02-c08",
         "to": "storage-r02-c07",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-02",
         "noParking": true
@@ -1193,7 +1193,7 @@
         "from": "storage-r02-c07",
         "to": "storage-r02-c06",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-02",
         "noParking": true
@@ -1203,7 +1203,7 @@
         "from": "storage-r02-c06",
         "to": "storage-r02-c05",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-02",
         "noParking": true
@@ -1213,7 +1213,7 @@
         "from": "storage-r02-c05",
         "to": "storage-r02-c04",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-02",
         "noParking": true
@@ -1223,7 +1223,7 @@
         "from": "storage-r02-c04",
         "to": "storage-r02-c03",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-02",
         "noParking": true
@@ -1233,7 +1233,7 @@
         "from": "storage-r02-c03",
         "to": "storage-r02-c02",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-02",
         "noParking": true
@@ -1243,7 +1243,7 @@
         "from": "storage-r02-c02",
         "to": "storage-r02-c01",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-02",
         "noParking": true
@@ -1253,7 +1253,7 @@
         "from": "storage-r02-c01",
         "to": "left-row-02",
         "lengthM": 2.5,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-02",
         "noParking": true
@@ -1263,7 +1263,7 @@
         "from": "right-row-03",
         "to": "storage-r03-c08",
         "lengthM": 2.75,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-03",
         "noParking": true
@@ -1273,7 +1273,7 @@
         "from": "storage-r03-c08",
         "to": "storage-r03-c07",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-03",
         "noParking": true
@@ -1283,7 +1283,7 @@
         "from": "storage-r03-c07",
         "to": "storage-r03-c06",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-03",
         "noParking": true
@@ -1293,7 +1293,7 @@
         "from": "storage-r03-c06",
         "to": "storage-r03-c05",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-03",
         "noParking": true
@@ -1303,7 +1303,7 @@
         "from": "storage-r03-c05",
         "to": "storage-r03-c04",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-03",
         "noParking": true
@@ -1313,7 +1313,7 @@
         "from": "storage-r03-c04",
         "to": "storage-r03-c03",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-03",
         "noParking": true
@@ -1323,7 +1323,7 @@
         "from": "storage-r03-c03",
         "to": "storage-r03-c02",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-03",
         "noParking": true
@@ -1333,7 +1333,7 @@
         "from": "storage-r03-c02",
         "to": "storage-r03-c01",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-03",
         "noParking": true
@@ -1343,7 +1343,7 @@
         "from": "storage-r03-c01",
         "to": "left-row-03",
         "lengthM": 2.5,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-03",
         "noParking": true
@@ -1353,7 +1353,7 @@
         "from": "right-row-04",
         "to": "storage-r04-c08",
         "lengthM": 2.75,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-04",
         "noParking": true
@@ -1363,7 +1363,7 @@
         "from": "storage-r04-c08",
         "to": "storage-r04-c07",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-04",
         "noParking": true
@@ -1373,7 +1373,7 @@
         "from": "storage-r04-c07",
         "to": "storage-r04-c06",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-04",
         "noParking": true
@@ -1383,7 +1383,7 @@
         "from": "storage-r04-c06",
         "to": "storage-r04-c05",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-04",
         "noParking": true
@@ -1393,7 +1393,7 @@
         "from": "storage-r04-c05",
         "to": "storage-r04-c04",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-04",
         "noParking": true
@@ -1403,7 +1403,7 @@
         "from": "storage-r04-c04",
         "to": "storage-r04-c03",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-04",
         "noParking": true
@@ -1413,7 +1413,7 @@
         "from": "storage-r04-c03",
         "to": "storage-r04-c02",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-04",
         "noParking": true
@@ -1423,7 +1423,7 @@
         "from": "storage-r04-c02",
         "to": "storage-r04-c01",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-04",
         "noParking": true
@@ -1433,7 +1433,7 @@
         "from": "storage-r04-c01",
         "to": "left-row-04",
         "lengthM": 2.5,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-04",
         "noParking": true
@@ -1443,7 +1443,7 @@
         "from": "right-row-05",
         "to": "storage-r05-c08",
         "lengthM": 2.75,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-05",
         "noParking": true
@@ -1453,7 +1453,7 @@
         "from": "storage-r05-c08",
         "to": "storage-r05-c07",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-05",
         "noParking": true
@@ -1463,7 +1463,7 @@
         "from": "storage-r05-c07",
         "to": "storage-r05-c06",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-05",
         "noParking": true
@@ -1473,7 +1473,7 @@
         "from": "storage-r05-c06",
         "to": "storage-r05-c05",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-05",
         "noParking": true
@@ -1483,7 +1483,7 @@
         "from": "storage-r05-c05",
         "to": "storage-r05-c04",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-05",
         "noParking": true
@@ -1493,7 +1493,7 @@
         "from": "storage-r05-c04",
         "to": "storage-r05-c03",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-05",
         "noParking": true
@@ -1503,7 +1503,7 @@
         "from": "storage-r05-c03",
         "to": "storage-r05-c02",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-05",
         "noParking": true
@@ -1513,7 +1513,7 @@
         "from": "storage-r05-c02",
         "to": "storage-r05-c01",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-05",
         "noParking": true
@@ -1523,7 +1523,7 @@
         "from": "storage-r05-c01",
         "to": "left-row-05",
         "lengthM": 2.5,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-05",
         "noParking": true
@@ -1533,7 +1533,7 @@
         "from": "right-row-06",
         "to": "storage-r06-c08",
         "lengthM": 2.75,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-06",
         "noParking": true
@@ -1543,7 +1543,7 @@
         "from": "storage-r06-c08",
         "to": "storage-r06-c07",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-06",
         "noParking": true
@@ -1553,7 +1553,7 @@
         "from": "storage-r06-c07",
         "to": "storage-r06-c06",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-06",
         "noParking": true
@@ -1563,7 +1563,7 @@
         "from": "storage-r06-c06",
         "to": "storage-r06-c05",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-06",
         "noParking": true
@@ -1573,7 +1573,7 @@
         "from": "storage-r06-c05",
         "to": "storage-r06-c04",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-06",
         "noParking": true
@@ -1583,7 +1583,7 @@
         "from": "storage-r06-c04",
         "to": "storage-r06-c03",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-06",
         "noParking": true
@@ -1593,7 +1593,7 @@
         "from": "storage-r06-c03",
         "to": "storage-r06-c02",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-06",
         "noParking": true
@@ -1603,7 +1603,7 @@
         "from": "storage-r06-c02",
         "to": "storage-r06-c01",
         "lengthM": 1.25,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-06",
         "noParking": true
@@ -1613,7 +1613,7 @@
         "from": "storage-r06-c01",
         "to": "left-row-06",
         "lengthM": 2.5,
-        "directionMode": "oneWay",
+        "directionMode": "twoWay",
         "reservationType": "edge",
         "conflictGroup": "fifo-lane-06",
         "noParking": true

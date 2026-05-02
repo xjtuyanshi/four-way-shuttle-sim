@@ -2,8 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 
 import {
   EventLogEntrySchema,
+  LoadStateRecordSchema,
   ReservationSchema,
   ShuttleScenarioSchema,
+  TaskStateRecordSchema,
   type EventLogEntry,
   type KpiSnapshot,
   type LoadStateRecord,
@@ -305,7 +307,7 @@ function createDefaultLayout(): ShuttleScenario['layout'] {
       from: rightRowId,
       to: rightmostStorageId,
       lengthM: round(rightSpineX - columnXs[DEFAULT_STORAGE_COLUMNS - 1]!, 3),
-      directionMode: 'oneWay',
+      directionMode: 'twoWay',
       reservationType: 'edge',
       conflictGroup: `fifo-lane-${rowLabel}`,
       noParking: true
@@ -318,7 +320,7 @@ function createDefaultLayout(): ShuttleScenario['layout'] {
         from,
         to,
         lengthM: DEFAULT_STORAGE_CELL_PITCH_X_M,
-        directionMode: 'oneWay',
+        directionMode: 'twoWay',
         reservationType: 'edge',
         conflictGroup: `fifo-lane-${rowLabel}`,
         noParking: true
@@ -330,7 +332,7 @@ function createDefaultLayout(): ShuttleScenario['layout'] {
       from: leftmostStorageId,
       to: leftRowId,
       lengthM: round(columnXs[0]! - leftSpineX, 3),
-      directionMode: 'oneWay',
+      directionMode: 'twoWay',
       reservationType: 'edge',
       conflictGroup: `fifo-lane-${rowLabel}`,
       noParking: true
@@ -882,6 +884,16 @@ export class ShuttleSimCore {
     return this.getState();
   }
 
+  addLoadForTest(load: LoadStateRecord): ShuttleSimState {
+    this.loads.push(LoadStateRecordSchema.parse(load));
+    return this.getState();
+  }
+
+  addTaskForTest(task: TaskStateRecord): ShuttleSimState {
+    this.tasks.push(TaskStateRecordSchema.parse(task));
+    return this.getState();
+  }
+
   private intervalForRate(ratePerHour: number): number {
     if (ratePerHour <= 0) {
       return Number.POSITIVE_INFINITY;
@@ -1130,7 +1142,7 @@ export class ShuttleSimCore {
         return;
       }
 
-      const route = this.planRoute(vehicle.currentNodeId, task.pickupNodeId, task.dropoffNodeId, this.parkingNodeFor(vehicle.id));
+      const route = this.planRoute(vehicle.currentNodeId, task, this.parkingNodeFor(vehicle.id));
       vehicle.taskId = task.id;
       vehicle.routeNodeIds = route;
       vehicle.routeIndex = 0;
@@ -1159,16 +1171,45 @@ export class ShuttleSimCore {
     return null;
   }
 
-  private planRoute(currentNodeId: string, pickupNodeId: string, dropoffNodeId: string, parkingNodeId: string): string[] {
+  private planRoute(currentNodeId: string, task: TaskStateRecord, parkingNodeId: string): string[] {
     const route: string[] = [currentNodeId];
-    for (const target of [pickupNodeId, dropoffNodeId, parkingNodeId]) {
-      const segment = this.shortestPath(route[route.length - 1]!, target);
+    const storageEntrySideNodeId = task.kind === 'inbound' ? this.storageSideNodeId(task.dropoffNodeId, 'right') : this.storageSideNodeId(task.pickupNodeId, 'left');
+    const targets = task.kind === 'inbound'
+      ? [task.pickupNodeId, storageEntrySideNodeId, task.dropoffNodeId, storageEntrySideNodeId, parkingNodeId]
+      : [storageEntrySideNodeId, task.pickupNodeId, storageEntrySideNodeId, task.dropoffNodeId, parkingNodeId];
+    for (const target of targets) {
+      if (!target || target === route[route.length - 1]) {
+        continue;
+      }
+      const fromNodeId = route[route.length - 1]!;
+      const blockedStorageNodeIds = this.blockedStorageTransitNodeIds(new Set([fromNodeId, target]));
+      const segment = this.shortestPath(fromNodeId, target, blockedStorageNodeIds);
       route.push(...segment.slice(1));
     }
     return route;
   }
 
-  private shortestPath(fromNodeId: string, toNodeId: string): string[] {
+  private storageSideNodeId(storageNodeId: string, side: 'left' | 'right'): string | null {
+    const match = /^storage-r(\d+)-c\d+$/.exec(storageNodeId);
+    if (!match) {
+      return null;
+    }
+    const sideNodeId = `${side}-row-${match[1]}`;
+    return this.scenario.layout.nodes.some((node) => node.id === sideNodeId) ? sideNodeId : null;
+  }
+
+  private blockedStorageTransitNodeIds(allowedNodeIds: Set<string>): Set<string> {
+    const storageNodeIds = new Set(this.scenario.layout.nodes.filter((node) => node.type === 'storage').map((node) => node.id));
+    const blockedNodeIds = new Set<string>();
+    for (const nodeId of this.storageNodeLoadOccupancy(true).keys()) {
+      if (storageNodeIds.has(nodeId) && !allowedNodeIds.has(nodeId)) {
+        blockedNodeIds.add(nodeId);
+      }
+    }
+    return blockedNodeIds;
+  }
+
+  private shortestPath(fromNodeId: string, toNodeId: string, blockedNodeIds = new Set<string>()): string[] {
     if (fromNodeId === toNodeId) {
       return [fromNodeId];
     }
@@ -1191,6 +1232,9 @@ export class ShuttleSimCore {
       open.delete(current);
       for (const neighbor of this.neighbors(current)) {
         if (!nodes.has(neighbor.nodeId)) {
+          continue;
+        }
+        if (blockedNodeIds.has(neighbor.nodeId)) {
           continue;
         }
         const tentative = (gScore.get(current) ?? Infinity) + neighbor.lengthM;

@@ -129,7 +129,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(storageNodes).toHaveLength(48);
     expect(storageRows.every((z) => storageNodes.filter((node) => node.z === z).length === storageColumns.length)).toBe(true);
     expect(fifoLaneEdges).toHaveLength(storageRows.length * (storageColumns.length + 1));
-    expect(fifoLaneEdges.every((edge) => edge.directionMode === 'oneWay')).toBe(true);
+    expect(fifoLaneEdges.every((edge) => edge.directionMode === 'twoWay')).toBe(true);
     expect(storageColumns.slice(1).every((x, index) => x - storageColumns[index]! <= 1.3)).toBe(true);
     expect(storageRows.slice(1).every((z, index) => z - storageRows[index]! <= 1.25)).toBe(true);
     expect(Math.max(...storageXs)).toBeLessThan(inboundX);
@@ -299,6 +299,54 @@ describe('shuttle phase 0 SimCore', () => {
       { nodeId: 'storage-r03-c01', loadId: 'load-0003' },
       { nodeId: 'storage-r06-c01', loadId: 'load-0006' }
     ]));
+  });
+
+  it('does not route through occupied storage cells that are not the current task endpoint', () => {
+    const scenario = testScenario({
+      layout: {
+        units: 'meter',
+        nodes: [
+          { id: 'parking-a', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'parking-b', type: 'parking', x: 0, y: 0, z: 4, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'inbound-lift-test', type: 'lift-blackbox', x: 1, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'storage-blocker', type: 'storage', x: 2, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'storage-target', type: 'storage', x: 3, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'bypass', type: 'aisle', x: 2, y: 0, z: 2, noStop: false, noParking: true, capacity: 1, allowedDirections: [] }
+        ],
+        edges: [
+          { id: 'parking-a-inbound-lift-test', from: 'parking-a', to: 'inbound-lift-test', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'parking-lift', noParking: true },
+          { id: 'inbound-lift-test-storage-blocker', from: 'inbound-lift-test', to: 'storage-blocker', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'blocked-storage-path', noParking: true },
+          { id: 'storage-blocker-storage-target', from: 'storage-blocker', to: 'storage-target', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'blocked-storage-path', noParking: true },
+          { id: 'inbound-lift-test-bypass', from: 'inbound-lift-test', to: 'bypass', lengthM: 2, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'storage-bypass', noParking: true },
+          { id: 'bypass-storage-target', from: 'bypass', to: 'storage-target', lengthM: 2, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'storage-bypass', noParking: true }
+        ],
+        zones: []
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({ id: 'load-blocker', state: 'stored', nodeId: 'storage-blocker', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'load-inbound', state: 'waiting', nodeId: 'inbound-lift-test', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'task-inbound',
+      kind: 'inbound',
+      state: 'queued',
+      createdAtSec: 0,
+      assignedAtSec: null,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'inbound-lift-test',
+      dropoffNodeId: 'storage-target',
+      loadId: 'load-inbound',
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: null
+    });
+
+    sim.step(0.2);
+    const assignedVehicle = sim.getState().vehicles.find((vehicle) => vehicle.taskId === 'task-inbound');
+
+    expect(assignedVehicle?.routeNodeIds).toEqual(expect.arrayContaining(['inbound-lift-test', 'bypass', 'storage-target']));
+    expect(assignedVehicle?.routeNodeIds).not.toContain('storage-blocker');
   });
 
   it('defers inbound work when FIFO storage cells are stored or already reserved', () => {

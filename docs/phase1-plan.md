@@ -27,8 +27,8 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
   - `accelerationLimit`
   - `minSeparation`
   - `invalidCoordinate`
-- Replaced the default demo layout with an orthogonal four-way shuttle grid inspired by the reference video: no diagonal edges, two vertical side aisles, top/bottom cross aisles, center storage cells, right-side infeed, left-side outfeed, and one-way FIFO storage lanes.
-- Added a regression test that fails if the default demo reintroduces diagonal edges or non-FIFO storage-lane directions.
+- Replaced the default demo layout with an orthogonal four-way shuttle grid inspired by the reference video: no diagonal edges, two vertical side aisles, top/bottom cross aisles, center storage cells, right-side infeed, left-side outfeed, and FIFO storage/retrieval policy on bidirectional lane rails.
+- Added a regression test that fails if the default demo reintroduces diagonal edges, sparse storage cells, generic I/O nodes, or non-bidirectional four-way storage-lane rails.
 - Added authoritative FIFO pallet occupancy in SimCore:
   - outbound tasks are deferred with `storage-empty` instead of creating phantom pallets;
   - inbound tasks reserve the next FIFO storage cell;
@@ -42,6 +42,8 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 - Replaced the sparse 2x3 storage demo with a contiguous 6x8 storage matrix so the center storage field reads as a dense block of adjacent drivable cells.
 - Hardened the browser visual twin toward an engineering rack view: continuous storage rack block, cross-track cell rails, side-aisle rail beds, roller conveyors at inbound/outbound, parking pads, dedicated single-level black-box lift ports for inbound/outbound, and a cleaner CAD floor without oversized explanatory labels.
 - Added lift-port resource diagnostics: dedicated inbound/outbound ports now expose active task, queue length, waiting task ids, and utilization so lift bottlenecks can be reviewed from an IE/operations perspective.
+- Made storage-cell pass-through explicit: occupied storage cells are blocked for routing unless that cell is the current task endpoint.
+- Changed live playback speed to substep internally at `scenario.timeStepSec`, so `10x` playback does not skip the same motion/reservation checks used by validation.
 
 ## Next TODO
 
