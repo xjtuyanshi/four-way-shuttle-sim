@@ -88,8 +88,9 @@ This is still a smoke implementation. It validates deterministic blocking and wa
 Local inspection found:
 
 - Host: Mac mini, Apple M4, 10-core CPU, 16 GB memory, Metal 4.
-- Unreal/Epic application: not found under `/Applications` during implementation.
-- Xcode: `xcodebuild` is blocked because the active developer directory is Command Line Tools only.
+- Epic Games Launcher: installed under `/Applications`.
+- Unreal Engine 5.7.x: not installed yet; the prerequisite gate must not treat the launcher alone as Unreal-ready.
+- Xcode: `xcodebuild` is blocked because the active developer directory is Command Line Tools only. The App Store Xcode download is pending user handling of the store-region prompt.
 
 That means the API/dashboard/SimCore protocol can run now, but actual Pixel Streaming validation remains blocked until Unreal Engine 5.7.4 and full Xcode are installed.
 

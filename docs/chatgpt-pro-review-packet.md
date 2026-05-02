@@ -5,8 +5,8 @@ Use this packet to review the current branch:
 - Repository: `https://github.com/xjtuyanshi/four-way-shuttle-sim` (public)
 - Base branch: `main`
 - Base commit: `15f185a Add Phase 0 validation gate`
-- Review branch: `codex/p1-p5-physics-traffic-3d`
-- Review branch head: latest pushed commit on `codex/p1-p5-physics-traffic-3d`
+- Review branch: `codex/phase1-validation-traffic-demo`
+- Review branch head: latest pushed commit on `codex/phase1-validation-traffic-demo`
 
 If GitHub clone or browsing fails, use `docs/chatgpt-pro-stable-review.md` instead. It contains direct raw/patch URLs and a no-network fallback prompt.
 
@@ -18,7 +18,7 @@ This project is a four-way shuttle simulation prototype. The core architecture d
 - The browser 3D view is a local visual twin for fast validation.
 - Unreal / Pixel Streaming should be a visual twin that consumes the same state stream, not the source of truth.
 
-Unreal and full Xcode are not installed on the current machine, so Unreal runtime validation is blocked by environment. The TypeScript API/dashboard/SimCore path is fully testable locally.
+Epic Games Launcher is installed, but Unreal Engine 5.7.x and full Xcode are not installed yet, so Unreal runtime validation is still blocked by environment. The TypeScript API/dashboard/SimCore path is fully testable locally.
 
 ## What Changed In This Branch
 
@@ -129,6 +129,27 @@ Hardening highlights:
 - Enforced capacity `= 1` for Phase 0 instead of partially supporting multi-capacity reservations.
 - Dashboard now merges incremental `vehicleState` and `kpiUpdate` WebSocket messages into the current state snapshot.
 
+## Phase 1 Demo Alignment Since Hardening
+
+The browser demo has been adjusted toward the user's four-way shuttle reference:
+
+- Default layout is a single-level orthogonal aisle grid: no diagonal vehicle movement.
+- The middle storage area is a contiguous 6x8 block of adjacent drivable pallet cells.
+- FIFO storage behavior is modeled at row level: inbound pushes storage from the right-side infeed direction; outbound drains from the left-side outfeed direction.
+- Lift behavior is modeled only as black-box ports, not as multi-level lift physics.
+- Dedicated inbound ports: `inbound-lift-a`, `inbound-lift-b`.
+- Dedicated outbound ports: `outbound-lift-a`, `outbound-lift-b`.
+- The 3D view renders low black-box ports, dense track-cell storage, side aisles, and roller conveyor entry/exit pads.
+- Runtime playback speed supports `1x`, `2x`, `4x`, and `10x`.
+
+Current branch files that matter for this alignment:
+
+- `packages/shuttle-sim-core/src/index.ts`
+- `packages/shuttle-sim-core/src/index.test.ts`
+- `apps/shuttle-dashboard/src/ShuttleScene3D.tsx`
+- `docs/layout-reference.md`
+- `docs/phase1-plan.md`
+
 ## Verification Already Run
 
 All passed locally after the hardening pass:
@@ -172,46 +193,60 @@ Console errors: none observed
 Environment gate output:
 
 ```text
-Unreal 5.7.4: blocked, no Unreal/Epic app found under /Applications
+Epic Games Launcher: installed
+Unreal 5.7.4: blocked, no UE_5.7 / UnrealEditor installation found yet
 Xcode: blocked, active developer dir is Command Line Tools only
 Pixel Streaming: pending-unreal
 ```
 
 ## Review Request
 
-Please review this latest branch head as a senior simulation/game-engine engineer. Prioritize correctness over style. This is a second review after a "merge after fixes" verdict, so focus on whether the required fixes are complete and whether they introduced any regressions.
+Please review this latest branch head as a multidisciplinary reviewer. Prioritize correctness and engineering realism over style. This is no longer only a software review: also challenge whether the modeled warehouse behavior makes sense as a four-way shuttle / pallet storage system.
 
 Focus areas:
 
-1. Traffic-control correctness
+1. Software engineering / simulation correctness
    - Are edge/node/zone reservation lifetimes coherent?
    - Can two vehicles still overlap or enter opposite directions on the same edge?
    - Does the current `node-occupied` logic leave any race between arrival and next reservation?
    - Is the deadlock detector useful enough, or does it over/under-count?
-
-2. Motion model correctness
    - Is the triangular/trapezoidal profile implemented correctly?
    - Are reservation travel times aligned with actual movement?
    - Are speed and acceleration validation checks meaningful with the current `timeStepSec`?
-
-3. Validation quality
    - Are the new reservation coverage checks complete enough for Phase 0?
    - Are `physicalViolationsByCode` and `physicalViolationExamples` aggregated without double-counting?
    - Are the seed sweep and acceptance criteria too weak for Phase 0?
+
+2. Mechanical / manufacturing realism
+   - Does the single-level four-way shuttle assumption match a pallet-underlift vehicle moving on orthogonal track cells?
+   - Does the center dense storage block look and behave like adjacent pallet locations, not sparse shelves or AMR free-space navigation?
+   - Are inbound/outbound black-box lift ports represented at the right abstraction level?
+   - Are the track spacing, vehicle envelope, pallet cell size, and safety separation assumptions plausible enough for a prototype?
+   - What mechanical constraints are still missing before this can be called a credible equipment simulation?
+
+3. Industrial engineering / operations realism
+   - Does the FIFO lane policy match the described right-side infeed and left-side outfeed behavior?
+   - Are throughput, queueing, blocking, storage-full, and storage-empty metrics meaningful enough for layout comparison?
+   - Are dedicated inbound and outbound lifts modeled in a way that can expose bottlenecks?
+   - What IE KPIs are missing before this can support decisions about lift count, row count, shuttle count, or cycle time?
+   - Are the current seed sweep, duration, and demand rates enough to reveal congestion patterns?
 
 4. Frontend / 3D debug view
    - Is the lazy-loaded Three.js component safe from leaks across rerenders/unmounts?
    - Are route/reservation layers driven from authoritative state without stale state problems?
    - Does the browser preview remain clearly separate from Unreal truth?
+   - Does the rendered layout communicate the physical system, or does it still look toy-like or misleading?
 
 5. Unreal bridge contract
    - Are the C++ JSON parsing choices safe for nullable fields?
    - Is the coordinate mapping from SimCore meters to Unreal centimeters correct?
    - What is missing before a real Pixel Streaming smoke test?
+   - Is the environment gate correct now that Epic Launcher can exist without Unreal Engine being installed?
 
 Please return:
 
 - Findings ordered by severity, with file paths and line references where possible.
 - Any must-fix issues before this branch is merged to `main`.
 - Any Phase 1 recommendations that should not block the current branch.
+- Separate notes for software, mechanical/manufacturing, and IE/operations.
 - A short verdict: merge now, merge after fixes, or redesign needed.
