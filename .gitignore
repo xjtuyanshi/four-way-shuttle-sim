@@ -1,0 +1,8 @@
+node_modules
+apps/shuttle-dashboard/dist
+coverage
+output
+test-results
+tmp-qa
+.cache
+.DS_Store

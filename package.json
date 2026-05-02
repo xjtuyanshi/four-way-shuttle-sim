@@ -1,0 +1,23 @@
+{
+  "name": "four-way-shuttle-sim",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@10.15.0",
+  "scripts": {
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev:api": "pnpm --filter shuttle-api dev",
+    "dev:dashboard": "pnpm --filter shuttle-dashboard dev",
+    "shuttle:prereq": "pnpm --filter shuttle-api prereq",
+    "test:shuttle": "vitest run packages/shuttle-sim-core/src/index.test.ts",
+    "build": "pnpm run typecheck && pnpm --filter shuttle-dashboard build"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}
