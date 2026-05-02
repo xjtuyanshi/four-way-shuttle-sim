@@ -2,10 +2,11 @@
 
 Use this packet to review the current branch:
 
-- Repository: `xjtuyanshi/four-way-shuttle-sim`
+- Repository: `https://github.com/xjtuyanshi/four-way-shuttle-sim` (public)
 - Base branch: `main`
 - Base commit: `15f185a Add Phase 0 validation gate`
 - Review branch: `codex/p1-p5-physics-traffic-3d`
+- Review branch head: `92550a6 Document review hardening coverage`
 - Local path used by Codex: `/Users/luke/codex projects/DES Sim/four-way-shuttle-sim`
 
 ## Product Direction
@@ -102,9 +103,30 @@ Primary files:
 - `unreal-bridge/README.md`
 - `docs/shuttle-phase0.md`
 
+## Merge-Hardening Pass Applied After Prior Review
+
+The prior external verdict was: merge after fixes. The required traffic-control, validation, and Unreal bridge fixes have now been applied.
+
+Detailed mapping: `docs/review-hardening-report.md`.
+
+Hardening highlights:
+
+- Added authoritative `currentNodeOccupancy` in `SimCore`.
+- Vehicles waiting at a node continue occupying that node.
+- Before departure, vehicles must reserve the next edge, target node, and matching zone.
+- Arrival transfers target-node reservation into current-node occupancy atomically.
+- Added test/debug hooks so tests and validation can assert occupancy state directly.
+- Added regression tests for opposite-direction same-edge conflict, target-node occupancy race, crossing-zone serialization, deadlock sanity, motion profiles, and Phase 0 capacity enforcement.
+- Added validation-owned reservation coverage diagnostics with by-code counts and first 20 examples.
+- Added violation codes for unreserved edge/node/zone occupancy, node/edge mismatch, speed, acceleration, separation, and invalid coordinates.
+- Clarified instantaneous `state.traffic.physicalViolationCount` versus cumulative validation aggregation.
+- Hardened Unreal WebSocket parsing for `connectionRecovered`, `simState`, and `vehicleState` messages.
+- Documented SimCore meters to Unreal centimeters coordinate mapping.
+- Enforced capacity `= 1` for Phase 0 instead of partially supporting multi-capacity reservations.
+
 ## Verification Already Run
 
-All passed locally:
+All passed locally after the hardening pass:
 
 ```bash
 pnpm typecheck
@@ -121,11 +143,13 @@ sameSeedEventHashStable=true
 noDeadlocksInSweep=true
 eventLogsPresent=true
 noPhysicalSafetyViolations=true
+noReservationCoverageViolations=true
 totalPphMean=120
 maxObservedSpeedMps=2
 maxObservedAccelerationMps2=1
 minVehicleSeparationM=3
 physicalViolationCount=0
+physicalViolationsByCode all zero
 deadlockCount=0
 ```
 
@@ -149,7 +173,7 @@ Pixel Streaming: pending-unreal
 
 ## Review Request
 
-Please review this branch as a senior simulation/game-engine engineer. Prioritize correctness over style.
+Please review this latest branch head as a senior simulation/game-engine engineer. Prioritize correctness over style. This is a second review after a "merge after fixes" verdict, so focus on whether the required fixes are complete and whether they introduced any regressions.
 
 Focus areas:
 
@@ -165,8 +189,8 @@ Focus areas:
    - Are speed and acceleration validation checks meaningful with the current `timeStepSec`?
 
 3. Validation quality
-   - Is `physicalViolationCount` being counted in a way that could double-count and hide root cause detail?
-   - Should the validation report include per-violation examples instead of only counts?
+   - Are the new reservation coverage checks complete enough for Phase 0?
+   - Are `physicalViolationsByCode` and `physicalViolationExamples` aggregated without double-counting?
    - Are the seed sweep and acceptance criteria too weak for Phase 0?
 
 4. Frontend / 3D debug view
