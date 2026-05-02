@@ -18,9 +18,20 @@ This is a source-only Unreal plugin scaffold for Phase 0. It is intentionally th
 
 The placeholder actor converts meters from SimCore into centimeters for Unreal.
 
+## Coordinate Contract
+
+SimCore publishes positions in meters with `x` as line direction, `y` as vertical height, and `z` as floor-depth. Unreal uses centimeters with `Z` as vertical:
+
+- `UE.X = sim.x * 100`
+- `UE.Y = sim.z * 100`
+- `UE.Z = sim.y * 100`
+- `UE.Yaw = radiansToDegrees(sim.yaw)`
+
+The Phase 0 actor keeps the yaw sign as published by SimCore. If a future Unreal mesh faces a different local forward axis, adjust the mesh/component offset rather than changing the protocol.
+
 ## State Contract
 
-The bridge consumes `connectionRecovered` and `simState` WebSocket messages. For each `vehicles[*]` entry it parses:
+The bridge consumes `connectionRecovered`, `simState`, and `vehicleState` WebSocket messages. It ignores `kpiUpdate` and `taskEvent` for actor movement. For each `vehicles[*]` entry it parses:
 
 - pose: `x`, `y`, `z`, `yaw`, `speedMps`
 - work state: `state`, `loaded`, `taskId`, `currentNodeId`, `targetNodeId`, `currentEdgeId`

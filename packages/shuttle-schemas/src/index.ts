@@ -129,6 +129,45 @@ export const ShuttleScenarioSchema = z.object({
   trafficPolicy: TrafficPolicySchema
 }).superRefine((scenario, context) => {
   const nodeIds = new Set(scenario.layout.nodes.map((node) => node.id));
+  if (scenario.trafficPolicy.edgeCapacity !== 1) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['trafficPolicy', 'edgeCapacity'],
+      message: 'Phase 0 supports edgeCapacity=1 only; multi-capacity reservations are Phase 1.'
+    });
+  }
+  if (scenario.trafficPolicy.nodeCapacity !== 1) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['trafficPolicy', 'nodeCapacity'],
+      message: 'Phase 0 supports nodeCapacity=1 only; multi-capacity reservations are Phase 1.'
+    });
+  }
+  if (scenario.trafficPolicy.zoneCapacity !== 1) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['trafficPolicy', 'zoneCapacity'],
+      message: 'Phase 0 supports zoneCapacity=1 only; multi-capacity reservations are Phase 1.'
+    });
+  }
+  for (const node of scenario.layout.nodes) {
+    if (node.capacity !== 1) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['layout', 'nodes', node.id, 'capacity'],
+        message: 'Phase 0 supports node capacity=1 only; multi-capacity nodes are Phase 1.'
+      });
+    }
+  }
+  for (const zone of scenario.layout.zones) {
+    if (zone.capacity !== 1) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['layout', 'zones', zone.id, 'capacity'],
+        message: 'Phase 0 supports zone capacity=1 only; multi-capacity zones are Phase 1.'
+      });
+    }
+  }
   for (const edge of scenario.layout.edges) {
     if (!nodeIds.has(edge.from)) {
       context.addIssue({

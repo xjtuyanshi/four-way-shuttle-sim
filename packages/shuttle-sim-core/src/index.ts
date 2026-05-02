@@ -45,6 +45,10 @@ type ReservationAttempt =
   | { ok: true; reservations: Reservation[] }
   | { ok: false; reasonCode: string; blockingReservationId: string | null };
 
+export type ShuttleSimDebugState = {
+  currentNodeOccupancy: Array<{ nodeId: string; vehicleId: string }>;
+};
+
 type Rng = {
   next: () => number;
 };
@@ -124,7 +128,7 @@ function reverseEdgeKey(from: string, to: string): string {
   return `${to}->${from}`;
 }
 
-function calculateTravelTimeSec(distanceM: number, maxSpeedMps: number, accelerationMps2: number): number {
+export function calculateTravelTimeSec(distanceM: number, maxSpeedMps: number, accelerationMps2: number): number {
   const acceleration = Math.max(0.001, accelerationMps2);
   const speed = Math.max(0.001, maxSpeedMps);
   const accelerateDistanceM = (speed * speed) / (2 * acceleration);
@@ -134,7 +138,7 @@ function calculateTravelTimeSec(distanceM: number, maxSpeedMps: number, accelera
   return (2 * speed) / acceleration + (distanceM - accelerateDistanceM * 2) / speed;
 }
 
-function motionProfileAt(
+export function motionProfileAt(
   elapsedSec: number,
   distanceM: number,
   maxSpeedMps: number,
@@ -312,9 +316,9 @@ class TrafficReservationController {
     }
 
     const endTimeSec = options.startTimeSec + options.travelSec + this.scenario.trafficPolicy.minimumClearanceSec;
-    const zone = this.scenario.layout.zones.find(
-      (candidate) => candidate.edgeIds.includes(edge.id) || candidate.nodeIds.includes(options.toNodeId)
-    );
+    const edgeZone = this.scenario.layout.zones.find((candidate) => candidate.edgeIds.includes(edge.id));
+    const targetNodeZone = this.scenario.layout.zones.find((candidate) => candidate.nodeIds.includes(options.toNodeId));
+    const zone = edgeZone ?? targetNodeZone;
     const candidates: Reservation[] = [
       this.createReservation({
         resourceType: 'edge',
@@ -330,11 +334,11 @@ class TrafficReservationController {
       this.createReservation({
         resourceType: 'node',
         resourceId: options.toNodeId,
-        conflictGroup: zone?.conflictGroup ?? null,
+        conflictGroup: targetNodeZone?.conflictGroup ?? null,
         reasonCode: 'node-reservation',
         vehicleId: options.vehicleId,
         taskId: options.taskId,
-        startTimeSec: Math.max(options.startTimeSec, endTimeSec - this.scenario.trafficPolicy.minimumClearanceSec),
+        startTimeSec: options.startTimeSec,
         endTimeSec,
         priority: options.priority
       })
@@ -418,6 +422,7 @@ export class ShuttleSimCore {
   private tasks: TaskStateRecord[] = [];
   private loads: LoadStateRecord[] = [];
   private reservations: Reservation[] = [];
+  private currentNodeOccupancy = new Map<string, string>();
   private eventLog: EventLogEntry[] = [];
   private recentEvents: EventLogEntry[] = [];
   private eventSequence = 0;
@@ -461,6 +466,7 @@ export class ShuttleSimCore {
     this.tasks = [];
     this.loads = [];
     this.reservations = [];
+    this.currentNodeOccupancy = new Map();
     this.eventLog = [];
     this.recentEvents = [];
     this.eventSequence = 0;
@@ -513,6 +519,11 @@ export class ShuttleSimCore {
         waitingSinceSec: null
       };
     });
+    for (const vehicle of this.vehicles) {
+      if (!this.currentNodeOccupancy.has(vehicle.currentNodeId)) {
+        this.currentNodeOccupancy.set(vehicle.currentNodeId, vehicle.id);
+      }
+    }
 
     this.logEvent('sim-reset', null, null, null, null, null, 'reset', null, { seed });
     return this.getState();
@@ -641,6 +652,85 @@ export class ShuttleSimCore {
 
   getEventLog(): EventLogEntry[] {
     return structuredClone(this.eventLog);
+  }
+
+  getDebugState(): ShuttleSimDebugState {
+    return {
+      currentNodeOccupancy: [...this.currentNodeOccupancy.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([nodeId, vehicleId]) => ({ nodeId, vehicleId }))
+    };
+  }
+
+  setVehicleRouteForTest(vehicleId: string, routeNodeIds: string[]): ShuttleSimState {
+    const vehicle = this.vehicles.find((candidate) => candidate.id === vehicleId);
+    if (!vehicle) {
+      throw new Error(`Unknown vehicle ${vehicleId}`);
+    }
+    if (routeNodeIds.length < 1) {
+      throw new Error('Test route must include at least one node');
+    }
+    for (const nodeId of routeNodeIds) {
+      nodePosition(this.scenario, nodeId);
+    }
+    for (const [nodeId, occupantId] of [...this.currentNodeOccupancy.entries()]) {
+      if (occupantId === vehicle.id) {
+        this.currentNodeOccupancy.delete(nodeId);
+        this.releaseZoneHoldReservations(vehicle, nodeId);
+      }
+    }
+    const startPosition = nodePosition(this.scenario, routeNodeIds[0]!);
+    vehicle.x = startPosition.x;
+    vehicle.y = SHUTTLE_Y_M;
+    vehicle.z = startPosition.z;
+    vehicle.yaw = 0;
+    vehicle.speedMps = 0;
+    vehicle.loaded = false;
+    vehicle.taskId = null;
+    vehicle.currentNodeId = routeNodeIds[0]!;
+    vehicle.currentEdgeId = null;
+    vehicle.routeNodeIds = [...routeNodeIds];
+    vehicle.routeIndex = 0;
+    vehicle.targetNodeId = routeNodeIds[1] ?? null;
+    vehicle.legRemainingM = 0;
+    vehicle.legElapsedSec = 0;
+    vehicle.legTravelSec = 0;
+    vehicle.phaseRemainingSec = 0;
+    vehicle.waitReason = null;
+    vehicle.blockingReservationId = null;
+    vehicle.blockingVehicleId = null;
+    vehicle.waitingSinceSec = null;
+    vehicle.targetSpeedMps = 0;
+    vehicle.state = routeNodeIds.length > 1 ? 'assigned' : 'idle';
+    this.currentNodeOccupancy.set(vehicle.currentNodeId, vehicle.id);
+    this.ensureZoneHoldReservation(vehicle, vehicle.currentNodeId);
+    return this.getState();
+  }
+
+  addReservationForTest(reservation: Omit<Reservation, 'id'> & { id?: string }): ShuttleSimState {
+    const id = reservation.id ?? `test-res-${String(this.reservations.length + 1).padStart(4, '0')}`;
+    this.reservations.push(ReservationSchema.parse({ ...reservation, id }));
+    return this.getState();
+  }
+
+  setVehicleWaitingForTest(vehicleId: string, options: {
+    targetNodeId: string | null;
+    waitReason: string;
+    blockingVehicleId?: string | null;
+    blockingReservationId?: string | null;
+    waitingSinceSec?: number;
+  }): ShuttleSimState {
+    const vehicle = this.vehicles.find((candidate) => candidate.id === vehicleId);
+    if (!vehicle) {
+      throw new Error(`Unknown vehicle ${vehicleId}`);
+    }
+    vehicle.state = 'waiting-blocked';
+    vehicle.targetNodeId = options.targetNodeId;
+    vehicle.waitReason = options.waitReason;
+    vehicle.blockingVehicleId = options.blockingVehicleId ?? null;
+    vehicle.blockingReservationId = options.blockingReservationId ?? null;
+    vehicle.waitingSinceSec = options.waitingSinceSec ?? this.simTimeSec;
+    return this.getState();
   }
 
   private intervalForRate(ratePerHour: number): number {
@@ -804,6 +894,66 @@ export class ShuttleSimCore {
     return parkingNodes[(vehicleNumber - 1) % parkingNodes.length]!.id;
   }
 
+  private zonesForNode(nodeId: string): ShuttleScenario['layout']['zones'] {
+    return this.scenario.layout.zones.filter((zone) => zone.nodeIds.includes(nodeId));
+  }
+
+  private releaseNodeOccupancy(vehicle: MutableVehicle, nodeId: string): void {
+    if (this.currentNodeOccupancy.get(nodeId) === vehicle.id) {
+      this.currentNodeOccupancy.delete(nodeId);
+    }
+    this.releaseZoneHoldReservations(vehicle, nodeId);
+  }
+
+  private occupyNode(vehicle: MutableVehicle, nodeId: string): void {
+    this.currentNodeOccupancy.set(nodeId, vehicle.id);
+    this.ensureZoneHoldReservation(vehicle, nodeId);
+  }
+
+  private ensureZoneHoldReservation(vehicle: MutableVehicle, nodeId: string): void {
+    for (const zone of this.zonesForNode(nodeId)) {
+      const existing = this.reservations.find(
+        (reservation) =>
+          reservation.reasonCode === 'zone-hold' &&
+          reservation.resourceType === 'zone' &&
+          reservation.resourceId === zone.id &&
+          reservation.vehicleId === vehicle.id
+      );
+      if (existing) {
+        existing.endTimeSec = Math.max(existing.endTimeSec, this.scenario.durationSec + 3600);
+        continue;
+      }
+      this.reservations.push(ReservationSchema.parse({
+        id: `hold-${vehicle.id}-${zone.id}-${Math.round(this.simTimeSec * 1000)}`,
+        resourceType: 'zone',
+        resourceId: zone.id,
+        vehicleId: vehicle.id,
+        taskId: vehicle.taskId,
+        startTimeSec: round(this.simTimeSec),
+        endTimeSec: this.scenario.durationSec + 3600,
+        priority: this.priorityFor(vehicle),
+        conflictGroup: zone.conflictGroup ?? null,
+        reasonCode: 'zone-hold'
+      }));
+    }
+  }
+
+  private releaseZoneHoldReservations(vehicle: MutableVehicle, nodeId: string): void {
+    const zoneIds = new Set(this.zonesForNode(nodeId).map((zone) => zone.id));
+    if (zoneIds.size === 0) {
+      return;
+    }
+    this.reservations = this.reservations.filter(
+      (reservation) =>
+        !(
+          reservation.reasonCode === 'zone-hold' &&
+          reservation.vehicleId === vehicle.id &&
+          reservation.resourceType === 'zone' &&
+          zoneIds.has(reservation.resourceId)
+        )
+    );
+  }
+
   private advanceVehicles(dtSec: number): void {
     for (const vehicle of this.vehicles.sort((left, right) => left.id.localeCompare(right.id))) {
       if (vehicle.state === 'idle') {
@@ -904,6 +1054,22 @@ export class ShuttleSimCore {
       return;
     }
 
+    const currentOccupant = this.currentNodeOccupancy.get(fromNodeId);
+    if (currentOccupant && currentOccupant !== vehicle.id) {
+      vehicle.state = 'waiting-blocked';
+      vehicle.speedMps = 0;
+      vehicle.waitReason = 'node-occupancy-mismatch';
+      vehicle.blockingReservationId = null;
+      vehicle.blockingVehicleId = currentOccupant;
+      vehicle.waitingSinceSec ??= this.simTimeSec;
+      vehicle.blockedTimeSec = round(vehicle.blockedTimeSec + dtSec);
+      this.blockedTimeByReasonSec.set('node-occupancy-mismatch', round((this.blockedTimeByReasonSec.get('node-occupancy-mismatch') ?? 0) + dtSec));
+      this.logEvent('vehicle-waiting', vehicle.id, vehicle.taskId, null, fromNodeId, toNodeId, 'node-occupancy-mismatch', this.vehiclePosition(vehicle), {
+        blockingVehicleId: currentOccupant
+      });
+      return;
+    }
+
     const edge = this.traffic.findEdge(fromNodeId, toNodeId);
     if (!edge) {
       vehicle.state = 'faulted';
@@ -915,25 +1081,19 @@ export class ShuttleSimCore {
       return;
     }
 
-    const targetPosition = nodePosition(this.scenario, toNodeId);
-    const occupiedTarget = this.vehicles.find((other) => {
-      if (other.id === vehicle.id || other.currentNodeId !== toNodeId) {
-        return false;
-      }
-      return Math.hypot(other.x - targetPosition.x, other.z - targetPosition.z) <= this.scenario.vehicles.safetyRadiusM;
-    });
-    if (occupiedTarget) {
+    const occupiedTargetId = this.currentNodeOccupancy.get(toNodeId);
+    if (occupiedTargetId && occupiedTargetId !== vehicle.id) {
       this.reservationConflictCount += 1;
       vehicle.state = 'waiting-blocked';
       vehicle.speedMps = 0;
       vehicle.waitReason = 'node-occupied';
       vehicle.blockingReservationId = null;
-      vehicle.blockingVehicleId = occupiedTarget.id;
+      vehicle.blockingVehicleId = occupiedTargetId;
       vehicle.waitingSinceSec ??= this.simTimeSec;
       vehicle.blockedTimeSec = round(vehicle.blockedTimeSec + dtSec);
       this.blockedTimeByReasonSec.set('node-occupied', round((this.blockedTimeByReasonSec.get('node-occupied') ?? 0) + dtSec));
       this.logEvent('vehicle-waiting', vehicle.id, vehicle.taskId, null, fromNodeId, toNodeId, 'node-occupied', this.vehiclePosition(vehicle), {
-        blockingVehicleId: occupiedTarget.id
+        blockingVehicleId: occupiedTargetId
       });
       return;
     }
@@ -970,6 +1130,7 @@ export class ShuttleSimCore {
     }
 
     this.reservations.push(...attempt.reservations);
+    this.releaseNodeOccupancy(vehicle, fromNodeId);
     vehicle.waitingSinceSec = null;
     vehicle.waitReason = null;
     vehicle.blockingReservationId = null;
@@ -1020,6 +1181,7 @@ export class ShuttleSimCore {
 
     const previousNode = vehicle.currentNodeId;
     vehicle.currentNodeId = toNodeId;
+    this.occupyNode(vehicle, toNodeId);
     vehicle.routeIndex += 1;
     vehicle.targetNodeId = null;
     vehicle.currentEdgeId = null;
@@ -1063,10 +1225,11 @@ export class ShuttleSimCore {
   }
 
   private updateDeadlockSmokeCounters(): void {
-    const waitingVehicles = this.vehicles.filter((vehicle) => vehicle.state === 'waiting-blocked' && vehicle.waitingSinceSec !== null);
-    if (waitingVehicles.length < 2) {
+    const deadlockCandidateVehicleIds = this.deadlockCandidateVehicleIds();
+    if (deadlockCandidateVehicleIds.length < 2) {
       return;
     }
+    const waitingVehicles = this.vehicles.filter((vehicle) => deadlockCandidateVehicleIds.includes(vehicle.id) && vehicle.waitingSinceSec !== null);
     const oldestWait = Math.min(...waitingVehicles.map((vehicle) => vehicle.waitingSinceSec ?? this.simTimeSec));
     if (this.simTimeSec - oldestWait >= this.scenario.trafficPolicy.deadlockDetectSec) {
       this.deadlockCount += 1;
@@ -1074,9 +1237,44 @@ export class ShuttleSimCore {
         vehicle.waitingSinceSec = this.simTimeSec;
       }
       this.logEvent('deadlock-detected', null, null, null, null, null, 'phase0-smoke-detector', null, {
-        waitingVehicles: waitingVehicles.map((vehicle) => vehicle.id).join(',')
+        waitingVehicles: deadlockCandidateVehicleIds.join(',')
       });
     }
+  }
+
+  private deadlockCandidateVehicleIds(): string[] {
+    const waitingVehicles = this.vehicles.filter((vehicle) => vehicle.state === 'waiting-blocked');
+    const waitFor = new Map<string, string>();
+    for (const vehicle of waitingVehicles) {
+      const blockingVehicleId = vehicle.blockingVehicleId ?? this.blockingVehicleForReservation(vehicle.blockingReservationId);
+      if (blockingVehicleId && blockingVehicleId !== vehicle.id) {
+        waitFor.set(vehicle.id, blockingVehicleId);
+      }
+    }
+
+    const cycleVehicleIds = new Set<string>();
+    for (const vehicleId of waitFor.keys()) {
+      const seen = new Set<string>();
+      let cursor: string | undefined = vehicleId;
+      while (cursor) {
+        if (seen.has(cursor)) {
+          for (const id of seen) {
+            cycleVehicleIds.add(id);
+          }
+          break;
+        }
+        seen.add(cursor);
+        cursor = waitFor.get(cursor);
+      }
+    }
+    return [...cycleVehicleIds].sort((left, right) => left.localeCompare(right));
+  }
+
+  private blockingVehicleForReservation(reservationId: string | null): string | null {
+    if (!reservationId) {
+      return null;
+    }
+    return this.reservations.find((reservation) => reservation.id === reservationId)?.vehicleId ?? null;
   }
 
   private vehiclePosition(vehicle: MutableVehicle): { x: number; y: number; z: number } {
@@ -1125,14 +1323,7 @@ export class ShuttleSimCore {
         blockingReservationId: vehicle.blockingReservationId,
         blockingVehicleId: vehicle.blockingVehicleId
       }));
-    const oldestWait =
-      waitingVehicles.length > 0
-        ? Math.min(...waitingVehicles.map((vehicle) => vehicle.waitingSinceSec ?? this.simTimeSec))
-        : null;
-    const deadlockCandidateVehicleIds =
-      oldestWait !== null && this.simTimeSec - oldestWait >= this.scenario.trafficPolicy.deadlockDetectSec
-        ? waitingVehicles.map((vehicle) => vehicle.vehicleId)
-        : [];
+    const deadlockCandidateVehicleIds = this.deadlockCandidateVehicleIds();
     let minVehicleSeparationM: number | null = null;
     let physicalViolationCount = 0;
     const minCenterSeparationM = this.scenario.vehicles.safetyRadiusM * 2;
