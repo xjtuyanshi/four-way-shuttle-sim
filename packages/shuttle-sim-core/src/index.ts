@@ -190,6 +190,177 @@ export function motionProfileAt(
   };
 }
 
+type LayoutNode = ShuttleScenario['layout']['nodes'][number];
+type LayoutEdge = ShuttleScenario['layout']['edges'][number];
+type LayoutZone = ShuttleScenario['layout']['zones'][number];
+
+const DEFAULT_STORAGE_ROWS = 6;
+const DEFAULT_STORAGE_COLUMNS = 8;
+const DEFAULT_STORAGE_CELL_PITCH_X_M = 1.25;
+const DEFAULT_STORAGE_CELL_PITCH_Z_M = 1.2;
+
+function storageNodeId(rowIndex: number, columnIndex: number): string {
+  return `storage-r${String(rowIndex + 1).padStart(2, '0')}-c${String(columnIndex + 1).padStart(2, '0')}`;
+}
+
+function createDefaultLayout(): ShuttleScenario['layout'] {
+  const leftSpineX = 0;
+  const rightSpineX = 14;
+  const inboundX = 18;
+  const outboundX = -4;
+  const firstStorageX = 2.5;
+  const topZ = -4.8;
+  const bottomZ = 4.8;
+  const parkingTopZ = -7.2;
+  const parkingBottomZ = 7.2;
+  const rowZs = Array.from({ length: DEFAULT_STORAGE_ROWS }, (_, rowIndex) =>
+    round((rowIndex - (DEFAULT_STORAGE_ROWS - 1) / 2) * DEFAULT_STORAGE_CELL_PITCH_Z_M, 3)
+  );
+  const columnXs = Array.from({ length: DEFAULT_STORAGE_COLUMNS }, (_, columnIndex) =>
+    round(firstStorageX + columnIndex * DEFAULT_STORAGE_CELL_PITCH_X_M, 3)
+  );
+
+  const nodes: LayoutNode[] = [
+    { id: 'outbound', type: 'outbound', x: outboundX, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'x-outbound', type: 'intersection', x: leftSpineX, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'left-top', type: 'aisle', x: leftSpineX, y: 0, z: topZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'left-bottom', type: 'aisle', x: leftSpineX, y: 0, z: bottomZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'right-top', type: 'aisle', x: rightSpineX, y: 0, z: topZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'right-bottom', type: 'aisle', x: rightSpineX, y: 0, z: bottomZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'x-main', type: 'intersection', x: rightSpineX, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'inbound', type: 'inbound', x: inboundX, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'parking-a', type: 'parking', x: rightSpineX, y: 0, z: parkingTopZ, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+    { id: 'parking-b', type: 'parking', x: rightSpineX, y: 0, z: parkingBottomZ, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+    { id: 'lift-blackbox', type: 'lift-blackbox', x: outboundX, y: 0, z: bottomZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] }
+  ];
+
+  for (let rowIndex = 0; rowIndex < rowZs.length; rowIndex += 1) {
+    const z = rowZs[rowIndex]!;
+    const rowLabel = String(rowIndex + 1).padStart(2, '0');
+    nodes.push(
+      { id: `left-row-${rowLabel}`, type: 'intersection', x: leftSpineX, y: 0, z, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+      { id: `right-row-${rowLabel}`, type: 'intersection', x: rightSpineX, y: 0, z, noStop: true, noParking: true, capacity: 1, allowedDirections: [] }
+    );
+    for (let columnIndex = 0; columnIndex < columnXs.length; columnIndex += 1) {
+      nodes.push({
+        id: storageNodeId(rowIndex, columnIndex),
+        type: 'storage',
+        x: columnXs[columnIndex]!,
+        y: 0,
+        z,
+        noStop: false,
+        noParking: true,
+        capacity: 1,
+        allowedDirections: []
+      });
+    }
+  }
+
+  const edges: LayoutEdge[] = [
+    { id: 'inbound-x-main', from: 'inbound', to: 'x-main', lengthM: Math.abs(inboundX - rightSpineX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'right-infeed', noParking: true },
+    { id: 'x-outbound-outbound', from: 'x-outbound', to: 'outbound', lengthM: Math.abs(leftSpineX - outboundX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'left-outfeed', noParking: true },
+    { id: 'outbound-lift-blackbox', from: 'outbound', to: 'lift-blackbox', lengthM: bottomZ, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'lift-approach', noParking: true },
+    { id: 'parking-a-right-top', from: 'parking-a', to: 'right-top', lengthM: Math.abs(parkingTopZ - topZ), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'parking-approach', noParking: true },
+    { id: 'parking-b-right-bottom', from: 'parking-b', to: 'right-bottom', lengthM: Math.abs(parkingBottomZ - bottomZ), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'parking-approach', noParking: true },
+    { id: 'left-top-right-top', from: 'left-top', to: 'right-top', lengthM: rightSpineX - leftSpineX, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'north-cross-aisle', noParking: true },
+    { id: 'left-bottom-right-bottom', from: 'left-bottom', to: 'right-bottom', lengthM: rightSpineX - leftSpineX, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'south-cross-aisle', noParking: true }
+  ];
+
+  const leftSpineNodeIds = ['left-top', ...rowZs.map((_, rowIndex) => `left-row-${String(rowIndex + 1).padStart(2, '0')}`), 'left-bottom'];
+  const rightSpineNodeIds = ['right-top', ...rowZs.map((_, rowIndex) => `right-row-${String(rowIndex + 1).padStart(2, '0')}`), 'right-bottom'];
+  for (let index = 1; index < leftSpineNodeIds.length; index += 1) {
+    const from = leftSpineNodeIds[index - 1]!;
+    const to = leftSpineNodeIds[index]!;
+    const fromNode = nodes.find((node) => node.id === from)!;
+    const toNode = nodes.find((node) => node.id === to)!;
+    edges.push({ id: `${from}-${to}`, from, to, lengthM: round(Math.abs(toNode.z - fromNode.z), 3), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'left-upright', noParking: true });
+  }
+  for (let index = 1; index < rightSpineNodeIds.length; index += 1) {
+    const from = rightSpineNodeIds[index - 1]!;
+    const to = rightSpineNodeIds[index]!;
+    const fromNode = nodes.find((node) => node.id === from)!;
+    const toNode = nodes.find((node) => node.id === to)!;
+    edges.push({ id: `${from}-${to}`, from, to, lengthM: round(Math.abs(toNode.z - fromNode.z), 3), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'right-upright', noParking: true });
+  }
+
+  const upperMiddleRow = Math.floor((DEFAULT_STORAGE_ROWS - 1) / 2);
+  const lowerMiddleRow = upperMiddleRow + 1;
+  for (const rowIndex of [upperMiddleRow, lowerMiddleRow]) {
+    const rowLabel = String(rowIndex + 1).padStart(2, '0');
+    edges.push(
+      { id: `x-main-right-row-${rowLabel}`, from: 'x-main', to: `right-row-${rowLabel}`, lengthM: Math.abs(rowZs[rowIndex]!), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'right-upright', noParking: true },
+      { id: `x-outbound-left-row-${rowLabel}`, from: 'x-outbound', to: `left-row-${rowLabel}`, lengthM: Math.abs(rowZs[rowIndex]!), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'left-upright', noParking: true }
+    );
+  }
+
+  for (let rowIndex = 0; rowIndex < rowZs.length; rowIndex += 1) {
+    const rowLabel = String(rowIndex + 1).padStart(2, '0');
+    const rightRowId = `right-row-${rowLabel}`;
+    const leftRowId = `left-row-${rowLabel}`;
+    const rightmostStorageId = storageNodeId(rowIndex, DEFAULT_STORAGE_COLUMNS - 1);
+    edges.push({
+      id: `${rightRowId}-${rightmostStorageId}`,
+      from: rightRowId,
+      to: rightmostStorageId,
+      lengthM: round(rightSpineX - columnXs[DEFAULT_STORAGE_COLUMNS - 1]!, 3),
+      directionMode: 'oneWay',
+      reservationType: 'edge',
+      conflictGroup: `fifo-lane-${rowLabel}`,
+      noParking: true
+    });
+    for (let columnIndex = DEFAULT_STORAGE_COLUMNS - 1; columnIndex > 0; columnIndex -= 1) {
+      const from = storageNodeId(rowIndex, columnIndex);
+      const to = storageNodeId(rowIndex, columnIndex - 1);
+      edges.push({
+        id: `${from}-${to}`,
+        from,
+        to,
+        lengthM: DEFAULT_STORAGE_CELL_PITCH_X_M,
+        directionMode: 'oneWay',
+        reservationType: 'edge',
+        conflictGroup: `fifo-lane-${rowLabel}`,
+        noParking: true
+      });
+    }
+    const leftmostStorageId = storageNodeId(rowIndex, 0);
+    edges.push({
+      id: `${leftmostStorageId}-${leftRowId}`,
+      from: leftmostStorageId,
+      to: leftRowId,
+      lengthM: round(columnXs[0]! - leftSpineX, 3),
+      directionMode: 'oneWay',
+      reservationType: 'edge',
+      conflictGroup: `fifo-lane-${rowLabel}`,
+      noParking: true
+    });
+  }
+
+  const zones: LayoutZone[] = [
+    {
+      id: 'zone-x-main',
+      type: 'intersection',
+      nodeIds: ['x-main'],
+      edgeIds: ['inbound-x-main', `x-main-right-row-${String(upperMiddleRow + 1).padStart(2, '0')}`, `x-main-right-row-${String(lowerMiddleRow + 1).padStart(2, '0')}`],
+      noStop: true,
+      noParking: true,
+      capacity: 1,
+      conflictGroup: 'intersection-x-main'
+    },
+    {
+      id: 'zone-x-outbound',
+      type: 'intersection',
+      nodeIds: ['x-outbound'],
+      edgeIds: ['x-outbound-outbound', `x-outbound-left-row-${String(upperMiddleRow + 1).padStart(2, '0')}`, `x-outbound-left-row-${String(lowerMiddleRow + 1).padStart(2, '0')}`],
+      noStop: true,
+      noParking: true,
+      capacity: 1,
+      conflictGroup: 'intersection-x-outbound'
+    }
+  ];
+
+  return { units: 'meter', nodes, edges, zones };
+}
+
 export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides = {}): ShuttleScenario {
   const base: ShuttleScenario = {
     schemaVersion: 'shuttle.phase0.v0',
@@ -210,83 +381,11 @@ export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides
       liftTimeSec: 2,
       lowerTimeSec: 2,
       maxLoadKg: 1800,
-      safetyRadiusM: 0.72,
+      safetyRadiusM: 0.5,
       batteryEnabled: false,
       initialSoc: 1
     },
-    layout: {
-      units: 'meter',
-      nodes: [
-        { id: 'outbound', type: 'outbound', x: -4, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'x-outbound', type: 'intersection', x: 0, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'left-north', type: 'intersection', x: 0, y: 0, z: -2, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'left-south', type: 'intersection', x: 0, y: 0, z: 2, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'left-top', type: 'aisle', x: 0, y: 0, z: -5, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'left-bottom', type: 'aisle', x: 0, y: 0, z: 5, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'storage-a', type: 'storage', x: 4, y: 0, z: -2, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'storage-b', type: 'storage', x: 4, y: 0, z: 2, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'storage-c', type: 'storage', x: 7, y: 0, z: -2, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'storage-d', type: 'storage', x: 7, y: 0, z: 2, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'storage-e', type: 'storage', x: 10, y: 0, z: -2, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'storage-f', type: 'storage', x: 10, y: 0, z: 2, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'right-north', type: 'intersection', x: 14, y: 0, z: -2, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'right-south', type: 'intersection', x: 14, y: 0, z: 2, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'right-top', type: 'aisle', x: 14, y: 0, z: -5, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'right-bottom', type: 'aisle', x: 14, y: 0, z: 5, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'x-main', type: 'intersection', x: 14, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'inbound', type: 'inbound', x: 18, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'parking-a', type: 'parking', x: 14, y: 0, z: -8, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
-        { id: 'parking-b', type: 'parking', x: 14, y: 0, z: 8, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
-        { id: 'lift-blackbox', type: 'lift-blackbox', x: -4, y: 0, z: 5, noStop: true, noParking: true, capacity: 1, allowedDirections: [] }
-      ],
-      edges: [
-        { id: 'inbound-x-main', from: 'inbound', to: 'x-main', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'right-infeed', noParking: true },
-        { id: 'x-main-right-north', from: 'x-main', to: 'right-north', lengthM: 2, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'right-upright', noParking: true },
-        { id: 'x-main-right-south', from: 'x-main', to: 'right-south', lengthM: 2, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'right-upright', noParking: true },
-        { id: 'right-top-right-north', from: 'right-top', to: 'right-north', lengthM: 3, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'right-upright', noParking: true },
-        { id: 'right-south-right-bottom', from: 'right-south', to: 'right-bottom', lengthM: 3, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'right-upright', noParking: true },
-        { id: 'parking-a-right-top', from: 'parking-a', to: 'right-top', lengthM: 3, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'parking-approach', noParking: true },
-        { id: 'parking-b-right-bottom', from: 'parking-b', to: 'right-bottom', lengthM: 3, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'parking-approach', noParking: true },
-        { id: 'left-top-right-top', from: 'left-top', to: 'right-top', lengthM: 14, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'north-cross-aisle', noParking: true },
-        { id: 'left-bottom-right-bottom', from: 'left-bottom', to: 'right-bottom', lengthM: 14, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'south-cross-aisle', noParking: true },
-        { id: 'left-top-left-north', from: 'left-top', to: 'left-north', lengthM: 3, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'left-upright', noParking: true },
-        { id: 'left-south-left-bottom', from: 'left-south', to: 'left-bottom', lengthM: 3, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'left-upright', noParking: true },
-        { id: 'left-north-x-outbound', from: 'left-north', to: 'x-outbound', lengthM: 2, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'left-upright', noParking: true },
-        { id: 'x-outbound-left-south', from: 'x-outbound', to: 'left-south', lengthM: 2, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'left-upright', noParking: true },
-        { id: 'x-outbound-outbound', from: 'x-outbound', to: 'outbound', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'left-outfeed', noParking: true },
-        { id: 'outbound-lift-blackbox', from: 'outbound', to: 'lift-blackbox', lengthM: 5, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'lift-approach', noParking: true },
-        { id: 'right-north-storage-e', from: 'right-north', to: 'storage-e', lengthM: 4, directionMode: 'oneWay', reservationType: 'edge', conflictGroup: 'fifo-lane-north', noParking: true },
-        { id: 'storage-e-storage-c', from: 'storage-e', to: 'storage-c', lengthM: 3, directionMode: 'oneWay', reservationType: 'edge', conflictGroup: 'fifo-lane-north', noParking: true },
-        { id: 'storage-c-storage-a', from: 'storage-c', to: 'storage-a', lengthM: 3, directionMode: 'oneWay', reservationType: 'edge', conflictGroup: 'fifo-lane-north', noParking: true },
-        { id: 'storage-a-left-north', from: 'storage-a', to: 'left-north', lengthM: 4, directionMode: 'oneWay', reservationType: 'edge', conflictGroup: 'fifo-lane-north', noParking: true },
-        { id: 'right-south-storage-f', from: 'right-south', to: 'storage-f', lengthM: 4, directionMode: 'oneWay', reservationType: 'edge', conflictGroup: 'fifo-lane-south', noParking: true },
-        { id: 'storage-f-storage-d', from: 'storage-f', to: 'storage-d', lengthM: 3, directionMode: 'oneWay', reservationType: 'edge', conflictGroup: 'fifo-lane-south', noParking: true },
-        { id: 'storage-d-storage-b', from: 'storage-d', to: 'storage-b', lengthM: 3, directionMode: 'oneWay', reservationType: 'edge', conflictGroup: 'fifo-lane-south', noParking: true },
-        { id: 'storage-b-left-south', from: 'storage-b', to: 'left-south', lengthM: 4, directionMode: 'oneWay', reservationType: 'edge', conflictGroup: 'fifo-lane-south', noParking: true }
-      ],
-      zones: [
-        {
-          id: 'zone-x-main',
-          type: 'intersection',
-          nodeIds: ['x-main'],
-          edgeIds: ['inbound-x-main', 'x-main-right-north', 'x-main-right-south'],
-          noStop: true,
-          noParking: true,
-          capacity: 1,
-          conflictGroup: 'intersection-x-main'
-        },
-        {
-          id: 'zone-x-outbound',
-          type: 'intersection',
-          nodeIds: ['x-outbound'],
-          edgeIds: ['left-north-x-outbound', 'x-outbound-left-south', 'x-outbound-outbound'],
-          noStop: true,
-          noParking: true,
-          capacity: 1,
-          conflictGroup: 'intersection-x-outbound'
-        }
-      ]
-    },
+    layout: createDefaultLayout(),
     taskGeneration: {
       inboundRatePerHour: 90,
       outboundRatePerHour: 90,

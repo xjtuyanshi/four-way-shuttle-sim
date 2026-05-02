@@ -323,6 +323,14 @@ function EventLog({ events }: { events: EventLogEntry[] }) {
   );
 }
 
+function formatStorageCellLabel(nodeId: string): string {
+  const match = /^storage-r(\d+)-c(\d+)$/.exec(nodeId);
+  if (match) {
+    return `R${Number(match[1])} C${Number(match[2])}`;
+  }
+  return nodeId.replace('storage-', '').toUpperCase();
+}
+
 function AuthoritativeMap({ scenario, state }: { scenario: ShuttleScenario | null; state: ShuttleSimState | null }) {
   const geometry = useMemo(() => {
     const nodes = scenario?.layout.nodes ?? [];
@@ -450,10 +458,6 @@ function StreamingPane({
             selectedVehicleId={selectedVehicleId}
           />
         </Suspense>
-        <div className="stream-copy">
-          <strong>{ready ? 'Ready for Unreal visual twin hookup' : 'Local 3D preview is active'}</strong>
-          <span>{ready ? 'Unreal should subscribe to this same WebSocket state stream.' : 'Unreal and Pixel Streaming remain gated by local prerequisites.'}</span>
-        </div>
       </div>
     </section>
   );
@@ -557,7 +561,7 @@ function FifoInventoryPanel({ scenario, state }: { scenario: ShuttleScenario | n
                   const status = storedLoad ? 'stored' : reserved ? 'reserved' : 'empty';
                   return (
                     <div className={`fifo-cell ${status} ${outbound ? 'outbound' : ''}`} key={cell.id}>
-                      <span>{cell.id.replace('storage-', '').toUpperCase()}</span>
+                      <span>{formatStorageCellLabel(cell.id)}</span>
                       <strong>{storedLoad?.id ?? (reserved ? 'inbound' : '--')}</strong>
                     </div>
                   );

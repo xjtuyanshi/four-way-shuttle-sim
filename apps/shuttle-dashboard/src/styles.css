@@ -513,26 +513,6 @@ input[type="range"] {
   background: #25323e;
 }
 
-.stream-copy {
-  position: absolute;
-  left: 16px;
-  bottom: 16px;
-  max-width: 300px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 10px 12px;
-  background: rgba(13, 17, 22, 0.82);
-  display: grid;
-  gap: 5px;
-  font-size: 13px;
-}
-
-.stream-copy span {
-  color: var(--muted);
-  line-height: 1.45;
-  font-size: 12px;
-}
-
 .vehicle-panel,
 .event-panel {
   min-width: 0;
@@ -607,16 +587,16 @@ input[type="range"] {
 
 .fifo-cells {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(68px, 1fr));
+  gap: 6px;
 }
 
 .fifo-cell {
-  min-height: 48px;
+  min-height: 42px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #111820;
-  padding: 7px 8px;
+  padding: 6px 7px;
   display: grid;
   align-content: space-between;
 }

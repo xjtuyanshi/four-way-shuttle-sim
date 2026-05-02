@@ -41,8 +41,8 @@ type VehicleObjectUserData = {
 
 const FLOOR_Y = 0;
 const VEHICLE_BASE_Y = 0.08;
-const CAD_PALLET_LENGTH_M = 1.2;
-const CAD_PALLET_WIDTH_M = 1.0;
+const CAD_CELL_LENGTH_M = 1.25;
+const CAD_CELL_DEPTH_M = 1.2;
 const CAD_CANVAS_WIDTH = 2048;
 const CAD_CANVAS_HEIGHT = 1536;
 
@@ -208,16 +208,16 @@ function createCadFloorTexture(scenario: ShuttleScenario, bounds: LayoutBounds):
 
   const storageNodes = scenario.layout.nodes.filter((node) => node.type === 'storage');
   if (storageNodes.length > 0) {
-    const minStorageX = Math.min(...storageNodes.map((node) => node.x - CAD_PALLET_LENGTH_M / 2));
-    const maxStorageX = Math.max(...storageNodes.map((node) => node.x + CAD_PALLET_LENGTH_M / 2));
-    const minStorageZ = Math.min(...storageNodes.map((node) => node.z - CAD_PALLET_WIDTH_M / 2));
-    const maxStorageZ = Math.max(...storageNodes.map((node) => node.z + CAD_PALLET_WIDTH_M / 2));
+    const minStorageX = Math.min(...storageNodes.map((node) => node.x - CAD_CELL_LENGTH_M / 2));
+    const maxStorageX = Math.max(...storageNodes.map((node) => node.x + CAD_CELL_LENGTH_M / 2));
+    const minStorageZ = Math.min(...storageNodes.map((node) => node.z - CAD_CELL_DEPTH_M / 2));
+    const maxStorageZ = Math.max(...storageNodes.map((node) => node.z + CAD_CELL_DEPTH_M / 2));
     const left = xToPx(minStorageX);
     const top = zToPx(minStorageZ);
     const width = xToPx(maxStorageX) - left;
     const height = zToPx(maxStorageZ) - top;
 
-    ctx.fillStyle = 'rgba(79, 193, 144, 0.06)';
+    ctx.fillStyle = 'rgba(79, 193, 144, 0.1)';
     ctx.strokeStyle = 'rgba(86, 169, 201, 0.78)';
     ctx.lineWidth = 3;
     ctx.fillRect(left, top, width, height);
@@ -231,9 +231,9 @@ function createCadFloorTexture(scenario: ShuttleScenario, bounds: LayoutBounds):
   ctx.font = '600 22px Inter, Arial, sans-serif';
   for (const node of scenario.layout.nodes) {
     if (node.type === 'storage') {
-      const rect = rectForMeterBox(node.x, node.z, CAD_PALLET_LENGTH_M, CAD_PALLET_WIDTH_M);
-      ctx.fillStyle = 'rgba(141, 150, 156, 0.18)';
-      ctx.strokeStyle = '#7f8d98';
+      const rect = rectForMeterBox(node.x, node.z, CAD_CELL_LENGTH_M, CAD_CELL_DEPTH_M);
+      ctx.fillStyle = 'rgba(141, 150, 156, 0.28)';
+      ctx.strokeStyle = '#9aa8b5';
       ctx.lineWidth = 2;
       ctx.fillRect(rect.left, rect.top, rect.width, rect.height);
       ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
@@ -257,7 +257,7 @@ function createCadFloorTexture(scenario: ShuttleScenario, bounds: LayoutBounds):
   ctx.fillText('Generated CAD layout - units: meters', inset, 48);
   ctx.font = '500 22px Inter, Arial, sans-serif';
   ctx.fillStyle = '#9aa8b5';
-  ctx.fillText(`Pallet footprint ${CAD_PALLET_LENGTH_M.toFixed(2)}m x ${CAD_PALLET_WIDTH_M.toFixed(2)}m; storage nodes and tracks are generated from SimCore coordinates.`, inset, 82);
+  ctx.fillText(`Storage cell footprint ${CAD_CELL_LENGTH_M.toFixed(2)}m x ${CAD_CELL_DEPTH_M.toFixed(2)}m; nodes and tracks are generated from SimCore coordinates.`, inset, 82);
 
   const storageRows = [...new Set(storageNodes.map((node) => node.z))].sort((left, right) => left - right);
   const storageColumns = [...new Set(storageNodes.map((node) => node.x))].sort((left, right) => left - right);
@@ -358,13 +358,13 @@ function createStorageTrackCell(node: ShuttleNode): THREE.Group {
   const group = new THREE.Group();
   group.position.set(node.x, 0, node.z);
 
-  const base = new THREE.Mesh(new THREE.BoxGeometry(1.18, 0.035, 0.86), material(0x20292f, 0.88, 0.04));
+  const base = new THREE.Mesh(new THREE.BoxGeometry(1.23, 0.04, 1.14), material(0x2b353c, 0.84, 0.05));
   base.position.y = 0.03;
   base.receiveShadow = true;
   group.add(base);
 
   const railMaterial = material(0x6e7b84, 0.58, 0.22);
-  for (const z of [-0.32, 0.32]) {
+  for (const z of [-0.46, 0.46]) {
     const rail = new THREE.Mesh(new THREE.BoxGeometry(1.24, 0.045, 0.045), railMaterial);
     rail.position.set(0, 0.085, z);
     rail.castShadow = true;
@@ -373,7 +373,7 @@ function createStorageTrackCell(node: ShuttleNode): THREE.Group {
 
   const crossTieMaterial = material(0x38454e, 0.76, 0.12);
   for (const x of [-0.42, 0, 0.42]) {
-    const tie = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.032, 0.78), crossTieMaterial);
+    const tie = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.032, 1.08), crossTieMaterial);
     tie.position.set(x, 0.062, 0);
     tie.receiveShadow = true;
     group.add(tie);
@@ -473,7 +473,7 @@ function applyVehicleState(group: THREE.Group, vehicle: VehicleState, layers: Sh
 }
 
 function createLoadMesh(load: LoadStateRecord, node: ShuttleNode, index: number): THREE.Group {
-  const loadMesh = createPalletLoadObject(0.78, 0.62, load.state === 'waiting' ? 0xb98a4a : 0x8d969c);
+  const loadMesh = createPalletLoadObject(node.type === 'storage' ? 1.04 : 0.78, node.type === 'storage' ? 0.88 : 0.62, load.state === 'waiting' ? 0xb98a4a : 0x8d969c);
   const offset = node.type === 'storage' ? 0 : index % 2 === 0 ? 0.38 : -0.38;
   loadMesh.position.set(node.x + offset, 0.13, node.z + (node.type === 'storage' ? 0 : 0.42));
   loadMesh.userData.loadId = load.id;
@@ -640,9 +640,9 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario): voi
   }
 
   runtime.camera.position.set(
-    bounds.centerX - bounds.size * 0.68,
-    Math.max(7, bounds.size * 0.58),
-    bounds.centerZ + bounds.size * 0.82
+    bounds.centerX - bounds.size * 0.34,
+    Math.max(12, bounds.size * 0.72),
+    bounds.centerZ + bounds.size * 0.48
   );
   runtime.camera.lookAt(bounds.centerX, 0, bounds.centerZ);
 }
