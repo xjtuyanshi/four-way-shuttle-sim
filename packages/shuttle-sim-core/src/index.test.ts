@@ -134,6 +134,7 @@ describe('shuttle phase 0 SimCore', () => {
     const inboundX = inboundLifts[0]!.x;
     const outboundX = outboundLifts[0]!.x;
 
+    expect(scenario.layout.nodes.every((node) => node.y === 0)).toBe(true);
     expect(storageRows).toHaveLength(6);
     expect(storageColumns).toHaveLength(8);
     expect(storageNodes).toHaveLength(48);
@@ -148,6 +149,8 @@ describe('shuttle phase 0 SimCore', () => {
     expect(scenario.layout.edges.some((edge) => edge.id === 'inbound-x-main' || edge.id === 'x-outbound-outbound')).toBe(false);
     expect(inboundLifts.every((node) => node.x === inboundX)).toBe(true);
     expect(outboundLifts.every((node) => node.x === outboundX)).toBe(true);
+    expect(inboundLifts.every((node) => node.id.startsWith('inbound-lift-'))).toBe(true);
+    expect(outboundLifts.every((node) => node.id.startsWith('outbound-lift-'))).toBe(true);
     expect(inboundLifts.every((node) => Math.abs(node.z) > 0)).toBe(true);
     expect(outboundLifts.every((node) => Math.abs(node.z) > 0)).toBe(true);
     expect(scenario.layout.edges.some((edge) => edge.id === 'inbound-lift-a-right-row-01')).toBe(true);

@@ -59,13 +59,14 @@ export async function collectPrerequisites(): Promise<ShuttlePrerequisiteReport>
     commandOutput('xcodebuild', ['-version']),
     commandOutput('sh', [
       '-lc',
-      "find /Applications -maxdepth 2 \\( -name 'Epic Games Launcher.app' -o -name 'Xcode.app' -o -name 'Unreal*.app' \\) -print 2>/dev/null; find '/Users/Shared/Epic Games' -maxdepth 5 \\( -name 'UE_5*' -o -name 'UnrealEditor.app' \\) -print 2>/dev/null; true"
+      "find /Applications -maxdepth 2 \\( -name 'Epic Games Launcher.app' -o -name 'Xcode.app' -o -name 'Unreal*.app' \\) -print 2>/dev/null; find '/Users/Shared/Epic Games' -maxdepth 5 \\( -name 'UE_5*' -o -name 'UnrealEditor.app' \\) -print 2>/dev/null; for editor in '/Users/Shared/Epic Games'/UE_5*/Engine/Binaries/Mac/UnrealEditor.app/Contents/MacOS/UnrealEditor; do [ -x \"$editor\" ] && printf '%s\\n' \"$editor\"; done; true"
     ])
   ]);
 
   const installedCandidates = applications.split('\n').filter(Boolean).sort();
   const hasEpicLauncher = installedCandidates.some((candidate) => /Epic Games Launcher\.app/i.test(candidate));
-  const hasUnrealEngine = installedCandidates.some((candidate) => /UE_5\.7|UnrealEditor\.app|Unreal Engine/i.test(candidate));
+  const hasUnrealInstallDir = installedCandidates.some((candidate) => /\/UE_5\.7(?:\/)?$/i.test(candidate));
+  const hasUnrealEditorExecutable = installedCandidates.some((candidate) => /UnrealEditor\.app\/Contents\/MacOS\/UnrealEditor$/i.test(candidate));
   const hasFullXcode = /^Xcode\s+\d+/m.test(xcodeBuild);
   const activeDeveloperDir = xcodeSelect.includes('xcode-select: error') ? null : xcodeSelect.split('\n')[0] ?? null;
 
@@ -82,10 +83,12 @@ export async function collectPrerequisites(): Promise<ShuttlePrerequisiteReport>
     unreal: {
       installedCandidates,
       preferredVersion: '5.7.4',
-      status: hasUnrealEngine ? 'ready' : 'blocked',
-      notes: hasUnrealEngine
-        ? ['Unreal Engine 5.7 candidate found. Verify the exact patch version before Pixel Streaming validation.']
-        : hasEpicLauncher
+      status: hasUnrealEditorExecutable ? 'ready' : 'blocked',
+      notes: hasUnrealEditorExecutable
+        ? ['UnrealEditor executable found under a UE 5.7 installation candidate. Verify the exact patch version before Pixel Streaming validation.']
+        : hasUnrealInstallDir
+          ? ['Unreal Engine 5.7 install directory exists, but UnrealEditor is not executable yet. Installation may still be in progress.']
+          : hasEpicLauncher
           ? ['Epic Games Launcher is installed, but Unreal Engine 5.7 is not installed yet. Use the launcher to install UE 5.7.4 or the closest available 5.7 patch.']
           : ['No Unreal Engine 5.7 installation or Epic Games Launcher application was found during this check.']
     },
@@ -98,7 +101,7 @@ export async function collectPrerequisites(): Promise<ShuttlePrerequisiteReport>
         : ['xcodebuild did not report a full Xcode installation; the active developer directory appears to be Command Line Tools only.']
     },
     pixelStreaming: {
-      status: hasUnrealEngine && hasFullXcode ? 'ready' : 'pending-unreal',
+      status: hasUnrealEditorExecutable && hasFullXcode ? 'ready' : 'pending-unreal',
       notes: [
         'Pixel Streaming validation requires a packaged or Standalone Unreal app with the Pixel Streaming plugin enabled.',
         'The API/dashboard protocol can be validated independently before Unreal is installed.'

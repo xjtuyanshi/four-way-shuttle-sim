@@ -45,7 +45,7 @@ const CAD_CELL_LENGTH_M = 1.25;
 const CAD_CELL_DEPTH_M = 1.2;
 const CAD_CANVAS_WIDTH = 2048;
 const CAD_CANVAS_HEIGHT = 1536;
-const STORAGE_POST_HEIGHT_M = 0.72;
+const STORAGE_MARKER_HEIGHT_M = 0.16;
 
 function computeBounds(nodes: ShuttleNode[]): {
   minX: number;
@@ -185,38 +185,12 @@ function createCadFloorTexture(scenario: ShuttleScenario, bounds: LayoutBounds):
     return { left, top, width: right - left, height: bottom - top };
   };
 
-  ctx.fillStyle = '#111820';
+  ctx.fillStyle = '#0f151c';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  ctx.strokeStyle = '#22303a';
-  ctx.lineWidth = 1;
-  for (let x = Math.ceil(bounds.minX); x <= Math.floor(bounds.maxX); x += 1) {
-    ctx.beginPath();
-    ctx.moveTo(xToPx(x), inset);
-    ctx.lineTo(xToPx(x), inset + plotHeight);
-    ctx.stroke();
-  }
-  for (let z = Math.ceil(bounds.minZ); z <= Math.floor(bounds.maxZ); z += 1) {
-    ctx.beginPath();
-    ctx.moveTo(inset, zToPx(z));
-    ctx.lineTo(inset + plotWidth, zToPx(z));
-    ctx.stroke();
-  }
-
-  ctx.strokeStyle = '#334451';
+  ctx.strokeStyle = 'rgba(75, 88, 101, 0.22)';
   ctx.lineWidth = 2;
-  for (let x = Math.ceil(bounds.minX / 5) * 5; x <= bounds.maxX; x += 5) {
-    ctx.beginPath();
-    ctx.moveTo(xToPx(x), inset);
-    ctx.lineTo(xToPx(x), inset + plotHeight);
-    ctx.stroke();
-  }
-  for (let z = Math.ceil(bounds.minZ / 5) * 5; z <= bounds.maxZ; z += 5) {
-    ctx.beginPath();
-    ctx.moveTo(inset, zToPx(z));
-    ctx.lineTo(inset + plotWidth, zToPx(z));
-    ctx.stroke();
-  }
+  ctx.strokeRect(inset, inset, plotWidth, plotHeight);
 
   const nodes = new Map(scenario.layout.nodes.map((node) => [node.id, node]));
   for (const edge of scenario.layout.edges) {
@@ -411,10 +385,10 @@ function createStorageRackBlock(scenario: ShuttleScenario): THREE.Group | null {
   }
 
   const group = new THREE.Group();
-  const deckMaterial = material(0x1b242c, 0.86, 0.05);
-  const railMaterial = material(0x8b969f, 0.5, 0.24);
-  const beamMaterial = material(0x303c45, 0.72, 0.18);
-  const postMaterial = material(0x48545e, 0.58, 0.26);
+  const deckMaterial = material(0x182129, 0.88, 0.05);
+  const railMaterial = material(0x929da5, 0.48, 0.24);
+  const beamMaterial = material(0x35414a, 0.74, 0.16);
+  const markerMaterial = material(0x4b5660, 0.6, 0.22);
 
   const deck = new THREE.Mesh(new THREE.BoxGeometry(field.width, 0.035, field.depth), deckMaterial);
   deck.position.set((field.minX + field.maxX) / 2, 0.022, (field.minZ + field.maxZ) / 2);
@@ -425,6 +399,16 @@ function createStorageRackBlock(scenario: ShuttleScenario): THREE.Group | null {
     for (const railZ of [rowZ - CAD_CELL_DEPTH_M * 0.38, rowZ + CAD_CELL_DEPTH_M * 0.38]) {
       const rail = new THREE.Mesh(new THREE.BoxGeometry(field.width, 0.045, 0.042), railMaterial);
       rail.position.set((field.minX + field.maxX) / 2, 0.105, railZ);
+      rail.castShadow = true;
+      rail.receiveShadow = true;
+      group.add(rail);
+    }
+  }
+
+  for (const columnX of field.columns) {
+    for (const railX of [columnX - CAD_CELL_LENGTH_M * 0.36, columnX + CAD_CELL_LENGTH_M * 0.36]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.04, field.depth), railMaterial);
+      rail.position.set(railX, 0.108, (field.minZ + field.maxZ) / 2);
       rail.castShadow = true;
       rail.receiveShadow = true;
       group.add(rail);
@@ -442,41 +426,26 @@ function createStorageRackBlock(scenario: ShuttleScenario): THREE.Group | null {
 
   for (const x of boundaryXs) {
     const beam = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.03, field.depth), beamMaterial);
-    beam.position.set(x, 0.118, (field.minZ + field.maxZ) / 2);
+    beam.position.set(x, 0.09, (field.minZ + field.maxZ) / 2);
     beam.receiveShadow = true;
     group.add(beam);
   }
 
   for (const z of boundaryZs) {
     const beam = new THREE.Mesh(new THREE.BoxGeometry(field.width, 0.03, 0.026), beamMaterial);
-    beam.position.set((field.minX + field.maxX) / 2, 0.12, z);
+    beam.position.set((field.minX + field.maxX) / 2, 0.092, z);
     beam.receiveShadow = true;
     group.add(beam);
   }
 
   for (const x of boundaryXs) {
     for (const z of boundaryZs) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.055, STORAGE_POST_HEIGHT_M, 0.055), postMaterial);
-      post.position.set(x, STORAGE_POST_HEIGHT_M / 2, z);
-      post.castShadow = true;
-      post.receiveShadow = true;
-      group.add(post);
+      const marker = new THREE.Mesh(new THREE.BoxGeometry(0.055, STORAGE_MARKER_HEIGHT_M, 0.055), markerMaterial);
+      marker.position.set(x, STORAGE_MARKER_HEIGHT_M / 2, z);
+      marker.castShadow = true;
+      marker.receiveShadow = true;
+      group.add(marker);
     }
-  }
-
-  const topRailZs = [field.minZ, field.maxZ];
-  for (const z of topRailZs) {
-    const topRail = new THREE.Mesh(new THREE.BoxGeometry(field.width, 0.045, 0.055), beamMaterial);
-    topRail.position.set((field.minX + field.maxX) / 2, STORAGE_POST_HEIGHT_M + 0.02, z);
-    topRail.castShadow = true;
-    group.add(topRail);
-  }
-  const topRailXs = [field.minX, field.maxX];
-  for (const x of topRailXs) {
-    const topRail = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.045, field.depth), beamMaterial);
-    topRail.position.set(x, STORAGE_POST_HEIGHT_M + 0.02, (field.minZ + field.maxZ) / 2);
-    topRail.castShadow = true;
-    group.add(topRail);
   }
 
   return group;
@@ -489,13 +458,13 @@ function createStorageTrackCell(node: ShuttleNode): THREE.Group {
   const railMaterial = material(0x9aa5ad, 0.5, 0.24);
   for (const z of [-0.46, 0.46]) {
     const rail = new THREE.Mesh(new THREE.BoxGeometry(1.18, 0.04, 0.04), railMaterial);
-    rail.position.set(0, 0.16, z);
+    rail.position.set(0, 0.12, z);
     rail.castShadow = true;
     group.add(rail);
   }
   for (const x of [-0.46, 0.46]) {
     const crossRail = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.036, 1.04), railMaterial);
-    crossRail.position.set(x, 0.155, 0);
+    crossRail.position.set(x, 0.118, 0);
     crossRail.castShadow = true;
     group.add(crossRail);
   }
@@ -503,7 +472,7 @@ function createStorageTrackCell(node: ShuttleNode): THREE.Group {
   const crossTieMaterial = material(0x3f4b54, 0.76, 0.12);
   for (const x of [-0.42, 0, 0.42]) {
     const tie = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.028, 0.98), crossTieMaterial);
-    tie.position.set(x, 0.13, 0);
+    tie.position.set(x, 0.095, 0);
     tie.receiveShadow = true;
     group.add(tie);
   }
@@ -821,10 +790,6 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario): voi
   const floor = createCadFloor(scenario, bounds);
   floor.receiveShadow = true;
   runtime.staticGroup.add(floor);
-
-  const grid = new THREE.GridHelper(bounds.size, 12, 0x26323b, 0x1d272f);
-  grid.position.set(bounds.centerX, FLOOR_Y + 0.006, bounds.centerZ);
-  runtime.staticGroup.add(grid);
 
   const storageBlock = createStorageRackBlock(scenario);
   if (storageBlock) {

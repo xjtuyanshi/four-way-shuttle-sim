@@ -4,11 +4,11 @@ This is the working visual reference for the Phase 0 dashboard scene. The goal i
 
 ## References Reviewed
 
-- Swisslog AgileStore describes a roaming pallet shuttle with true four-way movement, deep-lane storage, dynamic routing, and integrated lifts.
-- Interlake Mecalux describes four-way pallet shuttles moving forward, backward, and sideways inside pallet storage lanes, with the WCS coordinating shuttle, elevator, and conveyor movement.
-- Deen Racking describes a four-way pallet shuttle rack where the shuttle can travel longitudinally and transversely on a track plane to reach warehouse positions.
-- Nutech describes four-way shuttle rack layouts as multi-aisle grids with lane geometry, rails, and clearances planned around pallets and process.
-- Zikoo lists common supported pallet sizes including 1200 x 800-1000 mm and 1016 x 1219 mm, which is enough for our first CAD footprint assumption.
+- [Swisslog AgileStore](https://www.swisslog.com/en-us/products-systems-solutions/asrs-automated-storage-retrieval-systems/automated-pallet-warehouse/agilestore-4-way-pallet-shuttle-asrs) describes a roaming pallet shuttle ASRS with high-density pallet storage, deep lanes, dynamic routing, and integrated lifts.
+- [Swisslog's AgileStore launch note](https://www.swisslog.com/en-us/about-swisslog/newsroom/news-press-releases-blog-posts/2026/03/swisslog-agilestore-4-way-roaming-shuttle) emphasizes pallet handling, traffic management, lift integration, and rack-based high-density storage rather than AMR-style open-floor travel.
+- [Interlake Mecalux Pallet Shuttle](https://www.interlakemecalux.com/automated-storage-retrieval-systems/pallet-shuttle) documents shuttle movement inside storage lanes on rails and FIFO/LIFO storage behavior.
+- [Mecalux Automated Pallet Shuttle](https://www.mecalux.com/warehousing-solutions/automated-warehouses-for-pallets/automated-pallet-shuttle) documents lift/elevator and conveyor handoff as part of automated pallet shuttle systems.
+- [Path Planning Methods for Four-Way Shuttle](https://mdpi-res.com/d_attachment/mathematics/mathematics-13-01588/article_deploy/mathematics-13-01588.pdf?version=1747054286) describes inbound/outbound operation around elevator docking and storage/retrieval routing.
 
 ## Phase 0 Drawing Rules
 
@@ -23,7 +23,7 @@ This is the working visual reference for the Phase 0 dashboard scene. The goal i
 - FIFO is a storage/retrieval policy, not a one-way rail constraint: the shuttle can travel both directions on an empty lane, inbound places from the right-side infeed direction into the deepest reachable empty cell, and outbound picks from the left-side outfeed direction.
 - SimCore does not perform hidden row compaction. A pallet's `nodeId` changes only through explicit vehicle/lift transfer in this Phase 0/1 model; later push-lane mechanics need their own travel time, reservations, and events.
 - Stored pallet cells are blocking transit for route planning unless that cell is the current task endpoint, such as the outbound pickup cell. The model does not assume free pass-through under stored pallets.
-- The browser 3D twin draws the storage field as a continuous rack block with rail geometry, cross-track cell hints, side-aisle track beds, roller conveyors at inbound/outbound, parking pads, and low black-box lift ports.
+- The browser 3D twin draws the storage field as a continuous single-level track bed with low rail geometry, cross-track cell hints, side-aisle track beds, roller conveyors at inbound/outbound, parking pads, and low black-box lift ports.
 - The CAD texture stays label-light: visual dimensions come from the SimCore meter grid, while detailed cell names and occupancy are shown in the dashboard inventory panel.
 
 ## Next Calibration Inputs Needed
