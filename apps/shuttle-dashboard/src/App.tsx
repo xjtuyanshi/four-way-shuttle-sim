@@ -913,18 +913,18 @@ export function App() {
           </div>
         </header>
 
+        <StreamingPane
+          prerequisites={prerequisites}
+          scenario={scenario}
+          state={state}
+          layers={sceneLayers}
+          selectedVehicleId={selectedVehicleId}
+          onToggleLayer={toggleSceneLayer}
+        />
         <KpiStrip kpis={kpis} />
         <TrafficDiagnosticsPanel state={state} />
         <FifoInventoryPanel scenario={scenario} state={state} />
         <div className="main-grid">
-          <StreamingPane
-            prerequisites={prerequisites}
-            scenario={scenario}
-            state={state}
-            layers={sceneLayers}
-            selectedVehicleId={selectedVehicleId}
-            onToggleLayer={toggleSceneLayer}
-          />
           <VehicleTable
             vehicles={vehicles}
             selectedVehicleId={selectedVehicleId}
