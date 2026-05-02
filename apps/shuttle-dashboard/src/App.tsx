@@ -490,6 +490,91 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
   );
 }
 
+function FifoInventoryPanel({ scenario, state }: { scenario: ShuttleScenario | null; state: ShuttleSimState | null }) {
+  const lanes = useMemo(() => {
+    const storageNodes = (scenario?.layout.nodes ?? []).filter((node) => node.type === 'storage');
+    const laneByZ = new Map<number, typeof storageNodes>();
+    for (const node of storageNodes) {
+      const lane = laneByZ.get(node.z) ?? [];
+      lane.push(node);
+      laneByZ.set(node.z, lane);
+    }
+    return [...laneByZ.entries()]
+      .sort(([leftZ], [rightZ]) => leftZ - rightZ)
+      .map(([z, lane]) => ({
+        id: `lane-${z}`,
+        z,
+        cells: lane.sort((left, right) => left.x - right.x || left.id.localeCompare(right.id))
+      }));
+  }, [scenario]);
+
+  const activeTasks = state?.tasks.filter((task) => task.state !== 'completed' && task.state !== 'failed') ?? [];
+  const storedByNode = new Map(
+    (state?.loads ?? [])
+      .filter((load) => load.state === 'stored' && load.nodeId)
+      .map((load) => [load.nodeId!, load])
+  );
+  const inboundTargets = new Set(
+    activeTasks
+      .filter((task) => task.kind === 'inbound')
+      .map((task) => task.dropoffNodeId)
+  );
+  const outboundPickups = new Set(
+    activeTasks
+      .filter((task) => task.kind === 'outbound')
+      .map((task) => task.pickupNodeId)
+  );
+  const storageEmptySec = state?.kpis.blockedTimeByReasonSec['storage-empty'] ?? 0;
+  const storageFullSec = state?.kpis.blockedTimeByReasonSec['storage-full'] ?? 0;
+  const totalCells = lanes.reduce((sum, lane) => sum + lane.cells.length, 0);
+  const occupiedCount = lanes.reduce(
+    (sum, lane) => sum + lane.cells.filter((cell) => storedByNode.has(cell.id) || inboundTargets.has(cell.id)).length,
+    0
+  );
+
+  return (
+    <section className="panel fifo-panel" aria-label="FIFO inventory">
+      <div className="panel-head">
+        <h2>FIFO Inventory</h2>
+        <span>{occupiedCount}/{totalCells} cells</span>
+      </div>
+      <div className="fifo-body">
+        <div className="fifo-lanes">
+          {lanes.map((lane, laneIndex) => (
+            <div className="fifo-lane" key={lane.id}>
+              <span className="fifo-lane-label">Row {laneIndex + 1}</span>
+              <div className="fifo-cells">
+                {lane.cells.map((cell) => {
+                  const storedLoad = storedByNode.get(cell.id);
+                  const reserved = inboundTargets.has(cell.id);
+                  const outbound = outboundPickups.has(cell.id);
+                  const status = storedLoad ? 'stored' : reserved ? 'reserved' : 'empty';
+                  return (
+                    <div className={`fifo-cell ${status} ${outbound ? 'outbound' : ''}`} key={cell.id}>
+                      <span>{cell.id.replace('storage-', '').toUpperCase()}</span>
+                      <strong>{storedLoad?.id ?? (reserved ? 'inbound' : '--')}</strong>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="fifo-reasons">
+          <div>
+            <span>Empty wait</span>
+            <strong>{formatNumber(storageEmptySec, 1)}s</strong>
+          </div>
+          <div>
+            <span>Full wait</span>
+            <strong>{formatNumber(storageFullSec, 1)}s</strong>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function PrerequisitePanel({ report }: { report: PrerequisiteReport | null }) {
   return (
     <section className="panel prereq-panel">
@@ -799,6 +884,7 @@ export function App() {
 
         <KpiStrip kpis={kpis} />
         <TrafficDiagnosticsPanel state={state} />
+        <FifoInventoryPanel scenario={scenario} state={state} />
         <div className="main-grid">
           <StreamingPane
             prerequisites={prerequisites}
