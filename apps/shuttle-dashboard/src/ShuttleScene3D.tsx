@@ -41,8 +41,16 @@ type VehicleObjectUserData = {
 
 const FLOOR_Y = 0;
 const VEHICLE_BASE_Y = 0.08;
+const CAD_PALLET_LENGTH_M = 1.2;
+const CAD_PALLET_WIDTH_M = 1.0;
+const CAD_CANVAS_WIDTH = 2048;
+const CAD_CANVAS_HEIGHT = 1536;
 
 function computeBounds(nodes: ShuttleNode[]): {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
   centerX: number;
   centerZ: number;
   width: number;
@@ -58,6 +66,10 @@ function computeBounds(nodes: ShuttleNode[]): {
   const width = Math.max(1, maxX - minX + 6);
   const depth = Math.max(1, maxZ - minZ + 6);
   return {
+    minX: minX - 3,
+    maxX: maxX + 3,
+    minZ: minZ - 3,
+    maxZ: maxZ + 3,
     centerX: (minX + maxX) / 2,
     centerZ: (minZ + maxZ) / 2,
     width,
@@ -76,6 +88,10 @@ function disposeObject(object: THREE.Object3D): void {
       child.geometry.dispose();
       const materials = Array.isArray(child.material) ? child.material : [child.material];
       for (const material of materials) {
+        for (const key of ['map', 'alphaMap', 'normalMap', 'roughnessMap', 'metalnessMap'] as const) {
+          const texture = (material as THREE.Material & Partial<Record<typeof key, THREE.Texture>>)[key];
+          texture?.dispose();
+        }
         material.dispose();
       }
     }
@@ -91,6 +107,187 @@ function clearGroup(group: THREE.Group): void {
 
 function material(color: number, roughness = 0.72, metalness = 0.08): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ color, roughness, metalness });
+}
+
+type LayoutBounds = ReturnType<typeof computeBounds>;
+
+function drawArrow(ctx: CanvasRenderingContext2D, fromX: number, fromY: number, toX: number, toY: number): void {
+  const angle = Math.atan2(toY - fromY, toX - fromX);
+  const arrowLength = 18;
+  ctx.beginPath();
+  ctx.moveTo(fromX, fromY);
+  ctx.lineTo(toX, toY);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(toX, toY);
+  ctx.lineTo(toX - Math.cos(angle - Math.PI / 6) * arrowLength, toY - Math.sin(angle - Math.PI / 6) * arrowLength);
+  ctx.lineTo(toX - Math.cos(angle + Math.PI / 6) * arrowLength, toY - Math.sin(angle + Math.PI / 6) * arrowLength);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function createCadFloorTexture(scenario: ShuttleScenario, bounds: LayoutBounds): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = CAD_CANVAS_WIDTH;
+  canvas.height = CAD_CANVAS_HEIGHT;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Unable to create CAD floor texture canvas.');
+  }
+
+  const inset = 92;
+  const plotWidth = canvas.width - inset * 2;
+  const plotHeight = canvas.height - inset * 2;
+  const spanX = bounds.maxX - bounds.minX;
+  const spanZ = bounds.maxZ - bounds.minZ;
+  const xToPx = (x: number) => inset + ((x - bounds.minX) / spanX) * plotWidth;
+  const zToPx = (z: number) => inset + ((z - bounds.minZ) / spanZ) * plotHeight;
+  const rectForMeterBox = (centerX: number, centerZ: number, widthM: number, depthM: number) => {
+    const left = xToPx(centerX - widthM / 2);
+    const right = xToPx(centerX + widthM / 2);
+    const top = zToPx(centerZ - depthM / 2);
+    const bottom = zToPx(centerZ + depthM / 2);
+    return { left, top, width: right - left, height: bottom - top };
+  };
+
+  ctx.fillStyle = '#111820';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.strokeStyle = '#22303a';
+  ctx.lineWidth = 1;
+  for (let x = Math.ceil(bounds.minX); x <= Math.floor(bounds.maxX); x += 1) {
+    ctx.beginPath();
+    ctx.moveTo(xToPx(x), inset);
+    ctx.lineTo(xToPx(x), inset + plotHeight);
+    ctx.stroke();
+  }
+  for (let z = Math.ceil(bounds.minZ); z <= Math.floor(bounds.maxZ); z += 1) {
+    ctx.beginPath();
+    ctx.moveTo(inset, zToPx(z));
+    ctx.lineTo(inset + plotWidth, zToPx(z));
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = '#334451';
+  ctx.lineWidth = 2;
+  for (let x = Math.ceil(bounds.minX / 5) * 5; x <= bounds.maxX; x += 5) {
+    ctx.beginPath();
+    ctx.moveTo(xToPx(x), inset);
+    ctx.lineTo(xToPx(x), inset + plotHeight);
+    ctx.stroke();
+  }
+  for (let z = Math.ceil(bounds.minZ / 5) * 5; z <= bounds.maxZ; z += 5) {
+    ctx.beginPath();
+    ctx.moveTo(inset, zToPx(z));
+    ctx.lineTo(inset + plotWidth, zToPx(z));
+    ctx.stroke();
+  }
+
+  const nodes = new Map(scenario.layout.nodes.map((node) => [node.id, node]));
+  for (const edge of scenario.layout.edges) {
+    const from = nodes.get(edge.from);
+    const to = nodes.get(edge.to);
+    if (!from || !to) {
+      continue;
+    }
+    const isFifoLane = edge.conflictGroup?.startsWith('fifo-lane') ?? false;
+    ctx.strokeStyle = isFifoLane ? '#85929b' : '#4d5a64';
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.lineWidth = isFifoLane ? 10 : 6;
+    ctx.lineCap = 'round';
+    if (edge.directionMode === 'oneWay') {
+      drawArrow(ctx, xToPx(from.x), zToPx(from.z), xToPx(to.x), zToPx(to.z));
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(xToPx(from.x), zToPx(from.z));
+      ctx.lineTo(xToPx(to.x), zToPx(to.z));
+      ctx.stroke();
+    }
+  }
+  ctx.lineCap = 'butt';
+
+  const storageNodes = scenario.layout.nodes.filter((node) => node.type === 'storage');
+  if (storageNodes.length > 0) {
+    const minStorageX = Math.min(...storageNodes.map((node) => node.x - CAD_PALLET_LENGTH_M / 2));
+    const maxStorageX = Math.max(...storageNodes.map((node) => node.x + CAD_PALLET_LENGTH_M / 2));
+    const minStorageZ = Math.min(...storageNodes.map((node) => node.z - CAD_PALLET_WIDTH_M / 2));
+    const maxStorageZ = Math.max(...storageNodes.map((node) => node.z + CAD_PALLET_WIDTH_M / 2));
+    const left = xToPx(minStorageX);
+    const top = zToPx(minStorageZ);
+    const width = xToPx(maxStorageX) - left;
+    const height = zToPx(maxStorageZ) - top;
+
+    ctx.fillStyle = 'rgba(79, 193, 144, 0.06)';
+    ctx.strokeStyle = 'rgba(86, 169, 201, 0.78)';
+    ctx.lineWidth = 3;
+    ctx.fillRect(left, top, width, height);
+    ctx.strokeRect(left, top, width, height);
+
+    ctx.fillStyle = '#aeb9c3';
+    ctx.font = '600 28px Inter, Arial, sans-serif';
+    ctx.fillText(`${(maxStorageX - minStorageX).toFixed(1)} m storage field`, left + 16, top - 14);
+  }
+
+  ctx.font = '600 22px Inter, Arial, sans-serif';
+  for (const node of scenario.layout.nodes) {
+    if (node.type === 'storage') {
+      const rect = rectForMeterBox(node.x, node.z, CAD_PALLET_LENGTH_M, CAD_PALLET_WIDTH_M);
+      ctx.fillStyle = 'rgba(141, 150, 156, 0.18)';
+      ctx.strokeStyle = '#7f8d98';
+      ctx.lineWidth = 2;
+      ctx.fillRect(rect.left, rect.top, rect.width, rect.height);
+      ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
+      ctx.fillStyle = '#d5dde4';
+      ctx.fillText(node.id.replace('storage-', '').toUpperCase(), rect.left + 12, rect.top + 28);
+    } else {
+      const x = xToPx(node.x);
+      const z = zToPx(node.z);
+      ctx.fillStyle = node.type === 'inbound' ? '#4f8fcb' : node.type === 'outbound' ? '#6da8d6' : node.type === 'parking' ? '#7a8794' : '#e2b84b';
+      ctx.beginPath();
+      ctx.arc(x, z, node.type === 'intersection' ? 14 : 18, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#d8e1e8';
+      ctx.font = '600 18px Inter, Arial, sans-serif';
+      ctx.fillText(node.id, x + 18, z - 12);
+    }
+  }
+
+  ctx.fillStyle = '#e6edf3';
+  ctx.font = '700 32px Inter, Arial, sans-serif';
+  ctx.fillText('Generated CAD layout - units: meters', inset, 48);
+  ctx.font = '500 22px Inter, Arial, sans-serif';
+  ctx.fillStyle = '#9aa8b5';
+  ctx.fillText(`Pallet footprint ${CAD_PALLET_LENGTH_M.toFixed(2)}m x ${CAD_PALLET_WIDTH_M.toFixed(2)}m; storage nodes and tracks are generated from SimCore coordinates.`, inset, 82);
+
+  const storageRows = [...new Set(storageNodes.map((node) => node.z))].sort((left, right) => left - right);
+  const storageColumns = [...new Set(storageNodes.map((node) => node.x))].sort((left, right) => left - right);
+  if (storageRows.length > 1 || storageColumns.length > 1) {
+    const pitchX = storageColumns.length > 1 ? storageColumns[1]! - storageColumns[0]! : null;
+    const pitchZ = storageRows.length > 1 ? storageRows[1]! - storageRows[0]! : null;
+    const label = [
+      pitchX ? `cell pitch ${pitchX.toFixed(2)}m` : null,
+      pitchZ ? `row pitch ${pitchZ.toFixed(2)}m` : null
+    ].filter(Boolean).join(' / ');
+    ctx.fillStyle = '#d5dde4';
+    ctx.font = '600 24px Inter, Arial, sans-serif';
+    ctx.fillText(label, inset, canvas.height - 44);
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 8;
+  return texture;
+}
+
+function createCadFloor(scenario: ShuttleScenario, bounds: LayoutBounds): THREE.Mesh {
+  const texture = createCadFloorTexture(scenario, bounds);
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(bounds.width, bounds.depth),
+    new THREE.MeshBasicMaterial({ map: texture })
+  );
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.set(bounds.centerX, FLOOR_Y - 0.003, bounds.centerZ);
+  return floor;
 }
 
 function createSegment(
@@ -406,12 +603,7 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario): voi
   runtime.edgeById = new Map(scenario.layout.edges.map((edge) => [edge.id, edge]));
 
   const bounds = computeBounds(scenario.layout.nodes);
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(bounds.width, bounds.depth),
-    new THREE.MeshStandardMaterial({ color: 0x151b20, roughness: 0.94, metalness: 0.02 })
-  );
-  floor.rotation.x = -Math.PI / 2;
-  floor.position.set(bounds.centerX, FLOOR_Y, bounds.centerZ);
+  const floor = createCadFloor(scenario, bounds);
   floor.receiveShadow = true;
   runtime.staticGroup.add(floor);
 
