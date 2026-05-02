@@ -141,12 +141,14 @@ The browser demo has been adjusted toward the user's four-way shuttle reference:
 - Dedicated outbound ports: `outbound-lift-a`, `outbound-lift-b`.
 - The 3D view renders low black-box ports, dense track-cell storage, side aisles, and roller conveyor entry/exit pads.
 - Runtime playback speed supports `1x`, `2x`, `4x`, and `10x`.
+- The checked-in `config/shuttle/phase0-scenario.json` has been synced to the same current default dense-layout scenario so `loadScenario` and reviewers do not see the old sparse demo.
 
 Current branch files that matter for this alignment:
 
 - `packages/shuttle-sim-core/src/index.ts`
 - `packages/shuttle-sim-core/src/index.test.ts`
 - `apps/shuttle-dashboard/src/ShuttleScene3D.tsx`
+- `config/shuttle/phase0-scenario.json`
 - `docs/layout-reference.md`
 - `docs/phase1-plan.md`
 
