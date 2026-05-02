@@ -8,6 +8,8 @@ Use this packet to review the current branch:
 - Review branch: `codex/p1-p5-physics-traffic-3d`
 - Review branch head: latest pushed commit on `codex/p1-p5-physics-traffic-3d`
 
+If GitHub clone or browsing fails, use `docs/chatgpt-pro-stable-review.md` instead. It contains direct raw/patch URLs and a no-network fallback prompt.
+
 ## Product Direction
 
 This project is a four-way shuttle simulation prototype. The core architecture decision is:
