@@ -349,6 +349,77 @@ describe('shuttle phase 0 SimCore', () => {
     expect(assignedVehicle?.routeNodeIds).not.toContain('storage-blocker');
   });
 
+  it('drains multiple pallets from the same FIFO row without hidden compaction', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario({
+      durationSec: 300,
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 10
+      },
+      physicsParams: {
+        emptySpeedMps: 6,
+        loadedSpeedMps: 5,
+        accelerationMps2: 6,
+        switchDirectionSec: 0,
+        liftTimeSec: 0.1,
+        lowerTimeSec: 0.1,
+        loadedClearanceM: 0.2,
+        reservationClearanceSec: 0.1
+      }
+    }));
+    sim.addLoadForTest({ id: 'load-a', state: 'stored', nodeId: 'storage-r01-c01', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'load-b', state: 'stored', nodeId: 'storage-r01-c02', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'outbound-a',
+      kind: 'outbound',
+      state: 'queued',
+      createdAtSec: 0,
+      assignedAtSec: null,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r01-c01',
+      dropoffNodeId: 'outbound-lift-a',
+      loadId: 'load-a',
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: null
+    });
+
+    for (let index = 0; index < 2000 && sim.getState().tasks.find((task) => task.id === 'outbound-a')?.state !== 'completed'; index += 1) {
+      sim.step(0.2);
+    }
+
+    expect(sim.getState().tasks.find((task) => task.id === 'outbound-a')?.state).toBe('completed');
+    expect(sim.getDebugState().storageNodeOccupancy).toEqual([{ nodeId: 'storage-r01-c02', loadId: 'load-b' }]);
+
+    sim.addTaskForTest({
+      id: 'outbound-b',
+      kind: 'outbound',
+      state: 'queued',
+      createdAtSec: sim.getState().simTimeSec,
+      assignedAtSec: null,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r01-c02',
+      dropoffNodeId: 'outbound-lift-a',
+      loadId: 'load-b',
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: null
+    });
+
+    for (let index = 0; index < 2000 && sim.getState().tasks.find((task) => task.id === 'outbound-b')?.state !== 'completed'; index += 1) {
+      sim.step(0.2);
+    }
+
+    expect(sim.getState().tasks.find((task) => task.id === 'outbound-b')?.state).toBe('completed');
+    expect(sim.getDebugState().storageNodeOccupancy).toEqual([]);
+    expect(sim.getState().loads.filter((load) => load.state === 'delivered').map((load) => load.id).sort()).toEqual(['load-a', 'load-b']);
+  });
+
   it('defers inbound work when FIFO storage cells are stored or already reserved', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       durationSec: 2000,

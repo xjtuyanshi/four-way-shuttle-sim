@@ -141,7 +141,7 @@ The browser demo has been adjusted toward the user's four-way shuttle reference:
 - Lift behavior is modeled only as black-box ports, not as multi-level lift physics.
 - Dedicated inbound ports: `inbound-lift-a`, `inbound-lift-b`.
 - Dedicated outbound ports: `outbound-lift-a`, `outbound-lift-b`.
-- Dedicated lift ports expose queue length, active task id, waiting task ids, and utilization in traffic diagnostics.
+- Dedicated lift ports expose queue length, active task id, waiting task ids, and port allocation/utilization in traffic diagnostics. In this phase, utilization means the black-box port is allocated by an active task; true lift-mechanism service utilization is a later split metric.
 - The 3D view renders low black-box ports, dense track-cell storage, side aisles, and roller conveyor entry/exit pads.
 - Runtime playback speed supports `1x`, `2x`, `4x`, and `10x`.
 - Fast playback is internally substepped at `scenario.timeStepSec`; the API broadcasts the final state after the accumulated live interval instead of advancing the simulation in one large `10x` jump.

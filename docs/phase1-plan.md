@@ -44,6 +44,7 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 - Added lift-port resource diagnostics: dedicated inbound/outbound ports now expose active task, queue length, waiting task ids, and utilization so lift bottlenecks can be reviewed from an IE/operations perspective.
 - Made storage-cell pass-through explicit: occupied storage cells are blocked for routing unless that cell is the current task endpoint.
 - Changed live playback speed to substep internally at `scenario.timeStepSec`, so `10x` playback does not skip the same motion/reservation checks used by validation.
+- Added same-row multi-cycle outbound regression coverage so FIFO draining cannot reintroduce hidden pallet compaction.
 
 ## Next TODO
 

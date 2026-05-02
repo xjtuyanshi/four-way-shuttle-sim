@@ -19,6 +19,7 @@ This is the working visual reference for the Phase 0 dashboard scene. The goal i
 - The current visual cell footprint is 1.25 m x 1.20 m so cells touch as a dense grid instead of appearing as sparse isolated bays.
 - Inbound is on the right side of the storage field and outbound is on the left side.
 - The simulation is single-level. Lift behavior is modeled as dedicated black-box ports only: `inbound-lift-a/b` feed pallets into the level, and `outbound-lift-a/b` receive pallets out of the level.
+- Lift-port utilization in Phase 0/1 means port allocation by an active task, not measured lift motor/service utilization.
 - FIFO is a storage/retrieval policy, not a one-way rail constraint: the shuttle can travel both directions on an empty lane, inbound places from the right-side infeed direction into the deepest reachable empty cell, and outbound picks from the left-side outfeed direction.
 - SimCore does not perform hidden row compaction. A pallet's `nodeId` changes only through explicit vehicle/lift transfer in this Phase 0/1 model; later push-lane mechanics need their own travel time, reservations, and events.
 - Stored pallet cells are blocking transit for route planning unless that cell is the current task endpoint, such as the outbound pickup cell. The model does not assume free pass-through under stored pallets.
