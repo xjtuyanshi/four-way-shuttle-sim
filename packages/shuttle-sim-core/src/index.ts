@@ -316,9 +316,11 @@ class TrafficReservationController {
     }
 
     const endTimeSec = options.startTimeSec + options.travelSec + this.scenario.trafficPolicy.minimumClearanceSec;
-    const edgeZone = this.scenario.layout.zones.find((candidate) => candidate.edgeIds.includes(edge.id));
-    const targetNodeZone = this.scenario.layout.zones.find((candidate) => candidate.nodeIds.includes(options.toNodeId));
-    const zone = edgeZone ?? targetNodeZone;
+    const targetNodeZones = this.scenario.layout.zones.filter((candidate) => candidate.nodeIds.includes(options.toNodeId));
+    const matchingZones = [
+      ...this.scenario.layout.zones.filter((candidate) => candidate.edgeIds.includes(edge.id)),
+      ...targetNodeZones
+    ].filter((zone, index, zones) => zones.findIndex((candidate) => candidate.id === zone.id) === index);
     const candidates: Reservation[] = [
       this.createReservation({
         resourceType: 'edge',
@@ -334,7 +336,7 @@ class TrafficReservationController {
       this.createReservation({
         resourceType: 'node',
         resourceId: options.toNodeId,
-        conflictGroup: targetNodeZone?.conflictGroup ?? null,
+        conflictGroup: targetNodeZones[0]?.conflictGroup ?? null,
         reasonCode: 'node-reservation',
         vehicleId: options.vehicleId,
         taskId: options.taskId,
@@ -344,7 +346,7 @@ class TrafficReservationController {
       })
     ];
 
-    if (zone) {
+    for (const zone of matchingZones) {
       candidates.push(
         this.createReservation({
           resourceType: 'zone',

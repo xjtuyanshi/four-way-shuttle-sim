@@ -79,7 +79,7 @@ The Phase 0 traffic model includes the data structure needed for the harder Phas
 - wait reason codes
 - deadlock/livelock counters and detector placeholders
 
-Phase 0 enforces edge, node, and zone reservation capacity as `1`. Multi-capacity reservation accounting is intentionally deferred to Phase 1.
+Phase 0 enforces edge, node, and zone reservation capacity as `1`. It also requires at least one parking node per vehicle so reset can initialize one authoritative current-node occupant per shuttle. Multi-capacity reservation accounting is intentionally deferred to Phase 1.
 
 This is still a smoke implementation. It validates deterministic blocking and wait reason logging; it is not the final multi-agent traffic controller.
 

@@ -129,6 +129,14 @@ export const ShuttleScenarioSchema = z.object({
   trafficPolicy: TrafficPolicySchema
 }).superRefine((scenario, context) => {
   const nodeIds = new Set(scenario.layout.nodes.map((node) => node.id));
+  const parkingNodes = scenario.layout.nodes.filter((node) => node.type === 'parking');
+  if (parkingNodes.length < scenario.vehicles.count) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['vehicles', 'count'],
+      message: 'Phase 0 requires at least one parking node per vehicle because node capacity is fixed at 1.'
+    });
+  }
   if (scenario.trafficPolicy.edgeCapacity !== 1) {
     context.addIssue({
       code: z.ZodIssueCode.custom,

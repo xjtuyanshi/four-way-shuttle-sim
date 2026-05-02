@@ -33,4 +33,4 @@ Unreal / Pixel Streaming validation is blocked until Unreal Engine 5.7.4 and ful
 
 `pnpm shuttle:validate` runs the Phase 0 acceptance gate without rendering: same-seed event-log hash stability, a small seed sweep, prerequisite inspection, KPI summary, deadlock checks, reservation coverage checks, and physical safety checks for speed, acceleration, finite coordinates, and vehicle separation.
 
-Phase 0 enforces edge, node, and zone capacity as `1`. Multi-capacity reservation accounting is reserved for Phase 1.
+Phase 0 enforces edge, node, and zone capacity as `1`, and requires at least one parking node per vehicle so reset can assign one authoritative current-node occupant per shuttle. Multi-capacity reservation accounting is reserved for Phase 1.

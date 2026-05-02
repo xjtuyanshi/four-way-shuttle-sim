@@ -17,6 +17,7 @@ Implemented in `packages/shuttle-sim-core/src/index.ts`.
 - `currentNodeOccupancy` is initialized on reset.
 - Stopped and waiting vehicles keep occupying their current node.
 - A vehicle reserves the next edge, target node, and matching zone before movement starts.
+- If an edge and target node match multiple zones, every matching zone is reserved.
 - Current node occupancy is released only after movement is committed.
 - Arrival atomically transfers ownership into `currentNodeOccupancy`.
 - `getDebugState()` exposes node occupancy for tests and validation.
@@ -119,6 +120,7 @@ Phase 0 enforces:
 - `trafficPolicy.zoneCapacity = 1`
 - node layout `capacity = 1`
 - zone layout `capacity = 1`
+- at least one parking node per vehicle
 
 Multi-capacity reservation accounting is explicitly deferred to Phase 1.
 
@@ -158,6 +160,8 @@ Artifacts are intentionally ignored by git:
 - `output/browser/shuttle-3d-scene.png`
 - `output/browser/shuttle-dashboard-demo.png`
 - `output/browser/shuttle-demo.mov`
+- `output/browser/shuttle-3d-canvas-round4.png`
+- `output/browser/shuttle-smoke-round4.mov`
 
 ## Remaining Gate
 

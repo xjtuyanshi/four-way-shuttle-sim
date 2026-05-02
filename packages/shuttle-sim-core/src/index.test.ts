@@ -110,6 +110,18 @@ describe('shuttle phase 0 SimCore', () => {
     ).toThrow(/edgeCapacity=1/);
   });
 
+  it('rejects scenarios without one parking node per vehicle for Phase 0', () => {
+    expect(() =>
+      ShuttleScenarioSchema.parse({
+        ...createDefaultShuttleScenario(),
+        vehicles: {
+          ...createDefaultShuttleScenario().vehicles,
+          count: 3
+        }
+      })
+    ).toThrow(/one parking node per vehicle/);
+  });
+
   it('produces the same event log hash for the same seed', () => {
     const scenario = createDefaultShuttleScenario({ durationSec: 180, taskGeneration: { maxTasks: 8 } });
     const hashes = Array.from({ length: 3 }, () => {
@@ -289,6 +301,36 @@ describe('shuttle phase 0 SimCore', () => {
     const state = sim.getState();
     expect(state.reservations.filter((reservation) => reservation.resourceType === 'zone' && reservation.resourceId === 'zone-cross')).toHaveLength(1);
     expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-02')?.waitReason).toBe('zone-reserved');
+  });
+
+  it('reserves every matching zone for an edge and target node', () => {
+    const scenario = testScenario({
+      layout: {
+        units: 'meter',
+        nodes: [
+          { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'B', type: 'aisle', x: 4, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'C', type: 'parking', x: 8, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
+        ],
+        edges: [
+          { id: 'A-B', from: 'A', to: 'B', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'edge-a-b', noParking: true }
+        ],
+        zones: [
+          { id: 'zone-edge', type: 'intersection', nodeIds: [], edgeIds: ['A-B'], noStop: true, noParking: true, capacity: 1, conflictGroup: 'zone-edge' },
+          { id: 'zone-node', type: 'intersection', nodeIds: ['B'], edgeIds: [], noStop: true, noParking: true, capacity: 1, conflictGroup: 'zone-node' }
+        ]
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['A', 'B']);
+    sim.step(0.2);
+
+    const zoneIds = sim
+      .getState()
+      .reservations.filter((reservation) => reservation.vehicleId === 'SH-01' && reservation.resourceType === 'zone')
+      .map((reservation) => reservation.resourceId)
+      .sort();
+    expect(zoneIds).toEqual(['zone-edge', 'zone-node']);
   });
 
   it('does not call a linear wait chain a deadlock candidate but reports a wait-for cycle', () => {

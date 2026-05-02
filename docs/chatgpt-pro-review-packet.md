@@ -108,15 +108,17 @@ Primary files:
 The prior external verdict was: merge after fixes. The required traffic-control, validation, and Unreal bridge fixes have now been applied.
 
 Detailed mapping: `docs/review-hardening-report.md`.
+Merge TODO and follow-up split: `docs/phase0-merge-todo.md`.
 
 Hardening highlights:
 
 - Added authoritative `currentNodeOccupancy` in `SimCore`.
 - Vehicles waiting at a node continue occupying that node.
-- Before departure, vehicles must reserve the next edge, target node, and matching zone.
+- Before departure, vehicles must reserve the next edge, target node, and every matching zone.
 - Arrival transfers target-node reservation into current-node occupancy atomically.
 - Added test/debug hooks so tests and validation can assert occupancy state directly.
 - Added regression tests for opposite-direction same-edge conflict, target-node occupancy race, crossing-zone serialization, deadlock sanity, motion profiles, and Phase 0 capacity enforcement.
+- Added schema validation requiring at least one parking node per vehicle for Phase 0 reset ownership.
 - Added validation-owned reservation coverage diagnostics with by-code counts and first 20 examples.
 - Added violation codes for unreserved edge/node/zone occupancy, node/edge mismatch, speed, acceleration, separation, and invalid coordinates.
 - Clarified instantaneous `state.traffic.physicalViolationCount` versus cumulative validation aggregation.
@@ -161,6 +163,7 @@ Dashboard loaded at http://localhost:5179
 3D canvas data URL length: 10178
 Runtime advanced to 00:01:09
 Vehicle table showed active moving/waiting states
+Console errors: none observed
 ```
 
 Environment gate output:
