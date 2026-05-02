@@ -26,10 +26,20 @@ Scope: continue the `codex/p1-p5-physics-traffic-3d` branch toward merge without
 - Round 4: full local verification and browser smoke passed.
 - Round 5: latest branch handoff is ready for external review.
 
+## ChatGPT Pro Follow-Up Pass
+
+- The review packet was submitted to ChatGPT Pro against the public branch.
+- ChatGPT Pro stalled on network access but returned two actionable follow-ups before stopping.
+- Fixed dashboard handling for incremental `vehicleState` and `kpiUpdate` WebSocket messages.
+- Added schema/test coverage to reject duplicate node ids, including duplicate parking node ids.
+- Re-ran full local verification and browser smoke after these fixes.
+
 ## Merge-Blocking TODO
 
 - Keep `currentNodeOccupancy` and reservation coverage as the authoritative traffic-control invariant.
 - Keep one parking node per vehicle for Phase 0 reset ownership.
+- Keep duplicate node ids rejected before reset occupancy is initialized.
+- Keep dashboard stream reducers covered by tests so incremental `vehicleState` / `kpiUpdate` messages refresh the UI.
 - Keep Phase 0 reservation capacities fixed at `1`; defer multi-capacity counting to Phase 1.
 - Keep validation-owned cumulative aggregation for physical/reservation violations.
 - Keep Unreal and Pixel Streaming runtime validation marked blocked on machines without required tools.

@@ -122,6 +122,20 @@ describe('shuttle phase 0 SimCore', () => {
     ).toThrow(/one parking node per vehicle/);
   });
 
+  it('rejects duplicate node ids before reset occupancy is initialized', () => {
+    expect(() =>
+      ShuttleScenarioSchema.parse({
+        ...createDefaultShuttleScenario(),
+        layout: {
+          ...createDefaultShuttleScenario().layout,
+          nodes: createDefaultShuttleScenario().layout.nodes.map((node) =>
+            node.id === 'parking-b' ? { ...node, id: 'parking-a' } : node
+          )
+        }
+      })
+    ).toThrow(/Duplicate node id parking-a/);
+  });
+
   it('produces the same event log hash for the same seed', () => {
     const scenario = createDefaultShuttleScenario({ durationSec: 180, taskGeneration: { maxTasks: 8 } });
     const hashes = Array.from({ length: 3 }, () => {

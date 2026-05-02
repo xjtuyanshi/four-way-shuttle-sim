@@ -7,7 +7,6 @@ Use this packet to review the current branch:
 - Base commit: `15f185a Add Phase 0 validation gate`
 - Review branch: `codex/p1-p5-physics-traffic-3d`
 - Review branch head: latest pushed commit on `codex/p1-p5-physics-traffic-3d`
-- Local path used by Codex: `/Users/luke/codex projects/DES Sim/four-way-shuttle-sim`
 
 ## Product Direction
 
@@ -119,12 +118,14 @@ Hardening highlights:
 - Added test/debug hooks so tests and validation can assert occupancy state directly.
 - Added regression tests for opposite-direction same-edge conflict, target-node occupancy race, crossing-zone serialization, deadlock sanity, motion profiles, and Phase 0 capacity enforcement.
 - Added schema validation requiring at least one parking node per vehicle for Phase 0 reset ownership.
+- Added schema validation rejecting duplicate node ids before reset occupancy is initialized.
 - Added validation-owned reservation coverage diagnostics with by-code counts and first 20 examples.
 - Added violation codes for unreserved edge/node/zone occupancy, node/edge mismatch, speed, acceleration, separation, and invalid coordinates.
 - Clarified instantaneous `state.traffic.physicalViolationCount` versus cumulative validation aggregation.
 - Hardened Unreal WebSocket parsing for `connectionRecovered`, `simState`, and `vehicleState` messages.
 - Documented SimCore meters to Unreal centimeters coordinate mapping.
 - Enforced capacity `= 1` for Phase 0 instead of partially supporting multi-capacity reservations.
+- Dashboard now merges incremental `vehicleState` and `kpiUpdate` WebSocket messages into the current state snapshot.
 
 ## Verification Already Run
 

@@ -129,6 +129,16 @@ export const ShuttleScenarioSchema = z.object({
   trafficPolicy: TrafficPolicySchema
 }).superRefine((scenario, context) => {
   const nodeIds = new Set(scenario.layout.nodes.map((node) => node.id));
+  const duplicateNodeIds = scenario.layout.nodes
+    .map((node) => node.id)
+    .filter((nodeId, index, ids) => ids.indexOf(nodeId) !== index);
+  for (const nodeId of new Set(duplicateNodeIds)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['layout', 'nodes'],
+      message: `Duplicate node id ${nodeId}`
+    });
+  }
   const parkingNodes = scenario.layout.nodes.filter((node) => node.type === 'parking');
   if (parkingNodes.length < scenario.vehicles.count) {
     context.addIssue({

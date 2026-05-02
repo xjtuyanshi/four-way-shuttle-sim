@@ -187,6 +187,44 @@ function mergeEvents(previous: EventLogEntry[], next: EventLogEntry[]): EventLog
   return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence).slice(-80);
 }
 
+export function mergeVehicleStateUpdate(
+  previous: ShuttleSimState | null,
+  vehicles: VehicleState[],
+  simTimeSec: number
+): ShuttleSimState | null {
+  if (!previous) {
+    return previous;
+  }
+  const incomingById = new Map(vehicles.map((vehicle) => [vehicle.id, vehicle]));
+  const existingIds = new Set(previous.vehicles.map((vehicle) => vehicle.id));
+  const nextVehicles = previous.vehicles.map((vehicle) => incomingById.get(vehicle.id) ?? vehicle);
+  for (const vehicle of vehicles) {
+    if (!existingIds.has(vehicle.id)) {
+      nextVehicles.push(vehicle);
+    }
+  }
+  return {
+    ...previous,
+    simTimeSec,
+    vehicles: nextVehicles
+  };
+}
+
+export function mergeKpiUpdate(
+  previous: ShuttleSimState | null,
+  kpis: KpiSnapshot,
+  simTimeSec: number
+): ShuttleSimState | null {
+  if (!previous) {
+    return previous;
+  }
+  return {
+    ...previous,
+    simTimeSec,
+    kpis
+  };
+}
+
 function KpiStrip({ kpis }: { kpis: KpiSnapshot | null }) {
   const items = [
     ['Total PPH', kpis ? formatNumber(kpis.totalPph, 1) : '--'],
@@ -602,6 +640,16 @@ export function App() {
           startTransition(() => {
             setState(message.state);
             setEvents(message.state.recentEvents);
+          });
+        }
+        if (message.type === 'vehicleState') {
+          startTransition(() => {
+            setState((previous) => mergeVehicleStateUpdate(previous, message.vehicles, message.simTimeSec));
+          });
+        }
+        if (message.type === 'kpiUpdate') {
+          startTransition(() => {
+            setState((previous) => mergeKpiUpdate(previous, message.kpis, message.simTimeSec));
           });
         }
         if (message.type === 'taskEvent') {

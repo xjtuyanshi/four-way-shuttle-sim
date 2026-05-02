@@ -121,8 +121,22 @@ Phase 0 enforces:
 - node layout `capacity = 1`
 - zone layout `capacity = 1`
 - at least one parking node per vehicle
+- unique node ids before reset occupancy is initialized
 
 Multi-capacity reservation accounting is explicitly deferred to Phase 1.
+
+## ChatGPT Pro Follow-Up Fixes
+
+After the review packet was submitted to ChatGPT Pro, it returned two actionable follow-ups before its network-based review stalled:
+
+- Dashboard incremental stream messages could leave React/3D state stale if only `vehicleState` or `kpiUpdate` messages are consumed.
+- Schema validation should reject duplicate parking node ids.
+
+Follow-up fixes:
+
+- `apps/shuttle-dashboard/src/App.tsx` now merges `vehicleState` messages into the current state snapshot and applies `kpiUpdate` snapshots.
+- `apps/shuttle-dashboard/src/App.test.ts` covers both stream reducers, and `vitest.config.ts` includes dashboard tests in the default test run.
+- `packages/shuttle-schemas/src/index.ts` rejects duplicate node ids, and `packages/shuttle-sim-core/src/index.test.ts` covers duplicate parking node ids before reset occupancy is initialized.
 
 ## Latest Verification
 
@@ -153,7 +167,7 @@ Browser smoke:
 - 3D canvas appears
 - runtime advances
 - vehicle table shows moving/waiting states
-- console errors: none observed
+- localhost console errors/warnings: none observed
 
 Artifacts are intentionally ignored by git:
 
@@ -162,6 +176,8 @@ Artifacts are intentionally ignored by git:
 - `output/browser/shuttle-demo.mov`
 - `output/browser/shuttle-3d-canvas-round4.png`
 - `output/browser/shuttle-smoke-round4.mov`
+- `output/browser/shuttle-vehicle-rows-round5.png`
+- `output/browser/shuttle-demo-round5.gif`
 
 ## Remaining Gate
 
