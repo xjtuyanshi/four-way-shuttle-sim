@@ -34,6 +34,14 @@ Scope: continue the `codex/p1-p5-physics-traffic-3d` branch toward merge without
 - Added schema/test coverage to reject duplicate node ids, including duplicate parking node ids.
 - Re-ran full local verification and browser smoke after these fixes.
 
+## Final External Review Result
+
+- Final ChatGPT Pro review was run against head `28d6aeb112440998e8d6a603ab35065b73ccde52`.
+- The full GitHub-access review stalled on remote access/truncation, so a second no-network merge-blocker review was run from the final packet.
+- Result: no verified must-fix findings before merge.
+- Verdict: merge now.
+- Unreal runtime and Pixel Streaming remain unverified only because Unreal Engine 5.7.4 and full Xcode are unavailable on this machine.
+
 ## Merge-Blocking TODO
 
 - Keep `currentNodeOccupancy` and reservation coverage as the authoritative traffic-control invariant.
@@ -56,5 +64,8 @@ Scope: continue the `codex/p1-p5-physics-traffic-3d` branch toward merge without
 
 - Capacity-aware reservations for edges, nodes, and zones.
 - Stronger wait-for graph and livelock analysis.
+- Positive-control validator fixtures that intentionally trigger each reservation/physical violation code.
+- Additional dashboard stream reducer coverage for out-of-order partial updates, reconnect replacement, and vehicle disappearance semantics.
+- Zero-distance or same-node traffic transition coverage if future route generation can produce current node equal to target node.
 - Real Unreal Engine compile and runtime smoke after installing prerequisites.
 - Pixel Streaming 30-minute 1080p single-user validation.

@@ -138,6 +138,23 @@ Follow-up fixes:
 - `apps/shuttle-dashboard/src/App.test.ts` covers both stream reducers, and `vitest.config.ts` includes dashboard tests in the default test run.
 - `packages/shuttle-schemas/src/index.ts` rejects duplicate node ids, and `packages/shuttle-sim-core/src/index.test.ts` covers duplicate parking node ids before reset occupancy is initialized.
 
+## Final External Review Verdict
+
+Final review was run against commit `28d6aeb112440998e8d6a603ab35065b73ccde52`.
+
+The first full public-branch review attempt stalled on remote access/truncation. A second no-network merge-blocker review from the final packet returned:
+
+- Must-fix findings before merge: none verified.
+- Verdict: merge now.
+
+Non-blocking follow-ups were moved to Phase 1:
+
+- multi-capacity reservation semantics after Phase 0
+- Unreal and Pixel Streaming runtime verification when required tools are installed
+- same-node/zero-distance traffic-transition coverage if future route generation can produce it
+- more dashboard stream reducer ordering/removal cases
+- positive-control validator fixtures for every violation code
+
 ## Latest Verification
 
 Last full verification on this branch passed:
