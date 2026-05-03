@@ -5,6 +5,7 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "Materials/MaterialInterface.h"
 #include "ShuttleStateSubscriberSubsystem.h"
 #include "ShuttleVisualTwinActor.h"
 #include "UObject/ConstructorHelpers.h"
@@ -50,12 +51,30 @@ AShuttleVisualTwinRuntimeActor::AShuttleVisualTwinRuntimeActor()
     OutboundLiftPads->SetupAttachment(Root);
     ParkingPads = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("ParkingPads"));
     ParkingPads->SetupAttachment(Root);
+    FloorPlates = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("FloorPlates"));
+    FloorPlates->SetupAttachment(Root);
+    StorageRails = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("StorageRails"));
+    StorageRails->SetupAttachment(Root);
+    RackPosts = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("RackPosts"));
+    RackPosts->SetupAttachment(Root);
+    TransferRollers = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("TransferRollers"));
+    TransferRollers->SetupAttachment(Root);
+    LiftBlocks = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("LiftBlocks"));
+    LiftBlocks->SetupAttachment(Root);
+    LoadPallets = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("LoadPallets"));
+    LoadPallets->SetupAttachment(Root);
 
-    SetInstancedMesh(StorageCells);
-    SetInstancedMesh(TrackBeds);
-    SetInstancedMesh(InboundLiftPads);
-    SetInstancedMesh(OutboundLiftPads);
-    SetInstancedMesh(ParkingPads);
+    SetInstancedMesh(StorageCells, FLinearColor(0.18f, 0.22f, 0.25f, 1.0f));
+    SetInstancedMesh(TrackBeds, FLinearColor(0.28f, 0.34f, 0.38f, 1.0f));
+    SetInstancedMesh(InboundLiftPads, FLinearColor(0.18f, 0.35f, 0.50f, 1.0f));
+    SetInstancedMesh(OutboundLiftPads, FLinearColor(0.25f, 0.42f, 0.58f, 1.0f));
+    SetInstancedMesh(ParkingPads, FLinearColor(0.32f, 0.36f, 0.40f, 1.0f));
+    SetInstancedMesh(FloorPlates, FLinearColor(0.05f, 0.07f, 0.09f, 1.0f));
+    SetInstancedMesh(StorageRails, FLinearColor(0.58f, 0.63f, 0.66f, 1.0f));
+    SetInstancedMesh(RackPosts, FLinearColor(0.25f, 0.30f, 0.32f, 1.0f));
+    SetInstancedMesh(TransferRollers, FLinearColor(0.58f, 0.55f, 0.50f, 1.0f));
+    SetInstancedMesh(LiftBlocks, FLinearColor(0.04f, 0.06f, 0.07f, 1.0f));
+    SetInstancedMesh(LoadPallets, FLinearColor(0.68f, 0.50f, 0.25f, 1.0f));
 }
 
 void AShuttleVisualTwinRuntimeActor::OnConstruction(const FTransform& Transform)
@@ -93,7 +112,8 @@ void AShuttleVisualTwinRuntimeActor::EndPlay(const EEndPlayReason::Type EndPlayR
 
 void AShuttleVisualTwinRuntimeActor::RebuildStaticScene()
 {
-    if (!StorageCells || !TrackBeds || !InboundLiftPads || !OutboundLiftPads || !ParkingPads)
+    if (!StorageCells || !TrackBeds || !InboundLiftPads || !OutboundLiftPads || !ParkingPads ||
+        !FloorPlates || !StorageRails || !RackPosts || !TransferRollers || !LiftBlocks || !LoadPallets)
     {
         return;
     }
@@ -103,6 +123,13 @@ void AShuttleVisualTwinRuntimeActor::RebuildStaticScene()
     InboundLiftPads->ClearInstances();
     OutboundLiftPads->ClearInstances();
     ParkingPads->ClearInstances();
+    FloorPlates->ClearInstances();
+    StorageRails->ClearInstances();
+    RackPosts->ClearInstances();
+    TransferRollers->ClearInstances();
+    LiftBlocks->ClearInstances();
+    LoadPallets->ClearInstances();
+    StaticNodePositionsM.Empty();
 
     StaticSceneContract = FShuttleStaticSceneContractForSmoke();
     StaticSceneContract.StorageRows = StorageRows;
@@ -116,6 +143,16 @@ void AShuttleVisualTwinRuntimeActor::RebuildStaticScene()
     StaticSceneContract.InboundLiftXM = InboundXM;
     StaticSceneContract.OutboundLiftXM = OutboundXM;
     StaticSceneContract.bSingleLevel = true;
+
+    AddInstanceMeters(
+        FloorPlates,
+        (InboundXM + OutboundXM) * 0.5f,
+        (ParkingTopZM + ParkingBottomZM) * 0.5f,
+        InboundXM - OutboundXM + 2.4f,
+        ParkingBottomZM - ParkingTopZM + 1.8f,
+        0.025f
+    );
+    StaticSceneContract.FloorPlateCount += 1;
 
     for (int32 Row = 0; Row < StorageRows; Row += 1)
     {
@@ -149,6 +186,7 @@ void AShuttleVisualTwinRuntimeActor::RebuildStaticScene()
             );
         }
     }
+    AddRackPostsForStorageGrid();
 
     AddTrackBedMeters(TEXT("side-aisle-left"), TEXT("sideAisle"), TEXT("z"), 0, TEXT("left"), LeftSpineXM, (TopZM + BottomZM) * 0.5f, 0.10f, BottomZM - TopZM, 0.055f, &FShuttleStaticSceneContractForSmoke::SideAisleTrackCount);
     AddTrackBedMeters(TEXT("side-aisle-right"), TEXT("sideAisle"), TEXT("z"), 0, TEXT("right"), RightSpineXM, (TopZM + BottomZM) * 0.5f, 0.10f, BottomZM - TopZM, 0.055f, &FShuttleStaticSceneContractForSmoke::SideAisleTrackCount);
@@ -170,6 +208,7 @@ void AShuttleVisualTwinRuntimeActor::RebuildStaticScene()
     AddParkingPadMeters(TEXT("parking-a"), TEXT("right"), RightSpineXM, ParkingTopZM, 1.5f, 1.15f, 0.08f);
     AddParkingPadMeters(TEXT("parking-b"), TEXT("right"), RightSpineXM, ParkingBottomZM, 1.5f, 1.15f, 0.08f);
     FinalizeStaticSceneContract();
+    RebuildLoadPalletInstances();
 }
 
 void AShuttleVisualTwinRuntimeActor::ConnectToBridge()
@@ -192,8 +231,10 @@ void AShuttleVisualTwinRuntimeActor::ConnectToBridge()
 
     StateSubscriber = NextStateSubscriber;
     StateSubscriber->OnVehicleStateNative.RemoveAll(this);
+    StateSubscriber->OnLoadStatesNative.RemoveAll(this);
     StateSubscriber->OnBridgeStatusNative.RemoveAll(this);
     StateSubscriber->OnVehicleStateNative.AddUObject(this, &AShuttleVisualTwinRuntimeActor::HandleVehicleState);
+    StateSubscriber->OnLoadStatesNative.AddUObject(this, &AShuttleVisualTwinRuntimeActor::HandleLoadStates);
     StateSubscriber->OnBridgeStatusNative.AddUObject(this, &AShuttleVisualTwinRuntimeActor::HandleBridgeStatus);
     StateSubscriber->Connect(WebSocketUrl);
 }
@@ -228,9 +269,44 @@ int32 AShuttleVisualTwinRuntimeActor::GetParkingPadInstanceCount() const
     return ParkingPads ? ParkingPads->GetInstanceCount() : 0;
 }
 
+int32 AShuttleVisualTwinRuntimeActor::GetFloorPlateInstanceCount() const
+{
+    return FloorPlates ? FloorPlates->GetInstanceCount() : 0;
+}
+
+int32 AShuttleVisualTwinRuntimeActor::GetStorageRailInstanceCount() const
+{
+    return StorageRails ? StorageRails->GetInstanceCount() : 0;
+}
+
+int32 AShuttleVisualTwinRuntimeActor::GetRackPostInstanceCount() const
+{
+    return RackPosts ? RackPosts->GetInstanceCount() : 0;
+}
+
+int32 AShuttleVisualTwinRuntimeActor::GetTransferRollerInstanceCount() const
+{
+    return TransferRollers ? TransferRollers->GetInstanceCount() : 0;
+}
+
+int32 AShuttleVisualTwinRuntimeActor::GetLiftBlockInstanceCount() const
+{
+    return LiftBlocks ? LiftBlocks->GetInstanceCount() : 0;
+}
+
+int32 AShuttleVisualTwinRuntimeActor::GetLoadPalletInstanceCount() const
+{
+    return LoadPallets ? LoadPallets->GetInstanceCount() : 0;
+}
+
 void AShuttleVisualTwinRuntimeActor::HandleVehicleState(const FShuttleVisualVehicleState& VehicleState)
 {
     ApplyVehicleState(VehicleState);
+}
+
+void AShuttleVisualTwinRuntimeActor::HandleLoadStates(const TArray<FShuttleVisualLoadState>& LoadStates)
+{
+    ApplyLoadStates(LoadStates);
 }
 
 void AShuttleVisualTwinRuntimeActor::ApplyVehicleState(const FShuttleVisualVehicleState& VehicleState)
@@ -242,6 +318,12 @@ void AShuttleVisualTwinRuntimeActor::ApplyVehicleState(const FShuttleVisualVehic
         LastAppliedVehicleStates.Add(VehicleState.Id, VehicleState);
         VehicleActor->ApplyAuthoritativeState(VehicleState);
     }
+}
+
+void AShuttleVisualTwinRuntimeActor::ApplyLoadStates(const TArray<FShuttleVisualLoadState>& LoadStates)
+{
+    LastAppliedLoadStates = LoadStates;
+    RebuildLoadPalletInstances();
 }
 
 int32 AShuttleVisualTwinRuntimeActor::GetSpawnedVehicleActorCount() const
@@ -396,6 +478,8 @@ void AShuttleVisualTwinRuntimeActor::AddStorageCellMeters(
 )
 {
     AddInstanceMeters(StorageCells, SimX, SimZ, SizeXM, SizeZM, HeightM);
+    AddStaticNodePosition(Id, SimX, SimZ);
+    AddStorageRailGridForCellMeters(SimX, SimZ, SizeXM, SizeZM);
     FShuttleStaticSceneStorageCellForSmoke Cell;
     Cell.Id = Id;
     Cell.Row = Row;
@@ -446,6 +530,9 @@ void AShuttleVisualTwinRuntimeActor::AddTrackBedMeters(
 void AShuttleVisualTwinRuntimeActor::AddInboundLiftPadMeters(const FString& Id, const FString& Side, float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM)
 {
     AddInstanceMeters(InboundLiftPads, SimX, SimZ, SizeXM, SizeZM, HeightM);
+    AddStaticNodePosition(Id, SimX, SimZ);
+    AddTransferRollersMeters(SimX, SimZ, SizeXM, SizeZM);
+    AddLiftBlockMeters(SimX, SimZ, SizeXM, SizeZM);
     FShuttleStaticScenePadForSmoke Pad;
     Pad.Id = Id;
     Pad.Category = TEXT("inboundLift");
@@ -462,6 +549,9 @@ void AShuttleVisualTwinRuntimeActor::AddInboundLiftPadMeters(const FString& Id, 
 void AShuttleVisualTwinRuntimeActor::AddOutboundLiftPadMeters(const FString& Id, const FString& Side, float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM)
 {
     AddInstanceMeters(OutboundLiftPads, SimX, SimZ, SizeXM, SizeZM, HeightM);
+    AddStaticNodePosition(Id, SimX, SimZ);
+    AddTransferRollersMeters(SimX, SimZ, SizeXM, SizeZM);
+    AddLiftBlockMeters(SimX, SimZ, SizeXM, SizeZM);
     FShuttleStaticScenePadForSmoke Pad;
     Pad.Id = Id;
     Pad.Category = TEXT("outboundLift");
@@ -478,6 +568,7 @@ void AShuttleVisualTwinRuntimeActor::AddOutboundLiftPadMeters(const FString& Id,
 void AShuttleVisualTwinRuntimeActor::AddParkingPadMeters(const FString& Id, const FString& Side, float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM)
 {
     AddInstanceMeters(ParkingPads, SimX, SimZ, SizeXM, SizeZM, HeightM);
+    AddStaticNodePosition(Id, SimX, SimZ);
     FShuttleStaticScenePadForSmoke Pad;
     Pad.Id = Id;
     Pad.Category = TEXT("parking");
@@ -510,6 +601,117 @@ void AShuttleVisualTwinRuntimeActor::AddInstanceMeters(
     Component->AddInstance(FTransform(FRotator::ZeroRotator, LocationCm, Scale));
 }
 
+void AShuttleVisualTwinRuntimeActor::AddStorageRailGridForCellMeters(float SimX, float SimZ, float SizeXM, float SizeZM)
+{
+    if (!StorageRails)
+    {
+        return;
+    }
+
+    const float RailHeightM = 0.055f;
+    const float RailWidthM = 0.035f;
+    const float XRailLengthM = SizeXM * 0.92f;
+    const float ZRailLengthM = SizeZM * 0.92f;
+    const float RailOffsetXM = SizeXM * 0.34f;
+    const float RailOffsetZM = SizeZM * 0.34f;
+
+    AddInstanceMeters(StorageRails, SimX, SimZ - RailOffsetZM, XRailLengthM, RailWidthM, RailHeightM);
+    AddInstanceMeters(StorageRails, SimX, SimZ + RailOffsetZM, XRailLengthM, RailWidthM, RailHeightM);
+    AddInstanceMeters(StorageRails, SimX - RailOffsetXM, SimZ, RailWidthM, ZRailLengthM, RailHeightM);
+    AddInstanceMeters(StorageRails, SimX + RailOffsetXM, SimZ, RailWidthM, ZRailLengthM, RailHeightM);
+    StaticSceneContract.StorageRailSegmentCount += 4;
+}
+
+void AShuttleVisualTwinRuntimeActor::AddRackPostsForStorageGrid()
+{
+    if (!RackPosts)
+    {
+        return;
+    }
+
+    const float MinX = FirstStorageXM - StoragePitchXM * 0.5f;
+    const float MaxX = FirstStorageXM + static_cast<float>(StorageColumns - 1) * StoragePitchXM + StoragePitchXM * 0.5f;
+    const float MinZ = RowZ(0) - StoragePitchZM * 0.5f;
+    const float MaxZ = RowZ(StorageRows - 1) + StoragePitchZM * 0.5f;
+    for (int32 Column = 0; Column <= StorageColumns; Column += 1)
+    {
+        const float X = MinX + static_cast<float>(Column) * ((MaxX - MinX) / static_cast<float>(StorageColumns));
+        for (int32 Row = 0; Row <= StorageRows; Row += 1)
+        {
+            const float Z = MinZ + static_cast<float>(Row) * ((MaxZ - MinZ) / static_cast<float>(StorageRows));
+            AddInstanceMeters(RackPosts, X, Z, 0.045f, 0.045f, 0.24f);
+            StaticSceneContract.RackPostCount += 1;
+        }
+    }
+}
+
+void AShuttleVisualTwinRuntimeActor::AddTransferRollersMeters(float SimX, float SimZ, float SizeXM, float SizeZM)
+{
+    if (!TransferRollers)
+    {
+        return;
+    }
+
+    constexpr int32 RollerCount = 6;
+    for (int32 RollerIndex = 0; RollerIndex < RollerCount; RollerIndex += 1)
+    {
+        const float Ratio = RollerCount <= 1 ? 0.5f : static_cast<float>(RollerIndex) / static_cast<float>(RollerCount - 1);
+        const float OffsetX = FMath::Lerp(-SizeXM * 0.36f, SizeXM * 0.36f, Ratio);
+        AddInstanceMeters(TransferRollers, SimX + OffsetX, SimZ, 0.045f, SizeZM * 0.78f, 0.06f);
+        StaticSceneContract.TransferRollerCount += 1;
+    }
+}
+
+void AShuttleVisualTwinRuntimeActor::AddLiftBlockMeters(float SimX, float SimZ, float SizeXM, float SizeZM)
+{
+    if (!LiftBlocks)
+    {
+        return;
+    }
+
+    const float SideDirection = SimX > RightSpineXM ? 1.0f : -1.0f;
+    AddInstanceMeters(LiftBlocks, SimX + SideDirection * SizeXM * 0.55f, SimZ, SizeXM * 0.28f, SizeZM * 0.78f, 0.62f);
+    StaticSceneContract.LiftBlockCount += 1;
+}
+
+void AShuttleVisualTwinRuntimeActor::AddStaticNodePosition(const FString& NodeId, float SimX, float SimZ)
+{
+    StaticNodePositionsM.Add(NodeId, FVector2D(SimX, SimZ));
+}
+
+void AShuttleVisualTwinRuntimeActor::RebuildLoadPalletInstances()
+{
+    if (!LoadPallets)
+    {
+        return;
+    }
+
+    LoadPallets->ClearInstances();
+    for (const FShuttleVisualLoadState& LoadState : LastAppliedLoadStates)
+    {
+        if (LoadState.State == EShuttleVisualLoadStatus::Carried || LoadState.NodeId.IsEmpty())
+        {
+            continue;
+        }
+
+        const FVector2D* NodePosition = StaticNodePositionsM.Find(LoadState.NodeId);
+        if (!NodePosition)
+        {
+            continue;
+        }
+
+        const bool bStorageLoad = LoadState.NodeId.StartsWith(TEXT("storage-"));
+        AddInstanceMeters(
+            LoadPallets,
+            NodePosition->X,
+            NodePosition->Y,
+            bStorageLoad ? 1.04f : 0.82f,
+            bStorageLoad ? 0.88f : 0.64f,
+            0.18f
+        );
+    }
+}
+
 void AShuttleVisualTwinRuntimeActor::FinalizeStaticSceneContract()
 {
     const int32 ExpectedStorageCells = StaticSceneContract.StorageRows * StaticSceneContract.StorageColumns;
@@ -539,9 +741,21 @@ void AShuttleVisualTwinRuntimeActor::FinalizeStaticSceneContract()
         StaticSceneContract.ParkingPads.Num() == StaticSceneContract.ParkingPadCount &&
         StaticSceneContract.InboundLiftXM > StaticSceneContract.StorageBlockMaxXM &&
         StaticSceneContract.OutboundLiftXM < StaticSceneContract.StorageBlockMinXM;
+
+    StaticSceneContract.bHasStorageRailGrid =
+        StaticSceneContract.StorageRailSegmentCount == ExpectedStorageCells * 4 &&
+        StaticSceneContract.StorageRailSegmentCount == (StorageRails ? StorageRails->GetInstanceCount() : 0);
+
+    StaticSceneContract.bHasTransferRollers =
+        StaticSceneContract.TransferRollerCount == 24 &&
+        StaticSceneContract.TransferRollerCount == (TransferRollers ? TransferRollers->GetInstanceCount() : 0);
+
+    StaticSceneContract.bHasLiftBlackBoxes =
+        StaticSceneContract.LiftBlockCount == StaticSceneContract.InboundLiftPadCount + StaticSceneContract.OutboundLiftPadCount &&
+        StaticSceneContract.LiftBlockCount == (LiftBlocks ? LiftBlocks->GetInstanceCount() : 0);
 }
 
-void AShuttleVisualTwinRuntimeActor::SetInstancedMesh(UInstancedStaticMeshComponent* Component) const
+void AShuttleVisualTwinRuntimeActor::SetInstancedMesh(UInstancedStaticMeshComponent* Component, const FLinearColor& Color) const
 {
     if (!Component)
     {
@@ -552,6 +766,12 @@ void AShuttleVisualTwinRuntimeActor::SetInstancedMesh(UInstancedStaticMeshCompon
     if (CubeMesh.Succeeded())
     {
         Component->SetStaticMesh(CubeMesh.Object);
+    }
+    static ConstructorHelpers::FObjectFinder<UMaterialInterface> ShapeMaterial(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+    if (ShapeMaterial.Succeeded())
+    {
+        Component->SetMaterial(0, ShapeMaterial.Object);
+        Component->SetVectorParameterValueOnMaterials(TEXT("Color"), FVector(Color.R, Color.G, Color.B));
     }
     Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 }
@@ -565,6 +785,7 @@ void AShuttleVisualTwinRuntimeActor::UnbindStateSubscriber(const bool bDisconnec
     }
 
     StateSubscriber->OnVehicleStateNative.RemoveAll(this);
+    StateSubscriber->OnLoadStatesNative.RemoveAll(this);
     StateSubscriber->OnBridgeStatusNative.RemoveAll(this);
     if (bDisconnect)
     {
@@ -574,4 +795,9 @@ void AShuttleVisualTwinRuntimeActor::UnbindStateSubscriber(const bool bDisconnec
     StateSubscriber.Reset();
     ReceivedVehicleStateCount = 0;
     LastAppliedVehicleStates.Empty();
+    LastAppliedLoadStates.Empty();
+    if (LoadPallets)
+    {
+        LoadPallets->ClearInstances();
+    }
 }

@@ -68,6 +68,11 @@ struct FShuttleStaticSceneContractForSmoke
     int32 InboundLiftPadCount = 0;
     int32 OutboundLiftPadCount = 0;
     int32 ParkingPadCount = 0;
+    int32 FloorPlateCount = 0;
+    int32 StorageRailSegmentCount = 0;
+    int32 RackPostCount = 0;
+    int32 TransferRollerCount = 0;
+    int32 LiftBlockCount = 0;
     float StoragePitchXM = 0.0f;
     float StoragePitchZM = 0.0f;
     float StorageBlockMinXM = 0.0f;
@@ -80,6 +85,9 @@ struct FShuttleStaticSceneContractForSmoke
     bool bDenseStorageBlock = false;
     bool bOrthogonalTrackOnly = false;
     bool bDedicatedLiftPorts = false;
+    bool bHasStorageRailGrid = false;
+    bool bHasTransferRollers = false;
+    bool bHasLiftBlackBoxes = false;
 };
 
 UCLASS()
@@ -142,8 +150,29 @@ public:
     UFUNCTION(BlueprintPure, Category = "Shuttle|Runtime")
     int32 GetParkingPadInstanceCount() const;
 
+    UFUNCTION(BlueprintPure, Category = "Shuttle|Runtime")
+    int32 GetFloorPlateInstanceCount() const;
+
+    UFUNCTION(BlueprintPure, Category = "Shuttle|Runtime")
+    int32 GetStorageRailInstanceCount() const;
+
+    UFUNCTION(BlueprintPure, Category = "Shuttle|Runtime")
+    int32 GetRackPostInstanceCount() const;
+
+    UFUNCTION(BlueprintPure, Category = "Shuttle|Runtime")
+    int32 GetTransferRollerInstanceCount() const;
+
+    UFUNCTION(BlueprintPure, Category = "Shuttle|Runtime")
+    int32 GetLiftBlockInstanceCount() const;
+
+    UFUNCTION(BlueprintPure, Category = "Shuttle|Runtime")
+    int32 GetLoadPalletInstanceCount() const;
+
     UFUNCTION(BlueprintCallable, Category = "Shuttle|Runtime")
     void ApplyVehicleState(const FShuttleVisualVehicleState& VehicleState);
+
+    UFUNCTION(BlueprintCallable, Category = "Shuttle|Runtime")
+    void ApplyLoadStates(const TArray<FShuttleVisualLoadState>& LoadStates);
 
     UFUNCTION(BlueprintPure, Category = "Shuttle|Runtime")
     int32 GetSpawnedVehicleActorCount() const;
@@ -179,9 +208,30 @@ protected:
     UPROPERTY(VisibleAnywhere, Category = "Shuttle|Scene")
     UInstancedStaticMeshComponent* ParkingPads;
 
+    UPROPERTY(VisibleAnywhere, Category = "Shuttle|Scene")
+    UInstancedStaticMeshComponent* FloorPlates;
+
+    UPROPERTY(VisibleAnywhere, Category = "Shuttle|Scene")
+    UInstancedStaticMeshComponent* StorageRails;
+
+    UPROPERTY(VisibleAnywhere, Category = "Shuttle|Scene")
+    UInstancedStaticMeshComponent* RackPosts;
+
+    UPROPERTY(VisibleAnywhere, Category = "Shuttle|Scene")
+    UInstancedStaticMeshComponent* TransferRollers;
+
+    UPROPERTY(VisibleAnywhere, Category = "Shuttle|Scene")
+    UInstancedStaticMeshComponent* LiftBlocks;
+
+    UPROPERTY(VisibleAnywhere, Category = "Shuttle|Scene")
+    UInstancedStaticMeshComponent* LoadPallets;
+
 private:
     UFUNCTION()
     void HandleVehicleState(const FShuttleVisualVehicleState& VehicleState);
+
+    UFUNCTION()
+    void HandleLoadStates(const TArray<FShuttleVisualLoadState>& LoadStates);
 
     UFUNCTION()
     void HandleBridgeStatus(bool bConnected, const FString& Detail);
@@ -193,13 +243,21 @@ private:
     void AddOutboundLiftPadMeters(const FString& Id, const FString& Side, float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM);
     void AddParkingPadMeters(const FString& Id, const FString& Side, float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM);
     void AddInstanceMeters(UInstancedStaticMeshComponent* Component, float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM) const;
-    void SetInstancedMesh(UInstancedStaticMeshComponent* Component) const;
+    void AddStorageRailGridForCellMeters(float SimX, float SimZ, float SizeXM, float SizeZM);
+    void AddRackPostsForStorageGrid();
+    void AddTransferRollersMeters(float SimX, float SimZ, float SizeXM, float SizeZM);
+    void AddLiftBlockMeters(float SimX, float SimZ, float SizeXM, float SizeZM);
+    void AddStaticNodePosition(const FString& NodeId, float SimX, float SimZ);
+    void RebuildLoadPalletInstances();
+    void SetInstancedMesh(UInstancedStaticMeshComponent* Component, const FLinearColor& Color) const;
     void UnbindStateSubscriber(bool bDisconnect);
     void FinalizeStaticSceneContract();
 
     TWeakObjectPtr<UShuttleStateSubscriberSubsystem> StateSubscriber;
     TMap<FString, TWeakObjectPtr<AShuttleVisualTwinActor>> VehicleActors;
+    TMap<FString, FVector2D> StaticNodePositionsM;
     TMap<FString, FShuttleVisualVehicleState> LastAppliedVehicleStates;
+    TArray<FShuttleVisualLoadState> LastAppliedLoadStates;
     int32 VehicleActorCreationCount = 0;
     FShuttleStaticSceneContractForSmoke StaticSceneContract;
 };
