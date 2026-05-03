@@ -82,6 +82,11 @@ public:
     UFUNCTION(BlueprintPure, Category = "Shuttle|Runtime")
     AShuttleVisualTwinActor* FindVehicleActorById(const FString& VehicleId) const;
 
+    TArray<FString> GetObservedVehicleIdsForSmoke() const;
+    bool TryGetLastAppliedVehicleStateForSmoke(const FString& VehicleId, FShuttleVisualVehicleState& OutState) const;
+    int32 GetVehicleActorCreationCountForSmoke() const;
+    int32 GetOwnedDuplicateVehicleActorCountForSmoke() const;
+
 protected:
     UPROPERTY(VisibleAnywhere, Category = "Shuttle|Scene")
     USceneComponent* Root;
@@ -115,4 +120,6 @@ private:
 
     TWeakObjectPtr<UShuttleStateSubscriberSubsystem> StateSubscriber;
     TMap<FString, TWeakObjectPtr<AShuttleVisualTwinActor>> VehicleActors;
+    TMap<FString, FShuttleVisualVehicleState> LastAppliedVehicleStates;
+    int32 VehicleActorCreationCount = 0;
 };

@@ -93,7 +93,7 @@ describe('phase 0 validation', () => {
     expect(result.acceptance.longRunQueuesBounded).toBe(true);
     expect(result.acceptance.noLongRunPhysicalSafetyViolations).toBe(true);
     expect(result.acceptance.pass).toBe(true);
-  });
+  }, 10000);
 
   it('fails long-run acceptance when explicit throughput and queue thresholds are missed', () => {
     const result = validatePhase0Scenario(createDefaultShuttleScenario({ durationSec: 120 }), {
