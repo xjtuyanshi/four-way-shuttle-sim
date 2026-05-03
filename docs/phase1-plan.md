@@ -12,7 +12,7 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 2. Align the default demo environment with the four-way shuttle reference: orthogonal aisle grid only, storage cells in the middle, right-side infeed, left-side outfeed, and FIFO lane direction.
 3. Add more traffic pressure scenarios that expose queues, waits, and deadlock/livelock candidates.
 4. Improve the demo's user-facing diagnostics so waiting, blocking, and movement are legible without reading logs.
-5. Keep Unreal and Pixel Streaming runtime validation gated until Unreal Engine 5.7.4 and full Xcode are installed.
+5. Keep Unreal and Pixel Streaming validation gated by installed UE/Xcode tools and by whether a real UE scene exists.
 
 ## Completed In This Branch
 

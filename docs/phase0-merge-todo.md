@@ -1,14 +1,14 @@
 # Phase 0 Merge TODO
 
-Scope: continue the `codex/p1-p5-physics-traffic-3d` branch toward merge without adding product features or redesigning architecture.
+Scope: continue the `codex/phase1-validation-traffic-demo` branch toward merge without adding product features or redesigning architecture.
 
 ## Current Branch State
 
 - Repository is public: `https://github.com/xjtuyanshi/four-way-shuttle-sim`
-- Review branch: `codex/p1-p5-physics-traffic-3d`
+- Review branch: `codex/phase1-validation-traffic-demo`
 - Base branch: `main`
 - External review verdict addressed so far: merge after fixes
-- Unreal runtime validation remains blocked until Unreal Engine 5.7.4 and full Xcode are installed
+- Unreal Engine 5.7.4 and full Xcode are installed; bridge compile/headless smoke passed
 
 ## Autonomous Five-Round Pass
 
@@ -40,7 +40,7 @@ Scope: continue the `codex/p1-p5-physics-traffic-3d` branch toward merge without
 - The full GitHub-access review stalled on remote access/truncation, so a second no-network merge-blocker review was run from the final packet.
 - Result: no verified must-fix findings before merge.
 - Verdict: merge now.
-- Unreal runtime and Pixel Streaming remain unverified only because Unreal Engine 5.7.4 and full Xcode are unavailable on this machine.
+- Unreal bridge compile/headless smoke is verified on this machine. Packaged Pixel Streaming soak remains pending until the real visual scene exists.
 
 ## Merge-Blocking TODO
 
@@ -50,7 +50,7 @@ Scope: continue the `codex/p1-p5-physics-traffic-3d` branch toward merge without
 - Keep dashboard stream reducers covered by tests so incremental `vehicleState` / `kpiUpdate` messages refresh the UI.
 - Keep Phase 0 reservation capacities fixed at `1`; defer multi-capacity counting to Phase 1.
 - Keep validation-owned cumulative aggregation for physical/reservation violations.
-- Keep Unreal and Pixel Streaming runtime validation marked blocked on machines without required tools.
+- Keep Unreal and Pixel Streaming runtime validation gated by installed UE/Xcode tools and by whether a real UE scene exists.
 - Do not merge if any of `pnpm typecheck`, `pnpm test`, `pnpm build`, or `pnpm shuttle:validate` fails.
 
 ## Ready-For-Review TODO
@@ -67,5 +67,5 @@ Scope: continue the `codex/p1-p5-physics-traffic-3d` branch toward merge without
 - Positive-control validator fixtures that intentionally trigger each reservation/physical violation code.
 - Additional dashboard stream reducer coverage for out-of-order partial updates, reconnect replacement, and vehicle disappearance semantics.
 - Zero-distance or same-node traffic transition coverage if future route generation can produce current node equal to target node.
-- Real Unreal Engine compile and runtime smoke after installing prerequisites.
-- Pixel Streaming 30-minute 1080p single-user validation.
+- Real Unreal visual scene assembly and actor binding.
+- Pixel Streaming 30-minute 1080p single-user validation after the real scene exists.

@@ -1,15 +1,15 @@
 # Phase 0 Final Merge Handoff
 
-Branch: `codex/p1-p5-physics-traffic-3d`  
-Head: `28d6aeb112440998e8d6a603ab35065b73ccde52`  
+Branch: `codex/phase1-validation-traffic-demo`  
+Head: latest pushed commit on `codex/phase1-validation-traffic-demo`  
 Repository: `https://github.com/xjtuyanshi/four-way-shuttle-sim`
 
 ## Merge Verdict
 
 - Local verdict: ready to merge.
-- ChatGPT Pro final review verdict: merge now.
+- Prior ChatGPT Pro final review verdict: merge now; current UE-readiness re-review is pending.
 - Verified must-fix findings remaining: none.
-- Unreal runtime and Pixel Streaming validation remain blocked by missing Unreal Engine 5.7.4 and full Xcode.
+- Unreal Engine 5.7.4 and full Xcode are now installed; bridge compile/headless smoke passed. Packaged Pixel Streaming soak remains pending.
 
 ## Verification
 
@@ -51,5 +51,5 @@ localhost console errors/warnings none observed
 - Positive-control validator fixtures for every violation code.
 - Additional dashboard stream reducer tests for out-of-order partial updates, reconnect replacement, and vehicle removal semantics.
 - Same-node or zero-distance traffic-transition tests if future route generation can produce them.
-- Unreal Engine compile/runtime smoke after Unreal Engine 5.7.4 and full Xcode are installed.
-- Pixel Streaming 30-minute 1080p single-user validation.
+- Real Unreal scene assembly with visual assets and actor binding.
+- Pixel Streaming 30-minute 1080p single-user validation after the real scene exists.

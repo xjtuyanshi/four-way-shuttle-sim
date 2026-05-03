@@ -11,7 +11,7 @@ This is a source-only Unreal plugin scaffold for Phase 0. It is intentionally th
 
 1. Install Unreal Engine 5.7.4 and full Xcode.
 2. Copy `unreal-bridge` into an Unreal project's `Plugins/ShuttlePhase0Bridge` directory.
-3. Enable the `WebSockets` and `Pixel Streaming` plugins.
+3. Enable the `Pixel Streaming` plugin for runtime streaming. `WebSockets` is linked as an Unreal module by this bridge; it is not enabled as a separate engine plugin in UE 5.7.
 4. Add one `AShuttleVisualTwinActor` per expected shuttle or spawn them from Blueprint.
 5. Use `UShuttleStateSubscriberSubsystem::Connect("ws://localhost:8791/shuttle-ws")`.
 6. Bind `OnVehicleState` to `AShuttleVisualTwinActor::ApplyAuthoritativeState`.
@@ -31,7 +31,7 @@ The Phase 0 actor keeps the yaw sign as published by SimCore. If a future Unreal
 
 ## State Contract
 
-The bridge consumes `connectionRecovered`, `simState`, and `vehicleState` WebSocket messages. It ignores `kpiUpdate` and `taskEvent` for actor movement. For each `vehicles[*]` entry it parses:
+The bridge consumes `connectionRecovered`, `simState`, and `vehicleState` WebSocket messages through Unreal's `WebSockets` module. It ignores `kpiUpdate` and `taskEvent` for actor movement. For each `vehicles[*]` entry it parses:
 
 - pose: `x`, `y`, `z`, `yaw`, `speedMps`
 - work state: `state`, `loaded`, `taskId`, `currentNodeId`, `targetNodeId`, `currentEdgeId`

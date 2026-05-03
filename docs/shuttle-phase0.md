@@ -89,10 +89,11 @@ Local inspection found:
 
 - Host: Mac mini, Apple M4, 10-core CPU, 16 GB memory, Metal 4.
 - Epic Games Launcher: installed under `/Applications`.
-- Unreal Engine 5.7.x: not installed yet; the prerequisite gate must not treat the launcher alone as Unreal-ready.
-- Xcode: `xcodebuild` is blocked because the active developer directory is Command Line Tools only. The App Store Xcode download is pending user handling of the store-region prompt.
+- Unreal Engine 5.7.4: ready under `/Users/Shared/Epic Games/UE_5.7`.
+- Xcode: ready with full Xcode 26.4.1 toolchain.
+- Pixel Streaming: ready for project-level validation.
 
-That means the API/dashboard/SimCore protocol can run now, but actual Pixel Streaming validation remains blocked until Unreal Engine 5.7.4 and full Xcode are installed.
+The Unreal bridge has been compiled inside a temporary UE 5.7 project with Pixel Streaming enabled, and a headless editor commandlet smoke completed with zero bridge errors.
 
 ## Phase 0 Acceptance Mapping
 
@@ -103,15 +104,13 @@ That means the API/dashboard/SimCore protocol can run now, but actual Pixel Stre
 - Validation gate: implemented for same-seed hash stability, seed sweep health, deadlock absence, and physical safety checks.
 - Local 3D preview: implemented in the dashboard as a browser-side visual twin driven by the same SimCore state stream that Unreal consumes.
 - WebSocket reconnect: dashboard reconnects and consumes `connectionRecovered`.
-- Unreal visual twin: source scaffold implemented, pending UE installation and compile.
-- 30-minute Pixel Streaming validation: blocked by missing UE/full Xcode.
+- Unreal visual twin: source scaffold implemented and compile-smoked in UE 5.7.
+- 30-minute Pixel Streaming validation: pending a packaged or Standalone Unreal runtime run.
 
 ## Next Step After Prerequisites
 
-1. Install Unreal Engine 5.7.4 and full Xcode.
-2. Run `pnpm shuttle:prereq` until Unreal and Xcode are both `ready`.
-3. Create a blank UE project and copy `unreal-bridge` into `Plugins/ShuttlePhase0Bridge`.
-4. Enable Pixel Streaming and WebSockets.
-5. Bind placeholder actors to `UShuttleStateSubscriberSubsystem`; each `AShuttleVisualTwinActor` can be preassigned a `VehicleId` and will ignore other vehicle states.
-6. Use the new route, blocker, and timing fields on `FShuttleVisualVehicleState` for Blueprint debug overlays.
-7. Run the 30-minute 1080p single-user Pixel Streaming test and record resource metrics.
+1. Create the real Unreal visual-twin project and copy `unreal-bridge` into `Plugins/ShuttlePhase0Bridge`.
+2. Enable Pixel Streaming for runtime streaming. `WebSockets` is linked as an Unreal module by the bridge.
+3. Bind placeholder actors to `UShuttleStateSubscriberSubsystem`; each `AShuttleVisualTwinActor` can be preassigned a `VehicleId` and will ignore other vehicle states.
+4. Use the route, blocker, and timing fields on `FShuttleVisualVehicleState` for Blueprint debug overlays.
+5. Run the 30-minute 1080p single-user Pixel Streaming test and record resource metrics.

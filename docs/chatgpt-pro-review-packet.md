@@ -18,7 +18,7 @@ This project is a four-way shuttle simulation prototype. The core architecture d
 - The browser 3D view is a local visual twin for fast validation.
 - Unreal / Pixel Streaming should be a visual twin that consumes the same state stream, not the source of truth.
 
-Epic Games Launcher is installed, but Unreal Engine 5.7.x and full Xcode are not installed yet, so Unreal runtime validation is still blocked by environment. The TypeScript API/dashboard/SimCore path is fully testable locally.
+Unreal Engine 5.7.4, full Xcode, and the Pixel Streaming plugin are now available on the local Mac. The TypeScript API/dashboard/SimCore path is fully testable locally, and the Unreal bridge has passed a source-plugin compile plus headless editor commandlet smoke in a temporary UE project.
 
 ## What Changed In This Branch
 
@@ -94,6 +94,7 @@ Primary files:
 - The Unreal subscriber parses route/timing/blocking fields.
 - `AShuttleVisualTwinActor` can filter updates by `VehicleId`.
 - Documentation clarifies that Unreal consumes authoritative state and does not write KPI truth.
+- The bridge plugin metadata now treats `WebSockets` as a linked Unreal module, not as a separate UE 5.7 plugin dependency.
 
 Primary files:
 
@@ -176,10 +177,10 @@ noDeadlocksInSweep=true
 eventLogsPresent=true
 noPhysicalSafetyViolations=true
 noReservationCoverageViolations=true
-totalPphMean=120
+totalPphMean=75
 maxObservedSpeedMps=2
 maxObservedAccelerationMps2=1
-minVehicleSeparationM=3
+minVehicleSeparationM=1.2005
 physicalViolationCount=0
 physicalViolationsByCode all zero
 deadlockCount=0
@@ -200,9 +201,11 @@ Environment gate output:
 
 ```text
 Epic Games Launcher: installed
-Unreal 5.7.4: blocked, no UE_5.7 / UnrealEditor installation found yet
-Xcode: blocked, active developer dir is Command Line Tools only
-Pixel Streaming: pending-unreal
+Unreal 5.7.4: ready, UnrealEditor executable found under /Users/Shared/Epic Games/UE_5.7
+Xcode: ready, full Xcode 26.4.1 toolchain available
+Pixel Streaming: ready
+Unreal bridge compile smoke: passed
+Unreal headless commandlet smoke: passed, CompileAllBlueprints reported 0 blueprint errors / 0 blueprint warnings; UE logged one host Metal SDK warning
 ```
 
 ## Review Request
@@ -246,8 +249,9 @@ Focus areas:
 5. Unreal bridge contract
    - Are the C++ JSON parsing choices safe for nullable fields?
    - Is the coordinate mapping from SimCore meters to Unreal centimeters correct?
-   - What is missing before a real Pixel Streaming smoke test?
-   - Is the environment gate correct now that Epic Launcher can exist without Unreal Engine being installed?
+   - Is the plugin metadata correct for UE 5.7 now that WebSockets is linked as a module rather than enabled as a separate plugin?
+   - What is missing before a packaged or 30-minute Pixel Streaming smoke test?
+   - Is the environment gate strict enough now that Epic Launcher can exist without Unreal Engine being installed?
 
 Please return:
 

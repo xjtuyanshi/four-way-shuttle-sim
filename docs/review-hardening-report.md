@@ -1,6 +1,6 @@
 # Review Hardening Report
 
-Branch: `codex/p1-p5-physics-traffic-3d`  
+Branch: `codex/phase1-validation-traffic-demo`  
 Base commit: `15f185a Add Phase 0 validation gate`  
 Hardening scope: branch commits after the base commit through this report.
 
@@ -150,7 +150,7 @@ The first full public-branch review attempt stalled on remote access/truncation.
 Non-blocking follow-ups were moved to Phase 1:
 
 - multi-capacity reservation semantics after Phase 0
-- Unreal and Pixel Streaming runtime verification when required tools are installed
+- packaged Pixel Streaming runtime soak after the real Unreal scene exists
 - same-node/zero-distance traffic-transition coverage if future route generation can produce it
 - more dashboard stream reducer ordering/removal cases
 - positive-control validator fixtures for every violation code
@@ -198,4 +198,4 @@ Artifacts are intentionally ignored by git:
 
 ## Remaining Gate
 
-Unreal runtime and Pixel Streaming validation remain blocked until Unreal Engine 5.7.4 and full Xcode are installed. The prerequisite gate should remain `blocked` / `pending-unreal` on the current machine.
+Unreal Engine 5.7.4 and full Xcode are now installed. The bridge has passed compile/headless smoke in a temporary UE project; packaged Pixel Streaming soak remains gated on assembling the real visual scene.
