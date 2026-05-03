@@ -10,6 +10,36 @@ class UInstancedStaticMeshComponent;
 class USceneComponent;
 class UShuttleStateSubscriberSubsystem;
 
+struct FShuttleStaticSceneContractForSmoke
+{
+    int32 StorageRows = 0;
+    int32 StorageColumns = 0;
+    int32 StorageCellCount = 0;
+    int32 TrackBedCount = 0;
+    int32 StorageLaneTrackCount = 0;
+    int32 SideAisleTrackCount = 0;
+    int32 CrossAisleTrackCount = 0;
+    int32 InboundConnectorTrackCount = 0;
+    int32 OutboundConnectorTrackCount = 0;
+    int32 ParkingConnectorTrackCount = 0;
+    int32 DiagonalTrackCount = 0;
+    int32 InboundLiftPadCount = 0;
+    int32 OutboundLiftPadCount = 0;
+    int32 ParkingPadCount = 0;
+    float StoragePitchXM = 0.0f;
+    float StoragePitchZM = 0.0f;
+    float StorageBlockMinXM = 0.0f;
+    float StorageBlockMaxXM = 0.0f;
+    float StorageBlockMinZM = 0.0f;
+    float StorageBlockMaxZM = 0.0f;
+    float InboundLiftXM = 0.0f;
+    float OutboundLiftXM = 0.0f;
+    bool bSingleLevel = false;
+    bool bDenseStorageBlock = false;
+    bool bOrthogonalTrackOnly = false;
+    bool bDedicatedLiftPorts = false;
+};
+
 UCLASS()
 class SHUTTLEPHASE0BRIDGE_API AShuttleVisualTwinRuntimeActor : public AActor
 {
@@ -86,6 +116,7 @@ public:
     bool TryGetLastAppliedVehicleStateForSmoke(const FString& VehicleId, FShuttleVisualVehicleState& OutState) const;
     int32 GetVehicleActorCreationCountForSmoke() const;
     int32 GetOwnedDuplicateVehicleActorCountForSmoke() const;
+    FShuttleStaticSceneContractForSmoke GetStaticSceneContractForSmoke() const;
 
 protected:
     UPROPERTY(VisibleAnywhere, Category = "Shuttle|Scene")
@@ -114,12 +145,19 @@ private:
     void HandleBridgeStatus(bool bConnected, const FString& Detail);
 
     AShuttleVisualTwinActor* FindOrSpawnVehicleActor(const FString& VehicleId);
+    void AddStorageCellMeters(float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM);
+    void AddTrackBedMeters(float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM, int32 FShuttleStaticSceneContractForSmoke::*TrackCounter);
+    void AddInboundLiftPadMeters(float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM);
+    void AddOutboundLiftPadMeters(float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM);
+    void AddParkingPadMeters(float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM);
     void AddInstanceMeters(UInstancedStaticMeshComponent* Component, float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM) const;
     void SetInstancedMesh(UInstancedStaticMeshComponent* Component) const;
     void UnbindStateSubscriber(bool bDisconnect);
+    void FinalizeStaticSceneContract();
 
     TWeakObjectPtr<UShuttleStateSubscriberSubsystem> StateSubscriber;
     TMap<FString, TWeakObjectPtr<AShuttleVisualTwinActor>> VehicleActors;
     TMap<FString, FShuttleVisualVehicleState> LastAppliedVehicleStates;
     int32 VehicleActorCreationCount = 0;
+    FShuttleStaticSceneContractForSmoke StaticSceneContract;
 };

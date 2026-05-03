@@ -104,37 +104,51 @@ void AShuttleVisualTwinRuntimeActor::RebuildStaticScene()
     OutboundLiftPads->ClearInstances();
     ParkingPads->ClearInstances();
 
+    StaticSceneContract = FShuttleStaticSceneContractForSmoke();
+    StaticSceneContract.StorageRows = StorageRows;
+    StaticSceneContract.StorageColumns = StorageColumns;
+    StaticSceneContract.StoragePitchXM = StoragePitchXM;
+    StaticSceneContract.StoragePitchZM = StoragePitchZM;
+    StaticSceneContract.StorageBlockMinXM = FirstStorageXM;
+    StaticSceneContract.StorageBlockMaxXM = FirstStorageXM + static_cast<float>(StorageColumns - 1) * StoragePitchXM;
+    StaticSceneContract.StorageBlockMinZM = RowZ(0);
+    StaticSceneContract.StorageBlockMaxZM = RowZ(StorageRows - 1);
+    StaticSceneContract.InboundLiftXM = InboundXM;
+    StaticSceneContract.OutboundLiftXM = OutboundXM;
+    StaticSceneContract.bSingleLevel = true;
+
     for (int32 Row = 0; Row < StorageRows; Row += 1)
     {
         const float Z = RowZ(Row);
-        AddInstanceMeters(TrackBeds, (LeftSpineXM + RightSpineXM) * 0.5f, Z, RightSpineXM - LeftSpineXM, 0.08f, 0.05f);
+        AddTrackBedMeters((LeftSpineXM + RightSpineXM) * 0.5f, Z, RightSpineXM - LeftSpineXM, 0.08f, 0.05f, &FShuttleStaticSceneContractForSmoke::StorageLaneTrackCount);
 
         for (int32 Column = 0; Column < StorageColumns; Column += 1)
         {
             const float X = FirstStorageXM + static_cast<float>(Column) * StoragePitchXM;
-            AddInstanceMeters(StorageCells, X, Z, 1.12f, 1.08f, 0.04f);
+            AddStorageCellMeters(X, Z, 1.12f, 1.08f, 0.04f);
         }
     }
 
-    AddInstanceMeters(TrackBeds, LeftSpineXM, (TopZM + BottomZM) * 0.5f, 0.10f, BottomZM - TopZM, 0.055f);
-    AddInstanceMeters(TrackBeds, RightSpineXM, (TopZM + BottomZM) * 0.5f, 0.10f, BottomZM - TopZM, 0.055f);
-    AddInstanceMeters(TrackBeds, (LeftSpineXM + RightSpineXM) * 0.5f, TopZM, RightSpineXM - LeftSpineXM, 0.10f, 0.055f);
-    AddInstanceMeters(TrackBeds, (LeftSpineXM + RightSpineXM) * 0.5f, BottomZM, RightSpineXM - LeftSpineXM, 0.10f, 0.055f);
+    AddTrackBedMeters(LeftSpineXM, (TopZM + BottomZM) * 0.5f, 0.10f, BottomZM - TopZM, 0.055f, &FShuttleStaticSceneContractForSmoke::SideAisleTrackCount);
+    AddTrackBedMeters(RightSpineXM, (TopZM + BottomZM) * 0.5f, 0.10f, BottomZM - TopZM, 0.055f, &FShuttleStaticSceneContractForSmoke::SideAisleTrackCount);
+    AddTrackBedMeters((LeftSpineXM + RightSpineXM) * 0.5f, TopZM, RightSpineXM - LeftSpineXM, 0.10f, 0.055f, &FShuttleStaticSceneContractForSmoke::CrossAisleTrackCount);
+    AddTrackBedMeters((LeftSpineXM + RightSpineXM) * 0.5f, BottomZM, RightSpineXM - LeftSpineXM, 0.10f, 0.055f, &FShuttleStaticSceneContractForSmoke::CrossAisleTrackCount);
 
-    AddInstanceMeters(TrackBeds, (RightSpineXM + InboundXM) * 0.5f, RowZ(0), InboundXM - RightSpineXM, 0.12f, 0.055f);
-    AddInstanceMeters(TrackBeds, (RightSpineXM + InboundXM) * 0.5f, RowZ(StorageRows - 1), InboundXM - RightSpineXM, 0.12f, 0.055f);
-    AddInstanceMeters(TrackBeds, (OutboundXM + LeftSpineXM) * 0.5f, RowZ(0), LeftSpineXM - OutboundXM, 0.12f, 0.055f);
-    AddInstanceMeters(TrackBeds, (OutboundXM + LeftSpineXM) * 0.5f, RowZ(StorageRows - 1), LeftSpineXM - OutboundXM, 0.12f, 0.055f);
+    AddTrackBedMeters((RightSpineXM + InboundXM) * 0.5f, RowZ(0), InboundXM - RightSpineXM, 0.12f, 0.055f, &FShuttleStaticSceneContractForSmoke::InboundConnectorTrackCount);
+    AddTrackBedMeters((RightSpineXM + InboundXM) * 0.5f, RowZ(StorageRows - 1), InboundXM - RightSpineXM, 0.12f, 0.055f, &FShuttleStaticSceneContractForSmoke::InboundConnectorTrackCount);
+    AddTrackBedMeters((OutboundXM + LeftSpineXM) * 0.5f, RowZ(0), LeftSpineXM - OutboundXM, 0.12f, 0.055f, &FShuttleStaticSceneContractForSmoke::OutboundConnectorTrackCount);
+    AddTrackBedMeters((OutboundXM + LeftSpineXM) * 0.5f, RowZ(StorageRows - 1), LeftSpineXM - OutboundXM, 0.12f, 0.055f, &FShuttleStaticSceneContractForSmoke::OutboundConnectorTrackCount);
 
-    AddInstanceMeters(TrackBeds, RightSpineXM, (ParkingTopZM + TopZM) * 0.5f, 0.12f, TopZM - ParkingTopZM, 0.055f);
-    AddInstanceMeters(TrackBeds, RightSpineXM, (BottomZM + ParkingBottomZM) * 0.5f, 0.12f, ParkingBottomZM - BottomZM, 0.055f);
+    AddTrackBedMeters(RightSpineXM, (ParkingTopZM + TopZM) * 0.5f, 0.12f, TopZM - ParkingTopZM, 0.055f, &FShuttleStaticSceneContractForSmoke::ParkingConnectorTrackCount);
+    AddTrackBedMeters(RightSpineXM, (BottomZM + ParkingBottomZM) * 0.5f, 0.12f, ParkingBottomZM - BottomZM, 0.055f, &FShuttleStaticSceneContractForSmoke::ParkingConnectorTrackCount);
 
-    AddInstanceMeters(InboundLiftPads, InboundXM, RowZ(0), 1.5f, 1.15f, 0.08f);
-    AddInstanceMeters(InboundLiftPads, InboundXM, RowZ(StorageRows - 1), 1.5f, 1.15f, 0.08f);
-    AddInstanceMeters(OutboundLiftPads, OutboundXM, RowZ(0), 1.5f, 1.15f, 0.08f);
-    AddInstanceMeters(OutboundLiftPads, OutboundXM, RowZ(StorageRows - 1), 1.5f, 1.15f, 0.08f);
-    AddInstanceMeters(ParkingPads, RightSpineXM, ParkingTopZM, 1.5f, 1.15f, 0.08f);
-    AddInstanceMeters(ParkingPads, RightSpineXM, ParkingBottomZM, 1.5f, 1.15f, 0.08f);
+    AddInboundLiftPadMeters(InboundXM, RowZ(0), 1.5f, 1.15f, 0.08f);
+    AddInboundLiftPadMeters(InboundXM, RowZ(StorageRows - 1), 1.5f, 1.15f, 0.08f);
+    AddOutboundLiftPadMeters(OutboundXM, RowZ(0), 1.5f, 1.15f, 0.08f);
+    AddOutboundLiftPadMeters(OutboundXM, RowZ(StorageRows - 1), 1.5f, 1.15f, 0.08f);
+    AddParkingPadMeters(RightSpineXM, ParkingTopZM, 1.5f, 1.15f, 0.08f);
+    AddParkingPadMeters(RightSpineXM, ParkingBottomZM, 1.5f, 1.15f, 0.08f);
+    FinalizeStaticSceneContract();
 }
 
 void AShuttleVisualTwinRuntimeActor::ConnectToBridge()
@@ -288,6 +302,11 @@ int32 AShuttleVisualTwinRuntimeActor::GetOwnedDuplicateVehicleActorCountForSmoke
     return DuplicateCount;
 }
 
+FShuttleStaticSceneContractForSmoke AShuttleVisualTwinRuntimeActor::GetStaticSceneContractForSmoke() const
+{
+    return StaticSceneContract;
+}
+
 void AShuttleVisualTwinRuntimeActor::HandleBridgeStatus(bool bConnected, const FString& Detail)
 {
     bBridgeConnected = bConnected;
@@ -344,6 +363,47 @@ AShuttleVisualTwinActor* AShuttleVisualTwinRuntimeActor::FindOrSpawnVehicleActor
     return NewActor;
 }
 
+void AShuttleVisualTwinRuntimeActor::AddStorageCellMeters(float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM)
+{
+    AddInstanceMeters(StorageCells, SimX, SimZ, SizeXM, SizeZM, HeightM);
+    StaticSceneContract.StorageCellCount += 1;
+}
+
+void AShuttleVisualTwinRuntimeActor::AddTrackBedMeters(
+    float SimX,
+    float SimZ,
+    float SizeXM,
+    float SizeZM,
+    float HeightM,
+    int32 FShuttleStaticSceneContractForSmoke::*TrackCounter
+)
+{
+    AddInstanceMeters(TrackBeds, SimX, SimZ, SizeXM, SizeZM, HeightM);
+    StaticSceneContract.TrackBedCount += 1;
+    if (TrackCounter)
+    {
+        StaticSceneContract.*TrackCounter += 1;
+    }
+}
+
+void AShuttleVisualTwinRuntimeActor::AddInboundLiftPadMeters(float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM)
+{
+    AddInstanceMeters(InboundLiftPads, SimX, SimZ, SizeXM, SizeZM, HeightM);
+    StaticSceneContract.InboundLiftPadCount += 1;
+}
+
+void AShuttleVisualTwinRuntimeActor::AddOutboundLiftPadMeters(float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM)
+{
+    AddInstanceMeters(OutboundLiftPads, SimX, SimZ, SizeXM, SizeZM, HeightM);
+    StaticSceneContract.OutboundLiftPadCount += 1;
+}
+
+void AShuttleVisualTwinRuntimeActor::AddParkingPadMeters(float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM)
+{
+    AddInstanceMeters(ParkingPads, SimX, SimZ, SizeXM, SizeZM, HeightM);
+    StaticSceneContract.ParkingPadCount += 1;
+}
+
 void AShuttleVisualTwinRuntimeActor::AddInstanceMeters(
     UInstancedStaticMeshComponent* Component,
     float SimX,
@@ -361,6 +421,33 @@ void AShuttleVisualTwinRuntimeActor::AddInstanceMeters(
     const FVector LocationCm(SimX * 100.0f, SimZ * 100.0f, HeightM * 50.0f);
     const FVector Scale(SizeXM, SizeZM, HeightM);
     Component->AddInstance(FTransform(FRotator::ZeroRotator, LocationCm, Scale));
+}
+
+void AShuttleVisualTwinRuntimeActor::FinalizeStaticSceneContract()
+{
+    const int32 ExpectedStorageCells = StaticSceneContract.StorageRows * StaticSceneContract.StorageColumns;
+    StaticSceneContract.bDenseStorageBlock =
+        StaticSceneContract.StorageRows == StorageRows &&
+        StaticSceneContract.StorageColumns == StorageColumns &&
+        StaticSceneContract.StorageCellCount == ExpectedStorageCells &&
+        StaticSceneContract.StoragePitchXM > 0.0f &&
+        StaticSceneContract.StoragePitchZM > 0.0f;
+
+    StaticSceneContract.bOrthogonalTrackOnly =
+        StaticSceneContract.DiagonalTrackCount == 0 &&
+        StaticSceneContract.TrackBedCount ==
+            StaticSceneContract.StorageLaneTrackCount +
+            StaticSceneContract.SideAisleTrackCount +
+            StaticSceneContract.CrossAisleTrackCount +
+            StaticSceneContract.InboundConnectorTrackCount +
+            StaticSceneContract.OutboundConnectorTrackCount +
+            StaticSceneContract.ParkingConnectorTrackCount;
+
+    StaticSceneContract.bDedicatedLiftPorts =
+        StaticSceneContract.InboundLiftPadCount == 2 &&
+        StaticSceneContract.OutboundLiftPadCount == 2 &&
+        StaticSceneContract.InboundLiftXM > StaticSceneContract.StorageBlockMaxXM &&
+        StaticSceneContract.OutboundLiftXM < StaticSceneContract.StorageBlockMinXM;
 }
 
 void AShuttleVisualTwinRuntimeActor::SetInstancedMesh(UInstancedStaticMeshComponent* Component) const

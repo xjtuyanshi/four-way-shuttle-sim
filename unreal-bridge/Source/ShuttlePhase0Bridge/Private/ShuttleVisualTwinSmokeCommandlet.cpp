@@ -1,7 +1,14 @@
 #include "ShuttleVisualTwinSmokeCommandlet.h"
 
+#include "Dom/JsonObject.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "HAL/FileManager.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Parse.h"
+#include "Misc/Paths.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 #include "ShuttleVisualTwinActor.h"
 #include "ShuttleVisualTwinRuntimeActor.h"
 
@@ -12,6 +19,87 @@ namespace
 bool IsNearlyEqual(const FVector& Actual, const FVector& Expected, const float ToleranceCm = 0.1f)
 {
     return Actual.Equals(Expected, ToleranceCm);
+}
+
+bool StaticSceneContractPass(const FShuttleStaticSceneContractForSmoke& Contract)
+{
+    return
+        Contract.bSingleLevel &&
+        Contract.bDenseStorageBlock &&
+        Contract.bOrthogonalTrackOnly &&
+        Contract.bDedicatedLiftPorts &&
+        Contract.StorageRows == 6 &&
+        Contract.StorageColumns == 8 &&
+        Contract.StorageCellCount == 48 &&
+        Contract.TrackBedCount == 16 &&
+        Contract.StorageLaneTrackCount == 6 &&
+        Contract.SideAisleTrackCount == 2 &&
+        Contract.CrossAisleTrackCount == 2 &&
+        Contract.InboundConnectorTrackCount == 2 &&
+        Contract.OutboundConnectorTrackCount == 2 &&
+        Contract.ParkingConnectorTrackCount == 2 &&
+        Contract.DiagonalTrackCount == 0 &&
+        Contract.InboundLiftPadCount == 2 &&
+        Contract.OutboundLiftPadCount == 2 &&
+        Contract.ParkingPadCount == 2;
+}
+
+TSharedRef<FJsonObject> StaticSceneContractToJson(const FShuttleStaticSceneContractForSmoke& Contract, const bool bPass)
+{
+    TSharedRef<FJsonObject> Summary = MakeShared<FJsonObject>();
+    Summary->SetStringField(TEXT("schemaVersion"), TEXT("shuttle.unrealStaticScene.v1"));
+    Summary->SetBoolField(TEXT("pass"), bPass);
+    Summary->SetNumberField(TEXT("storageRows"), Contract.StorageRows);
+    Summary->SetNumberField(TEXT("storageColumns"), Contract.StorageColumns);
+    Summary->SetNumberField(TEXT("storageCellCount"), Contract.StorageCellCount);
+    Summary->SetNumberField(TEXT("trackBedCount"), Contract.TrackBedCount);
+    Summary->SetNumberField(TEXT("storageLaneTrackCount"), Contract.StorageLaneTrackCount);
+    Summary->SetNumberField(TEXT("sideAisleTrackCount"), Contract.SideAisleTrackCount);
+    Summary->SetNumberField(TEXT("crossAisleTrackCount"), Contract.CrossAisleTrackCount);
+    Summary->SetNumberField(TEXT("inboundConnectorTrackCount"), Contract.InboundConnectorTrackCount);
+    Summary->SetNumberField(TEXT("outboundConnectorTrackCount"), Contract.OutboundConnectorTrackCount);
+    Summary->SetNumberField(TEXT("parkingConnectorTrackCount"), Contract.ParkingConnectorTrackCount);
+    Summary->SetNumberField(TEXT("diagonalTrackCount"), Contract.DiagonalTrackCount);
+    Summary->SetNumberField(TEXT("inboundLiftPadCount"), Contract.InboundLiftPadCount);
+    Summary->SetNumberField(TEXT("outboundLiftPadCount"), Contract.OutboundLiftPadCount);
+    Summary->SetNumberField(TEXT("parkingPadCount"), Contract.ParkingPadCount);
+    Summary->SetNumberField(TEXT("storagePitchXM"), Contract.StoragePitchXM);
+    Summary->SetNumberField(TEXT("storagePitchZM"), Contract.StoragePitchZM);
+    Summary->SetNumberField(TEXT("storageBlockMinXM"), Contract.StorageBlockMinXM);
+    Summary->SetNumberField(TEXT("storageBlockMaxXM"), Contract.StorageBlockMaxXM);
+    Summary->SetNumberField(TEXT("storageBlockMinZM"), Contract.StorageBlockMinZM);
+    Summary->SetNumberField(TEXT("storageBlockMaxZM"), Contract.StorageBlockMaxZM);
+    Summary->SetNumberField(TEXT("inboundLiftXM"), Contract.InboundLiftXM);
+    Summary->SetNumberField(TEXT("outboundLiftXM"), Contract.OutboundLiftXM);
+    Summary->SetBoolField(TEXT("singleLevel"), Contract.bSingleLevel);
+    Summary->SetBoolField(TEXT("denseStorageBlock"), Contract.bDenseStorageBlock);
+    Summary->SetBoolField(TEXT("orthogonalTrackOnly"), Contract.bOrthogonalTrackOnly);
+    Summary->SetBoolField(TEXT("dedicatedLiftPorts"), Contract.bDedicatedLiftPorts);
+    Summary->SetStringField(TEXT("inboundSide"), Contract.InboundLiftXM > Contract.StorageBlockMaxXM ? TEXT("right") : TEXT("unknown"));
+    Summary->SetStringField(TEXT("outboundSide"), Contract.OutboundLiftXM < Contract.StorageBlockMinXM ? TEXT("left") : TEXT("unknown"));
+    return Summary;
+}
+
+bool WriteJsonSummary(const FString& SummaryPath, const TSharedRef<FJsonObject>& Summary)
+{
+    if (SummaryPath.IsEmpty())
+    {
+        return true;
+    }
+
+    FString Output;
+    const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Output);
+    if (!FJsonSerializer::Serialize(Summary, Writer))
+    {
+        return false;
+    }
+
+    const FString Directory = FPaths::GetPath(SummaryPath);
+    if (!Directory.IsEmpty())
+    {
+        IFileManager::Get().MakeDirectory(*Directory, true);
+    }
+    return FFileHelper::SaveStringToFile(Output, *SummaryPath);
 }
 }
 
@@ -30,6 +118,9 @@ int32 UShuttleVisualTwinSmokeCommandlet::Main(const FString& Params)
         UE_LOG(LogShuttleVisualTwinSmoke, Error, TEXT("Missing engine."));
         return 1;
     }
+
+    FString StaticSceneSummaryPath;
+    FParse::Value(*Params, TEXT("ShuttleStaticSceneSummaryPath="), StaticSceneSummaryPath);
 
     UWorld::InitializationValues InitializationValues;
     InitializationValues
@@ -71,21 +162,36 @@ int32 UShuttleVisualTwinSmokeCommandlet::Main(const FString& Params)
         const int32 InboundLiftPads = RuntimeActor->GetInboundLiftPadInstanceCount();
         const int32 OutboundLiftPads = RuntimeActor->GetOutboundLiftPadInstanceCount();
         const int32 ParkingPads = RuntimeActor->GetParkingPadInstanceCount();
+        const FShuttleStaticSceneContractForSmoke StaticSceneContract = RuntimeActor->GetStaticSceneContractForSmoke();
+        const bool bStaticScenePass = StaticSceneContractPass(StaticSceneContract);
 
         UE_LOG(
             LogShuttleVisualTwinSmoke,
             Display,
-            TEXT("Static scene counts: storage=%d track=%d inboundLift=%d outboundLift=%d parking=%d"),
+            TEXT("Static scene counts: pass=%s storage=%d track=%d inboundLift=%d outboundLift=%d parking=%d rows=%d columns=%d dense=%s orthogonal=%s dedicatedLift=%s summary='%s'"),
+            bStaticScenePass ? TEXT("true") : TEXT("false"),
             StorageCells,
             TrackBeds,
             InboundLiftPads,
             OutboundLiftPads,
-            ParkingPads
+            ParkingPads,
+            StaticSceneContract.StorageRows,
+            StaticSceneContract.StorageColumns,
+            StaticSceneContract.bDenseStorageBlock ? TEXT("true") : TEXT("false"),
+            StaticSceneContract.bOrthogonalTrackOnly ? TEXT("true") : TEXT("false"),
+            StaticSceneContract.bDedicatedLiftPorts ? TEXT("true") : TEXT("false"),
+            *StaticSceneSummaryPath
         );
 
-        if (StorageCells != 48 || TrackBeds != 16 || InboundLiftPads != 2 || OutboundLiftPads != 2 || ParkingPads != 2)
+        if (!WriteJsonSummary(StaticSceneSummaryPath, StaticSceneContractToJson(StaticSceneContract, bStaticScenePass)))
         {
-            UE_LOG(LogShuttleVisualTwinSmoke, Error, TEXT("Unexpected static scene instance counts."));
+            UE_LOG(LogShuttleVisualTwinSmoke, Error, TEXT("Failed to write static scene summary to %s"), *StaticSceneSummaryPath);
+            Result = 1;
+        }
+
+        if (!bStaticScenePass)
+        {
+            UE_LOG(LogShuttleVisualTwinSmoke, Error, TEXT("Unexpected static scene contract."));
             Result = 1;
         }
 
