@@ -68,41 +68,15 @@ void AShuttleVisualTwinRuntimeActor::BeginPlay()
     Super::BeginPlay();
     RebuildStaticScene();
 
-    if (!bAutoConnect)
+    if (bAutoConnect)
     {
-        return;
+        ConnectToBridge();
     }
-
-    UGameInstance* GameInstance = GetGameInstance();
-    if (!GameInstance)
-    {
-        HandleBridgeStatus(false, TEXT("missing game instance"));
-        return;
-    }
-
-    StateSubscriber = GameInstance->GetSubsystem<UShuttleStateSubscriberSubsystem>();
-    if (!StateSubscriber.IsValid())
-    {
-        HandleBridgeStatus(false, TEXT("missing shuttle state subscriber subsystem"));
-        return;
-    }
-
-    StateSubscriber->OnVehicleState.AddDynamic(this, &AShuttleVisualTwinRuntimeActor::HandleVehicleState);
-    StateSubscriber->OnBridgeStatus.AddDynamic(this, &AShuttleVisualTwinRuntimeActor::HandleBridgeStatus);
-    StateSubscriber->Connect(WebSocketUrl);
 }
 
 void AShuttleVisualTwinRuntimeActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-    if (StateSubscriber.IsValid())
-    {
-        StateSubscriber->OnVehicleState.RemoveDynamic(this, &AShuttleVisualTwinRuntimeActor::HandleVehicleState);
-        StateSubscriber->OnBridgeStatus.RemoveDynamic(this, &AShuttleVisualTwinRuntimeActor::HandleBridgeStatus);
-        if (bDisconnectOnEndPlay)
-        {
-            StateSubscriber->Disconnect();
-        }
-    }
+    UnbindStateSubscriber(bDisconnectOnEndPlay);
     for (const TPair<FString, TWeakObjectPtr<AShuttleVisualTwinActor>>& Entry : VehicleActors)
     {
         AShuttleVisualTwinActor* SpawnedActor = Entry.Value.Get();
@@ -159,6 +133,37 @@ void AShuttleVisualTwinRuntimeActor::RebuildStaticScene()
     AddInstanceMeters(OutboundLiftPads, OutboundXM, RowZ(StorageRows - 1), 1.5f, 1.15f, 0.08f);
     AddInstanceMeters(ParkingPads, RightSpineXM, ParkingTopZM, 1.5f, 1.15f, 0.08f);
     AddInstanceMeters(ParkingPads, RightSpineXM, ParkingBottomZM, 1.5f, 1.15f, 0.08f);
+}
+
+void AShuttleVisualTwinRuntimeActor::ConnectToBridge()
+{
+    UnbindStateSubscriber(false);
+
+    UGameInstance* GameInstance = GetGameInstance();
+    if (!GameInstance)
+    {
+        HandleBridgeStatus(false, TEXT("missing game instance"));
+        return;
+    }
+
+    UShuttleStateSubscriberSubsystem* NextStateSubscriber = GameInstance->GetSubsystem<UShuttleStateSubscriberSubsystem>();
+    if (!NextStateSubscriber)
+    {
+        HandleBridgeStatus(false, TEXT("missing shuttle state subscriber subsystem"));
+        return;
+    }
+
+    StateSubscriber = NextStateSubscriber;
+    StateSubscriber->OnVehicleState.RemoveDynamic(this, &AShuttleVisualTwinRuntimeActor::HandleVehicleState);
+    StateSubscriber->OnBridgeStatus.RemoveDynamic(this, &AShuttleVisualTwinRuntimeActor::HandleBridgeStatus);
+    StateSubscriber->OnVehicleState.AddDynamic(this, &AShuttleVisualTwinRuntimeActor::HandleVehicleState);
+    StateSubscriber->OnBridgeStatus.AddDynamic(this, &AShuttleVisualTwinRuntimeActor::HandleBridgeStatus);
+    StateSubscriber->Connect(WebSocketUrl);
+}
+
+void AShuttleVisualTwinRuntimeActor::DisconnectFromBridge()
+{
+    UnbindStateSubscriber(true);
 }
 
 int32 AShuttleVisualTwinRuntimeActor::GetStorageCellInstanceCount() const
@@ -309,4 +314,22 @@ void AShuttleVisualTwinRuntimeActor::SetInstancedMesh(UInstancedStaticMeshCompon
         Component->SetStaticMesh(CubeMesh.Object);
     }
     Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+}
+
+void AShuttleVisualTwinRuntimeActor::UnbindStateSubscriber(const bool bDisconnect)
+{
+    if (!StateSubscriber.IsValid())
+    {
+        StateSubscriber.Reset();
+        return;
+    }
+
+    StateSubscriber->OnVehicleState.RemoveDynamic(this, &AShuttleVisualTwinRuntimeActor::HandleVehicleState);
+    StateSubscriber->OnBridgeStatus.RemoveDynamic(this, &AShuttleVisualTwinRuntimeActor::HandleBridgeStatus);
+    if (bDisconnect)
+    {
+        StateSubscriber->Disconnect();
+        bBridgeConnected = false;
+    }
+    StateSubscriber.Reset();
 }

@@ -46,6 +46,12 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Shuttle|Runtime")
     void RebuildStaticScene();
 
+    UFUNCTION(BlueprintCallable, Category = "Shuttle|Runtime")
+    void ConnectToBridge();
+
+    UFUNCTION(BlueprintCallable, Category = "Shuttle|Runtime")
+    void DisconnectFromBridge();
+
     UFUNCTION(BlueprintPure, Category = "Shuttle|Runtime")
     int32 GetStorageCellInstanceCount() const;
 
@@ -99,6 +105,7 @@ private:
     AShuttleVisualTwinActor* FindOrSpawnVehicleActor(const FString& VehicleId);
     void AddInstanceMeters(UInstancedStaticMeshComponent* Component, float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM) const;
     void SetInstancedMesh(UInstancedStaticMeshComponent* Component) const;
+    void UnbindStateSubscriber(bool bDisconnect);
 
     TWeakObjectPtr<UShuttleStateSubscriberSubsystem> StateSubscriber;
     TMap<FString, TWeakObjectPtr<AShuttleVisualTwinActor>> VehicleActors;

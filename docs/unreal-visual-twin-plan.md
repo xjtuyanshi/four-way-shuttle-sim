@@ -47,6 +47,8 @@ Dynamic scene:
 
 For the default Phase 0 scene, place `AShuttleVisualTwinRuntimeActor` at world origin instead of wiring these steps manually. It remains a visual subscriber only; it does not create tasks, reservations, KPI truth, or dispatch decisions.
 
+`AShuttleVisualTwinRuntimeActor` exposes `ConnectToBridge` and `DisconnectFromBridge` so a placed runtime actor can be started explicitly from a level blueprint, automated smoke harness, or later Pixel Streaming startup flow. `BeginPlay` still calls `ConnectToBridge` when `bAutoConnect=true`.
+
 ## Coordinate Contract
 
 SimCore units are meters. Unreal units are centimeters.
@@ -65,6 +67,7 @@ Before Pixel Streaming soak:
 - `pnpm unreal:setup`
 - `pnpm unreal:build`
 - `pnpm unreal:smoke`
+- `pnpm shuttle:ws-smoke`
 - `pnpm typecheck`
 - `pnpm test`
 - `pnpm build`
@@ -75,6 +78,7 @@ Before Pixel Streaming soak:
 - Long-run validation must meet explicit thresholds reported in `validation.longRun.thresholds`, not only positive throughput.
 - Unreal setup/smoke must print machine-readable readiness diagnostics showing the generated project path, engine association, enabled `ShuttlePhase0Bridge` and `PixelStreaming` plugins, copied bridge source files, and compiled bridge binary.
 - The UE smoke commandlet must instantiate `AShuttleVisualTwinRuntimeActor` headlessly, verify the default scene scaffold counts, and exercise the synthetic vehicle binding path: one actor spawned per `VehicleId`, subsequent updates reuse the actor, SimCore-to-Unreal coordinate/yaw conversion holds, and carried-pallet visibility follows `loaded`.
+- The WebSocket smoke must start the API on an isolated local port, connect to `/shuttle-ws`, validate `connectionRecovered`, `simState`, `vehicleState`, and `kpiUpdate`, verify required vehicle pose/load fields, set 4x playback speed, and prove streamed simulation time advances.
 
 After the real UE scene exists:
 
@@ -85,7 +89,7 @@ After the real UE scene exists:
 - Pixel Streaming runs a 1080p single-user 30-minute soak.
 - Record CPU/GPU/memory/network observations and any stream disconnects.
 
-Current local smoke status: `pnpm unreal:setup` and `pnpm unreal:smoke` generate the UE project, verify bridge and Pixel Streaming plugin enablement, verify copied bridge source coverage, build `ShuttleVisualTwinEditor`, verify the compiled bridge plugin binary, run the `ShuttleVisualTwinSmoke` commandlet against the runtime actor scene scaffold, load the `ShuttlePhase0Bridge` plugin, and complete `CompileAllBlueprints` with 0 errors and 0 blueprint warnings. This proves local UE bridge/runtime-scaffold readiness, not the final physical scene or Pixel Streaming soak. UE currently logs one host-toolchain warning: `Missing Mac Metal toolchain (macos SDK not found)`.
+Current local smoke status: `pnpm unreal:setup` and `pnpm unreal:smoke` generate the UE project, verify bridge and Pixel Streaming plugin enablement, verify copied bridge source coverage, build `ShuttleVisualTwinEditor`, verify the compiled bridge plugin binary, run the `ShuttleVisualTwinSmoke` commandlet against the runtime actor scene scaffold, load the `ShuttlePhase0Bridge` plugin, and complete `CompileAllBlueprints` with 0 errors and 0 blueprint warnings. `pnpm shuttle:ws-smoke` separately proves the live API stream contract and 4x playback control. Together these prove local UE bridge/runtime-scaffold readiness plus live stream readiness, not the final physical scene or Pixel Streaming soak. UE currently logs one host-toolchain warning: `Missing Mac Metal toolchain (macos SDK not found)`.
 
 ## Calibration Inputs Needed
 
