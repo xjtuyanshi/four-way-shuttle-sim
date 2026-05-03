@@ -39,7 +39,7 @@ The bridge consumes `connectionRecovered`, `simState`, and `vehicleState` WebSoc
 - route timing: `routeNodeIds`, `routeIndex`, `legRemainingM`, `legElapsedSec`, `legTravelSec`, `phaseRemainingSec`
 - blocking diagnostics: `waitReason`, `blockingReservationId`, `blockingVehicleId`
 
-For `connectionRecovered.state.loads` and `simState.state.loads`, the bridge also parses `loads[*]` and broadcasts load snapshots. `AShuttleVisualTwinRuntimeActor` renders non-carried loads as pallet placeholders at known storage cells or lift pads. Carried loads remain attached to the vehicle placeholder through the existing `loaded` flag.
+For `connectionRecovered.state.loads` and `simState.state.loads`, the bridge also parses `loads[*]` and broadcasts load snapshots. `AShuttleVisualTwinRuntimeActor` renders non-carried loads as pallet placeholders at known storage cells or lift pads. Carried loads remain attached to the vehicle placeholder through the existing `loaded` flag. Older or partial streams that omit `state.loads` are treated as `state.loads unavailable` instead of a bridge failure, so vehicle visualization can remain healthy while load visualization is absent.
 
 `AShuttleVisualTwinActor` filters by `VehicleId` when it is preassigned, so multiple actors can safely bind to the same `OnVehicleState` multicast delegate.
 
@@ -57,4 +57,8 @@ SimCore remains authoritative for event logs, KPIs, task assignment, reservation
 - visual detail counts: 1 floor plate, 192 storage rail segments, 63 rack posts, 24 transfer rollers, and 4 black-box lift housings
 - stable IDs, categories, coordinates, orientations, and sizes for every storage cell, track bed, lift pad, and parking pad
 
-It also applies synthetic vehicle and load states through the runtime actor, verifies that exactly one visible default vehicle actor is spawned and reused, checks SimCore-to-Unreal position/yaw conversion, checks that the carried-pallet placeholder follows the streamed `loaded` flag, and checks that stored/waiting/delivered loads render as static pallet placeholders while carried loads do not duplicate. This proves the default actor binding path in headless UE. It does not prove packaged runtime or Pixel Streaming soak readiness.
+It also applies synthetic vehicle and load states through the runtime actor, verifies that exactly one visible default vehicle actor is spawned and reused, checks SimCore-to-Unreal position/yaw conversion, checks that the carried-pallet placeholder follows the streamed `loaded` flag, checks that stored/waiting/delivered loads render as static pallet placeholders while carried loads do not duplicate, and exercises a waiting -> stored -> carried -> delivered lifecycle for one pallet placeholder. The smoke script writes JSON static-scene and live-bridge summaries under `/tmp` during each run for visual-review evidence. This proves the default actor binding path in headless UE. It does not prove packaged runtime or Pixel Streaming soak readiness.
+
+## Placeholder Dimensions
+
+The generated geometry uses deterministic placeholder dimensions so smoke tests can compare Unreal and SimCore contracts. These values are not a mechanical release. Before using the visual twin for equipment or layout approval, replace or calibrate them with CAD/vendor inputs for pallet length/width/height, shuttle footprint and lift envelope, storage pitch, rail gauge, transfer-roller spacing, rack upright/baseplate envelope, and lift/conveyor pad envelope.

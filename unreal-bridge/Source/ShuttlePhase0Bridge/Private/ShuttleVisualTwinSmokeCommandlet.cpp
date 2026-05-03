@@ -182,6 +182,25 @@ bool WriteJsonSummary(const FString& SummaryPath, const TSharedRef<FJsonObject>&
     }
     return FFileHelper::SaveStringToFile(Output, *SummaryPath);
 }
+
+bool ExpectLoadPalletCount(AShuttleVisualTwinRuntimeActor* RuntimeActor, const int32 ExpectedCount, const TCHAR* Context)
+{
+    const int32 ActualCount = RuntimeActor ? RuntimeActor->GetLoadPalletInstanceCount() : -1;
+    if (ActualCount == ExpectedCount)
+    {
+        return true;
+    }
+
+    UE_LOG(
+        LogShuttleVisualTwinSmoke,
+        Error,
+        TEXT("%s expected %d visible static load pallets, got %d."),
+        Context,
+        ExpectedCount,
+        ActualCount
+    );
+    return false;
+}
 }
 
 UShuttleVisualTwinSmokeCommandlet::UShuttleVisualTwinSmokeCommandlet()
@@ -389,9 +408,67 @@ int32 UShuttleVisualTwinSmokeCommandlet::Main(const FString& Params)
         SyntheticLoadStates.Add(CarriedLoad);
 
         RuntimeActor->ApplyLoadStates(SyntheticLoadStates);
-        if (RuntimeActor->GetLoadPalletInstanceCount() != 3)
+        if (!ExpectLoadPalletCount(RuntimeActor, 3, TEXT("Synthetic mixed load-state application")))
         {
-            UE_LOG(LogShuttleVisualTwinSmoke, Error, TEXT("Expected three visible static load pallets after synthetic load-state application, got %d."), RuntimeActor->GetLoadPalletInstanceCount());
+            Result = 1;
+        }
+
+        TArray<FShuttleVisualLoadState> LifecycleLoadStates;
+        FShuttleVisualLoadState LifecycleLoad;
+        LifecycleLoad.Id = TEXT("load-lifecycle");
+        LifecycleLoad.WeightKg = 1000.0f;
+
+        LifecycleLoad.State = EShuttleVisualLoadStatus::Waiting;
+        LifecycleLoad.NodeId = TEXT("inbound-lift-a");
+        LifecycleLoad.VehicleId.Reset();
+        LifecycleLoadStates = {LifecycleLoad};
+        RuntimeActor->ApplyLoadStates(LifecycleLoadStates);
+        if (!ExpectLoadPalletCount(RuntimeActor, 1, TEXT("Waiting load lifecycle state")))
+        {
+            Result = 1;
+        }
+
+        LifecycleLoad.State = EShuttleVisualLoadStatus::Stored;
+        LifecycleLoad.NodeId = TEXT("storage-r01-c01");
+        LifecycleLoad.VehicleId.Reset();
+        LifecycleLoadStates = {LifecycleLoad};
+        RuntimeActor->ApplyLoadStates(LifecycleLoadStates);
+        if (!ExpectLoadPalletCount(RuntimeActor, 1, TEXT("Stored load lifecycle state")))
+        {
+            Result = 1;
+        }
+
+        LoadedVehicleState.bLoaded = true;
+        RuntimeActor->ApplyVehicleState(LoadedVehicleState);
+        LifecycleLoad.State = EShuttleVisualLoadStatus::Carried;
+        LifecycleLoad.NodeId = TEXT("storage-r01-c01");
+        LifecycleLoad.VehicleId = TEXT("SH-01");
+        LifecycleLoadStates = {LifecycleLoad};
+        RuntimeActor->ApplyLoadStates(LifecycleLoadStates);
+        if (!ExpectLoadPalletCount(RuntimeActor, 0, TEXT("Carried load lifecycle state")))
+        {
+            Result = 1;
+        }
+        else if (!VehicleActor->IsCarriedPalletVisibleForSmoke())
+        {
+            UE_LOG(LogShuttleVisualTwinSmoke, Error, TEXT("Carried load lifecycle state should remain visible only on the shuttle actor."));
+            Result = 1;
+        }
+
+        LoadedVehicleState.bLoaded = false;
+        RuntimeActor->ApplyVehicleState(LoadedVehicleState);
+        LifecycleLoad.State = EShuttleVisualLoadStatus::Delivered;
+        LifecycleLoad.NodeId = TEXT("outbound-lift-b");
+        LifecycleLoad.VehicleId.Reset();
+        LifecycleLoadStates = {LifecycleLoad};
+        RuntimeActor->ApplyLoadStates(LifecycleLoadStates);
+        if (!ExpectLoadPalletCount(RuntimeActor, 1, TEXT("Delivered load lifecycle state")))
+        {
+            Result = 1;
+        }
+        else if (VehicleActor->IsCarriedPalletVisibleForSmoke())
+        {
+            UE_LOG(LogShuttleVisualTwinSmoke, Error, TEXT("Delivered load lifecycle state should hide the shuttle carried-pallet placeholder."));
             Result = 1;
         }
     }

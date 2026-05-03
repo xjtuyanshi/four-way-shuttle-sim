@@ -180,7 +180,7 @@ void UShuttleStateSubscriberSubsystem::HandleMessage(const FString& Message)
         }
         else
         {
-            BroadcastBridgeStatus(false, FString::Printf(TEXT("%s missing state.loads"), *Type));
+            BroadcastBridgeStatus(true, FString::Printf(TEXT("%s state.loads unavailable"), *Type));
         }
     }
     else if (Type == TEXT("vehicleState"))
