@@ -41,7 +41,68 @@ bool StaticSceneContractPass(const FShuttleStaticSceneContractForSmoke& Contract
         Contract.DiagonalTrackCount == 0 &&
         Contract.InboundLiftPadCount == 2 &&
         Contract.OutboundLiftPadCount == 2 &&
-        Contract.ParkingPadCount == 2;
+        Contract.ParkingPadCount == 2 &&
+        Contract.StorageCells.Num() == 48 &&
+        Contract.TrackBeds.Num() == 16 &&
+        Contract.LiftPads.Num() == 4 &&
+        Contract.ParkingPads.Num() == 2;
+}
+
+TSharedRef<FJsonObject> StorageCellToJson(const FShuttleStaticSceneStorageCellForSmoke& Cell)
+{
+    TSharedRef<FJsonObject> Output = MakeShared<FJsonObject>();
+    Output->SetStringField(TEXT("id"), Cell.Id);
+    Output->SetNumberField(TEXT("row"), Cell.Row);
+    Output->SetNumberField(TEXT("column"), Cell.Column);
+    Output->SetNumberField(TEXT("xM"), Cell.XM);
+    Output->SetNumberField(TEXT("yM"), Cell.YM);
+    Output->SetNumberField(TEXT("zM"), Cell.ZM);
+    Output->SetNumberField(TEXT("lengthXM"), Cell.LengthXM);
+    Output->SetNumberField(TEXT("lengthZM"), Cell.LengthZM);
+    return Output;
+}
+
+TSharedRef<FJsonObject> TrackBedToJson(const FShuttleStaticSceneTrackBedForSmoke& TrackBed)
+{
+    TSharedRef<FJsonObject> Output = MakeShared<FJsonObject>();
+    Output->SetStringField(TEXT("id"), TrackBed.Id);
+    Output->SetStringField(TEXT("category"), TrackBed.Category);
+    Output->SetNumberField(TEXT("xM"), TrackBed.XM);
+    Output->SetNumberField(TEXT("yM"), TrackBed.YM);
+    Output->SetNumberField(TEXT("zM"), TrackBed.ZM);
+    Output->SetNumberField(TEXT("lengthXM"), TrackBed.LengthXM);
+    Output->SetNumberField(TEXT("lengthZM"), TrackBed.LengthZM);
+    Output->SetStringField(TEXT("orientation"), TrackBed.Orientation);
+    Output->SetNumberField(TEXT("row"), TrackBed.Row);
+    Output->SetStringField(TEXT("side"), TrackBed.Side);
+    return Output;
+}
+
+TSharedRef<FJsonObject> PadToJson(const FShuttleStaticScenePadForSmoke& Pad)
+{
+    TSharedRef<FJsonObject> Output = MakeShared<FJsonObject>();
+    Output->SetStringField(TEXT("id"), Pad.Id);
+    Output->SetStringField(TEXT("category"), Pad.Category);
+    Output->SetNumberField(TEXT("xM"), Pad.XM);
+    Output->SetNumberField(TEXT("yM"), Pad.YM);
+    Output->SetNumberField(TEXT("zM"), Pad.ZM);
+    Output->SetNumberField(TEXT("lengthXM"), Pad.LengthXM);
+    Output->SetNumberField(TEXT("lengthZM"), Pad.LengthZM);
+    Output->SetStringField(TEXT("side"), Pad.Side);
+    return Output;
+}
+
+template <typename ItemType, typename ConverterType>
+TArray<TSharedPtr<FJsonValue>> ToJsonArray(const TArray<ItemType>& Items, ConverterType Converter)
+{
+    TArray<TSharedPtr<FJsonValue>> Output;
+    Output.Reserve(Items.Num());
+    for (const ItemType& Item : Items)
+    {
+        const TSharedRef<FJsonObject> Object = Converter(Item);
+        Output.Add(MakeShared<FJsonValueObject>(Object.ToSharedPtr()));
+    }
+    return Output;
 }
 
 TSharedRef<FJsonObject> StaticSceneContractToJson(const FShuttleStaticSceneContractForSmoke& Contract, const bool bPass)
@@ -49,6 +110,10 @@ TSharedRef<FJsonObject> StaticSceneContractToJson(const FShuttleStaticSceneContr
     TSharedRef<FJsonObject> Summary = MakeShared<FJsonObject>();
     Summary->SetStringField(TEXT("schemaVersion"), TEXT("shuttle.unrealStaticScene.v1"));
     Summary->SetBoolField(TEXT("pass"), bPass);
+    Summary->SetArrayField(TEXT("storageCells"), ToJsonArray(Contract.StorageCells, StorageCellToJson));
+    Summary->SetArrayField(TEXT("trackBeds"), ToJsonArray(Contract.TrackBeds, TrackBedToJson));
+    Summary->SetArrayField(TEXT("liftPads"), ToJsonArray(Contract.LiftPads, PadToJson));
+    Summary->SetArrayField(TEXT("parkingPads"), ToJsonArray(Contract.ParkingPads, PadToJson));
     Summary->SetNumberField(TEXT("storageRows"), Contract.StorageRows);
     Summary->SetNumberField(TEXT("storageColumns"), Contract.StorageColumns);
     Summary->SetNumberField(TEXT("storageCellCount"), Contract.StorageCellCount);

@@ -45,12 +45,13 @@ SimCore remains authoritative for event logs, KPIs, task assignment, reservation
 
 ## Smoke Commandlet
 
-`UShuttleVisualTwinSmokeCommandlet` runs in headless Unreal smoke tests. It creates a temporary world, spawns `AShuttleVisualTwinRuntimeActor`, rebuilds the static scene, and verifies the default scaffold counts:
+`UShuttleVisualTwinSmokeCommandlet` runs in headless Unreal smoke tests. It creates a temporary world, spawns `AShuttleVisualTwinRuntimeActor`, rebuilds the static scene, and verifies the default scaffold counts and item-level topology:
 
 - 48 storage cells
 - 16 track beds
 - 2 inbound lift pads
 - 2 outbound lift pads
 - 2 parking pads
+- stable IDs, categories, coordinates, orientations, and sizes for every storage cell, track bed, lift pad, and parking pad
 
 It also applies synthetic vehicle states through the runtime actor, verifies that exactly one visible default vehicle actor is spawned and reused, checks SimCore-to-Unreal position/yaw conversion, and checks that the carried-pallet placeholder follows the streamed `loaded` flag. This proves the default actor binding path in headless UE. It does not prove packaged runtime or Pixel Streaming soak readiness.

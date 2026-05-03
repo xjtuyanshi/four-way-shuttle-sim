@@ -10,8 +10,50 @@ class UInstancedStaticMeshComponent;
 class USceneComponent;
 class UShuttleStateSubscriberSubsystem;
 
+struct FShuttleStaticSceneStorageCellForSmoke
+{
+    FString Id;
+    int32 Row = 0;
+    int32 Column = 0;
+    float XM = 0.0f;
+    float YM = 0.0f;
+    float ZM = 0.0f;
+    float LengthXM = 0.0f;
+    float LengthZM = 0.0f;
+};
+
+struct FShuttleStaticSceneTrackBedForSmoke
+{
+    FString Id;
+    FString Category;
+    float XM = 0.0f;
+    float YM = 0.0f;
+    float ZM = 0.0f;
+    float LengthXM = 0.0f;
+    float LengthZM = 0.0f;
+    FString Orientation;
+    int32 Row = 0;
+    FString Side;
+};
+
+struct FShuttleStaticScenePadForSmoke
+{
+    FString Id;
+    FString Category;
+    float XM = 0.0f;
+    float YM = 0.0f;
+    float ZM = 0.0f;
+    float LengthXM = 0.0f;
+    float LengthZM = 0.0f;
+    FString Side;
+};
+
 struct FShuttleStaticSceneContractForSmoke
 {
+    TArray<FShuttleStaticSceneStorageCellForSmoke> StorageCells;
+    TArray<FShuttleStaticSceneTrackBedForSmoke> TrackBeds;
+    TArray<FShuttleStaticScenePadForSmoke> LiftPads;
+    TArray<FShuttleStaticScenePadForSmoke> ParkingPads;
     int32 StorageRows = 0;
     int32 StorageColumns = 0;
     int32 StorageCellCount = 0;
@@ -145,11 +187,11 @@ private:
     void HandleBridgeStatus(bool bConnected, const FString& Detail);
 
     AShuttleVisualTwinActor* FindOrSpawnVehicleActor(const FString& VehicleId);
-    void AddStorageCellMeters(float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM);
-    void AddTrackBedMeters(float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM, int32 FShuttleStaticSceneContractForSmoke::*TrackCounter);
-    void AddInboundLiftPadMeters(float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM);
-    void AddOutboundLiftPadMeters(float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM);
-    void AddParkingPadMeters(float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM);
+    void AddStorageCellMeters(const FString& Id, int32 Row, int32 Column, float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM);
+    void AddTrackBedMeters(const FString& Id, const FString& Category, const FString& Orientation, int32 Row, const FString& Side, float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM, int32 FShuttleStaticSceneContractForSmoke::*TrackCounter);
+    void AddInboundLiftPadMeters(const FString& Id, const FString& Side, float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM);
+    void AddOutboundLiftPadMeters(const FString& Id, const FString& Side, float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM);
+    void AddParkingPadMeters(const FString& Id, const FString& Side, float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM);
     void AddInstanceMeters(UInstancedStaticMeshComponent* Component, float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM) const;
     void SetInstancedMesh(UInstancedStaticMeshComponent* Component) const;
     void UnbindStateSubscriber(bool bDisconnect);

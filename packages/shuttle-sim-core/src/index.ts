@@ -248,11 +248,31 @@ const DEFAULT_STORAGE_ROWS = 6;
 const DEFAULT_STORAGE_COLUMNS = 8;
 const DEFAULT_STORAGE_CELL_PITCH_X_M = 1.25;
 const DEFAULT_STORAGE_CELL_PITCH_Z_M = 1.2;
+const DEFAULT_LEFT_SPINE_X_M = 0;
+const DEFAULT_RIGHT_SPINE_X_M = 14;
+const DEFAULT_INBOUND_X_M = 18;
+const DEFAULT_OUTBOUND_X_M = -4;
+const DEFAULT_FIRST_STORAGE_X_M = 2.5;
+const DEFAULT_TOP_Z_M = -4.8;
+const DEFAULT_BOTTOM_Z_M = 4.8;
+const DEFAULT_PARKING_TOP_Z_M = -7.2;
+const DEFAULT_PARKING_BOTTOM_Z_M = 7.2;
+const DEFAULT_STORAGE_CELL_VISUAL_SIZE_X_M = 1.12;
+const DEFAULT_STORAGE_CELL_VISUAL_SIZE_Z_M = 1.08;
+const DEFAULT_STORAGE_LANE_TRACK_WIDTH_Z_M = 0.08;
+const DEFAULT_AISLE_TRACK_WIDTH_M = 0.1;
+const DEFAULT_CONNECTOR_TRACK_WIDTH_M = 0.12;
+const DEFAULT_LIFT_PAD_SIZE_X_M = 1.5;
+const DEFAULT_LIFT_PAD_SIZE_Z_M = 1.15;
 
 export type ShuttleStaticSceneContract = {
   schemaVersion: 'shuttle.simCoreStaticSceneContract.v1';
   scenarioId: string;
   units: 'meter';
+  storageCells: ShuttleStaticSceneStorageCell[];
+  trackBeds: ShuttleStaticSceneTrackBed[];
+  liftPads: ShuttleStaticScenePad[];
+  parkingPads: ShuttleStaticScenePad[];
   storageRows: number;
   storageColumns: number;
   storageCellCount: number;
@@ -281,6 +301,49 @@ export type ShuttleStaticSceneContract = {
   dedicatedLiftPorts: boolean;
   inboundSide: 'left' | 'right' | 'mixed';
   outboundSide: 'left' | 'right' | 'mixed';
+};
+
+export type ShuttleStaticSceneStorageCell = {
+  id: string;
+  row: number;
+  column: number;
+  xM: number;
+  yM: number;
+  zM: number;
+  lengthXM: number;
+  lengthZM: number;
+};
+
+export type ShuttleStaticSceneTrackCategory =
+  | 'storageLane'
+  | 'sideAisle'
+  | 'crossAisle'
+  | 'inboundConnector'
+  | 'outboundConnector'
+  | 'parkingConnector';
+
+export type ShuttleStaticSceneTrackBed = {
+  id: string;
+  category: ShuttleStaticSceneTrackCategory;
+  xM: number;
+  yM: number;
+  zM: number;
+  lengthXM: number;
+  lengthZM: number;
+  orientation: 'x' | 'z';
+  row: number;
+  side: 'left' | 'right' | 'top' | 'bottom' | 'none';
+};
+
+export type ShuttleStaticScenePad = {
+  id: string;
+  category: 'inboundLift' | 'outboundLift' | 'parking';
+  xM: number;
+  yM: number;
+  zM: number;
+  lengthXM: number;
+  lengthZM: number;
+  side: 'left' | 'right' | 'mixed';
 };
 
 function sortedUniqueNumbers(values: number[]): number[] {
@@ -313,20 +376,34 @@ function sideForNodes(nodes: LayoutNode[], storageMinX: number, storageMaxX: num
   return 'mixed';
 }
 
+function sortedById<T extends { id: string }>(items: T[]): T[] {
+  return [...items].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function sideForX(x: number, storageMinX: number, storageMaxX: number): 'left' | 'right' | 'mixed' {
+  if (x > storageMaxX) {
+    return 'right';
+  }
+  if (x < storageMinX) {
+    return 'left';
+  }
+  return 'mixed';
+}
+
 function storageNodeId(rowIndex: number, columnIndex: number): string {
   return `storage-r${String(rowIndex + 1).padStart(2, '0')}-c${String(columnIndex + 1).padStart(2, '0')}`;
 }
 
 function createDefaultLayout(): ShuttleScenario['layout'] {
-  const leftSpineX = 0;
-  const rightSpineX = 14;
-  const inboundX = 18;
-  const outboundX = -4;
-  const firstStorageX = 2.5;
-  const topZ = -4.8;
-  const bottomZ = 4.8;
-  const parkingTopZ = -7.2;
-  const parkingBottomZ = 7.2;
+  const leftSpineX = DEFAULT_LEFT_SPINE_X_M;
+  const rightSpineX = DEFAULT_RIGHT_SPINE_X_M;
+  const inboundX = DEFAULT_INBOUND_X_M;
+  const outboundX = DEFAULT_OUTBOUND_X_M;
+  const firstStorageX = DEFAULT_FIRST_STORAGE_X_M;
+  const topZ = DEFAULT_TOP_Z_M;
+  const bottomZ = DEFAULT_BOTTOM_Z_M;
+  const parkingTopZ = DEFAULT_PARKING_TOP_Z_M;
+  const parkingBottomZ = DEFAULT_PARKING_BOTTOM_Z_M;
   const rowZs = Array.from({ length: DEFAULT_STORAGE_ROWS }, (_, rowIndex) =>
     round((rowIndex - (DEFAULT_STORAGE_ROWS - 1) / 2) * DEFAULT_STORAGE_CELL_PITCH_Z_M, 3)
   );
@@ -550,6 +627,7 @@ export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides
 
 export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario = createDefaultShuttleScenario()): ShuttleStaticSceneContract {
   const storageNodes = scenario.layout.nodes.filter((node) => node.type === 'storage');
+  const storageCells: ShuttleStaticSceneStorageCell[] = [];
   const storageCellIds = new Set<string>();
   const storageRowsById = new Set<number>();
   const storageColumnsById = new Set<number>();
@@ -561,6 +639,16 @@ export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario =
     storageRowsById.add(Number(match[1]));
     storageColumnsById.add(Number(match[2]));
     storageCellIds.add(`${Number(match[1])}:${Number(match[2])}`);
+    storageCells.push({
+      id: node.id,
+      row: Number(match[1]),
+      column: Number(match[2]),
+      xM: round(node.x, 6),
+      yM: round(node.y, 6),
+      zM: round(node.z, 6),
+      lengthXM: DEFAULT_STORAGE_CELL_VISUAL_SIZE_X_M,
+      lengthZM: DEFAULT_STORAGE_CELL_VISUAL_SIZE_Z_M
+    });
   }
 
   const storageXs = sortedUniqueNumbers(storageNodes.map((node) => node.x));
@@ -615,10 +703,177 @@ export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario =
     outboundConnectorTrackCount +
     parkingConnectorTrackCount;
 
+  const addTrackFromNodes = (
+    target: ShuttleStaticSceneTrackBed[],
+    options: {
+      id: string;
+      category: ShuttleStaticSceneTrackCategory;
+      fromNodeId: string;
+      toNodeId: string;
+      widthM: number;
+      row: number;
+      side: ShuttleStaticSceneTrackBed['side'];
+    }
+  ) => {
+    const from = nodesById.get(options.fromNodeId);
+    const to = nodesById.get(options.toNodeId);
+    if (!from || !to) {
+      return;
+    }
+    const deltaX = Math.abs(to.x - from.x);
+    const deltaZ = Math.abs(to.z - from.z);
+    const orientation = deltaX >= deltaZ ? 'x' : 'z';
+    target.push({
+      id: options.id,
+      category: options.category,
+      xM: round((from.x + to.x) / 2, 6),
+      yM: round((from.y + to.y) / 2, 6),
+      zM: round((from.z + to.z) / 2, 6),
+      lengthXM: round(orientation === 'x' ? deltaX : options.widthM, 6),
+      lengthZM: round(orientation === 'z' ? deltaZ : options.widthM, 6),
+      orientation,
+      row: options.row,
+      side: options.side
+    });
+  };
+
+  const trackBeds: ShuttleStaticSceneTrackBed[] = [];
+  for (const row of [...storageRowsById].sort((left, right) => left - right)) {
+    const rowLabel = String(row).padStart(2, '0');
+    addTrackFromNodes(trackBeds, {
+      id: `storage-lane-r${rowLabel}`,
+      category: 'storageLane',
+      fromNodeId: `left-row-${rowLabel}`,
+      toNodeId: `right-row-${rowLabel}`,
+      widthM: DEFAULT_STORAGE_LANE_TRACK_WIDTH_Z_M,
+      row,
+      side: 'none'
+    });
+  }
+  addTrackFromNodes(trackBeds, {
+    id: 'side-aisle-left',
+    category: 'sideAisle',
+    fromNodeId: 'left-top',
+    toNodeId: 'left-bottom',
+    widthM: DEFAULT_AISLE_TRACK_WIDTH_M,
+    row: 0,
+    side: 'left'
+  });
+  addTrackFromNodes(trackBeds, {
+    id: 'side-aisle-right',
+    category: 'sideAisle',
+    fromNodeId: 'right-top',
+    toNodeId: 'right-bottom',
+    widthM: DEFAULT_AISLE_TRACK_WIDTH_M,
+    row: 0,
+    side: 'right'
+  });
+  addTrackFromNodes(trackBeds, {
+    id: 'cross-aisle-top',
+    category: 'crossAisle',
+    fromNodeId: 'left-top',
+    toNodeId: 'right-top',
+    widthM: DEFAULT_AISLE_TRACK_WIDTH_M,
+    row: 0,
+    side: 'top'
+  });
+  addTrackFromNodes(trackBeds, {
+    id: 'cross-aisle-bottom',
+    category: 'crossAisle',
+    fromNodeId: 'left-bottom',
+    toNodeId: 'right-bottom',
+    widthM: DEFAULT_AISLE_TRACK_WIDTH_M,
+    row: 0,
+    side: 'bottom'
+  });
+  for (const node of sortedById(inboundLiftNodes)) {
+    const rowMatch = /-(a|b)$/.exec(node.id);
+    const targetRow = rowMatch?.[1] === 'a' ? 1 : storageRows;
+    const rowLabel = String(targetRow).padStart(2, '0');
+    addTrackFromNodes(trackBeds, {
+      id: `${node.id}-right-row-${rowLabel}`,
+      category: 'inboundConnector',
+      fromNodeId: node.id,
+      toNodeId: `right-row-${rowLabel}`,
+      widthM: DEFAULT_CONNECTOR_TRACK_WIDTH_M,
+      row: targetRow,
+      side: 'right'
+    });
+  }
+  for (const node of sortedById(outboundLiftNodes)) {
+    const rowMatch = /-(a|b)$/.exec(node.id);
+    const targetRow = rowMatch?.[1] === 'a' ? 1 : storageRows;
+    const rowLabel = String(targetRow).padStart(2, '0');
+    addTrackFromNodes(trackBeds, {
+      id: `${node.id}-left-row-${rowLabel}`,
+      category: 'outboundConnector',
+      fromNodeId: node.id,
+      toNodeId: `left-row-${rowLabel}`,
+      widthM: DEFAULT_CONNECTOR_TRACK_WIDTH_M,
+      row: targetRow,
+      side: 'left'
+    });
+  }
+  addTrackFromNodes(trackBeds, {
+    id: 'parking-a-right-top',
+    category: 'parkingConnector',
+    fromNodeId: 'parking-a',
+    toNodeId: 'right-top',
+    widthM: DEFAULT_CONNECTOR_TRACK_WIDTH_M,
+    row: 0,
+    side: 'right'
+  });
+  addTrackFromNodes(trackBeds, {
+    id: 'parking-b-right-bottom',
+    category: 'parkingConnector',
+    fromNodeId: 'parking-b',
+    toNodeId: 'right-bottom',
+    widthM: DEFAULT_CONNECTOR_TRACK_WIDTH_M,
+    row: 0,
+    side: 'right'
+  });
+
+  const liftPads: ShuttleStaticScenePad[] = sortedById([
+    ...inboundLiftNodes.map((node) => ({
+      id: node.id,
+      category: 'inboundLift' as const,
+      xM: round(node.x, 6),
+      yM: round(node.y, 6),
+      zM: round(node.z, 6),
+      lengthXM: DEFAULT_LIFT_PAD_SIZE_X_M,
+      lengthZM: DEFAULT_LIFT_PAD_SIZE_Z_M,
+      side: sideForX(node.x, storageBlockMinXM, storageBlockMaxXM)
+    })),
+    ...outboundLiftNodes.map((node) => ({
+      id: node.id,
+      category: 'outboundLift' as const,
+      xM: round(node.x, 6),
+      yM: round(node.y, 6),
+      zM: round(node.z, 6),
+      lengthXM: DEFAULT_LIFT_PAD_SIZE_X_M,
+      lengthZM: DEFAULT_LIFT_PAD_SIZE_Z_M,
+      side: sideForX(node.x, storageBlockMinXM, storageBlockMaxXM)
+    }))
+  ]);
+  const parkingPads: ShuttleStaticScenePad[] = sortedById(parkingNodes.map((node) => ({
+    id: node.id,
+    category: 'parking' as const,
+    xM: round(node.x, 6),
+    yM: round(node.y, 6),
+    zM: round(node.z, 6),
+    lengthXM: DEFAULT_LIFT_PAD_SIZE_X_M,
+    lengthZM: DEFAULT_LIFT_PAD_SIZE_Z_M,
+    side: sideForX(node.x, storageBlockMinXM, storageBlockMaxXM)
+  })));
+
   return {
     schemaVersion: 'shuttle.simCoreStaticSceneContract.v1',
     scenarioId: scenario.id,
     units: scenario.layout.units,
+    storageCells: sortedById(storageCells),
+    trackBeds: sortedById(trackBeds),
+    liftPads,
+    parkingPads,
     storageRows,
     storageColumns,
     storageCellCount: storageNodes.length,
