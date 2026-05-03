@@ -4,7 +4,8 @@
   "type": "module",
   "main": "src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./static-scene": "./src/static-scene.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit"

@@ -1,7 +1,9 @@
 import type { KpiSnapshot, ShuttleSimState, VehicleState } from '@four-way-shuttle/schemas';
+import { createDefaultShuttleScenario, summarizeScenarioStaticSceneContract } from '@four-way-shuttle/sim-core';
 import { describe, expect, it } from 'vitest';
 
 import { mergeKpiUpdate, mergeVehicleStateUpdate } from './App.js';
+import { resolveDashboardStaticSceneContract } from './ShuttleScene3D.js';
 
 function vehicle(overrides: Partial<VehicleState> & { id: string }): VehicleState {
   const { id, ...rest } = overrides;
@@ -108,5 +110,29 @@ describe('dashboard stream reducers', () => {
     expect(next?.simTimeSec).toBe(22);
     expect(next?.kpis.totalPph).toBe(120);
     expect(next?.kpis.reservationConflictCount).toBe(4);
+  });
+});
+
+describe('dashboard static scene contract', () => {
+  it('uses the SimCore item-level layout contract for the browser visual twin', () => {
+    const contract = resolveDashboardStaticSceneContract(createDefaultShuttleScenario());
+
+    expect(contract).toEqual(summarizeScenarioStaticSceneContract(createDefaultShuttleScenario()));
+    expect(contract.schemaVersion).toBe('shuttle.simCoreStaticSceneContract.v1');
+    expect(contract.singleLevel).toBe(true);
+    expect(contract.denseStorageBlock).toBe(true);
+    expect(contract.orthogonalTrackOnly).toBe(true);
+    expect(contract.dedicatedLiftPorts).toBe(true);
+    expect(contract.storageCells).toHaveLength(48);
+    expect(contract.storageRows).toBe(6);
+    expect(contract.storageColumns).toBe(8);
+    expect(contract.liftPads.map((pad) => `${pad.category}:${pad.side}`)).toEqual([
+      'inboundLift:right',
+      'inboundLift:right',
+      'outboundLift:left',
+      'outboundLift:left'
+    ]);
+    expect(contract.trackBeds.some((track) => track.category === 'storageLane')).toBe(true);
+    expect(contract.diagonalTrackCount).toBe(0);
   });
 });

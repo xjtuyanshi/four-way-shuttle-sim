@@ -54,6 +54,9 @@ importers:
       '@four-way-shuttle/schemas':
         specifier: workspace:*
         version: link:../../packages/shuttle-schemas
+      '@four-way-shuttle/sim-core':
+        specifier: workspace:*
+        version: link:../../packages/shuttle-sim-core
       react:
         specifier: ^19.1.1
         version: 19.2.5

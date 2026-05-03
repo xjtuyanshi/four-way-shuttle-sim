@@ -20,7 +20,8 @@
     "baseUrl": ".",
     "paths": {
       "@four-way-shuttle/schemas": ["packages/shuttle-schemas/src/index.ts"],
-      "@four-way-shuttle/sim-core": ["packages/shuttle-sim-core/src/index.ts"]
+      "@four-way-shuttle/sim-core": ["packages/shuttle-sim-core/src/index.ts"],
+      "@four-way-shuttle/sim-core/static-scene": ["packages/shuttle-sim-core/src/static-scene.ts"]
     }
   }
 }
