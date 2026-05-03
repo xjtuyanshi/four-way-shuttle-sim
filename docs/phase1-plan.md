@@ -50,9 +50,10 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 - Added schema enforcement for the temporary FIFO storage naming contract: `storage-rNN-cNN` cells plus matching `left-row-NN` / `right-row-NN` access nodes.
 - Fixed route planning so future queued inbound slots reserve logical destinations without becoming physical obstacles before work is assigned.
 - Validated and clamped playback speed input, including `SHUTTLE_SPEED`.
+- Built the first Unreal visual twin scene foundation in `AShuttleVisualTwinRuntimeActor`: one single-level 6x8 dense storage block with per-cell four-way rail detail, rack posts, roller-transfer lift pads, dedicated inbound/outbound black-box lift housings, load placeholders from streamed SimCore load snapshots, and smoke-contract counts for those visual details.
 
 ## Next TODO
 
 - Add true multi-axis storage-grid routing or push-lane mechanics only after the FIFO lane policy is explicitly modeled against the target physical layout.
-- Build the Unreal visual twin scene from `docs/unreal-visual-twin-plan.md`, starting with one single-level 6x8 dense storage block, right-side inbound ports, left-side outbound ports, and orthogonal track-only shuttle movement.
-- Run the packaged or Standalone Pixel Streaming soak only after the real Unreal scene exists and the browser/API validation gate is green.
+- Replace the Unreal placeholder cube geometry with calibrated meshes/materials once CAD or vendor dimensions are available; keep SimCore authoritative.
+- Run the packaged or Standalone Pixel Streaming soak only after the Unreal scene foundation is visually reviewed and the browser/API validation gate is green.

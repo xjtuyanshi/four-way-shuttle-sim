@@ -14,7 +14,7 @@ This is a source-only Unreal plugin scaffold for Phase 0. It is intentionally th
 3. Enable the `Pixel Streaming` plugin for runtime streaming. `WebSockets` is linked as an Unreal module by this bridge; it is not enabled as a separate engine plugin in UE 5.7.
 4. For the default Phase 0 scene, place one `AShuttleVisualTwinRuntimeActor` at world origin.
 5. Set its `VehicleActorClass` only if you want to use a custom shuttle mesh actor; otherwise it spawns `AShuttleVisualTwinActor` with a basic visible shuttle body and carried-pallet placeholder.
-6. The runtime actor auto-connects to `ws://localhost:8791/shuttle-ws`, spawns vehicles by `VehicleId`, and creates a simple one-level scene with dense 6x8 storage cells, side aisles, cross aisles, dedicated inbound/outbound lift pads, and parking pads.
+6. The runtime actor auto-connects to `ws://localhost:8791/shuttle-ws`, spawns vehicles by `VehicleId`, and creates a one-level scene with dense 6x8 storage cells, low four-way rail detail in every storage cell, side aisles, cross aisles, roller transfer detail on dedicated inbound/outbound lift pads, black-box lift housings, and parking pads.
 7. For manual Blueprint wiring, use `UShuttleStateSubscriberSubsystem::Connect("ws://localhost:8791/shuttle-ws")` and bind `OnVehicleState` to `AShuttleVisualTwinActor::ApplyAuthoritativeState`.
 
 The placeholder actor converts meters from SimCore into centimeters for Unreal. `AShuttleVisualTwinRuntimeActor` passes its world location as `WorldOffsetCm` when spawning shuttle actors, so the generated static scene and vehicles share the same local origin.
@@ -39,6 +39,8 @@ The bridge consumes `connectionRecovered`, `simState`, and `vehicleState` WebSoc
 - route timing: `routeNodeIds`, `routeIndex`, `legRemainingM`, `legElapsedSec`, `legTravelSec`, `phaseRemainingSec`
 - blocking diagnostics: `waitReason`, `blockingReservationId`, `blockingVehicleId`
 
+For `connectionRecovered.state.loads` and `simState.state.loads`, the bridge also parses `loads[*]` and broadcasts load snapshots. `AShuttleVisualTwinRuntimeActor` renders non-carried loads as pallet placeholders at known storage cells or lift pads. Carried loads remain attached to the vehicle placeholder through the existing `loaded` flag.
+
 `AShuttleVisualTwinActor` filters by `VehicleId` when it is preassigned, so multiple actors can safely bind to the same `OnVehicleState` multicast delegate.
 
 SimCore remains authoritative for event logs, KPIs, task assignment, reservations, and traffic diagnostics. Unreal should only interpolate and render the state stream during Phase 0.
@@ -52,6 +54,7 @@ SimCore remains authoritative for event logs, KPIs, task assignment, reservation
 - 2 inbound lift pads
 - 2 outbound lift pads
 - 2 parking pads
+- visual detail counts: 1 floor plate, 192 storage rail segments, 63 rack posts, 24 transfer rollers, and 4 black-box lift housings
 - stable IDs, categories, coordinates, orientations, and sizes for every storage cell, track bed, lift pad, and parking pad
 
-It also applies synthetic vehicle states through the runtime actor, verifies that exactly one visible default vehicle actor is spawned and reused, checks SimCore-to-Unreal position/yaw conversion, and checks that the carried-pallet placeholder follows the streamed `loaded` flag. This proves the default actor binding path in headless UE. It does not prove packaged runtime or Pixel Streaming soak readiness.
+It also applies synthetic vehicle and load states through the runtime actor, verifies that exactly one visible default vehicle actor is spawned and reused, checks SimCore-to-Unreal position/yaw conversion, checks that the carried-pallet placeholder follows the streamed `loaded` flag, and checks that stored/waiting/delivered loads render as static pallet placeholders while carried loads do not duplicate. This proves the default actor binding path in headless UE. It does not prove packaged runtime or Pixel Streaming soak readiness.

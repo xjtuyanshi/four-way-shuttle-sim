@@ -20,6 +20,15 @@ enum class EShuttleVisualOperationalState : uint8
     Faulted
 };
 
+UENUM(BlueprintType)
+enum class EShuttleVisualLoadStatus : uint8
+{
+    Waiting,
+    Carried,
+    Stored,
+    Delivered
+};
+
 USTRUCT(BlueprintType)
 struct FShuttleVisualVehicleState
 {
@@ -81,4 +90,25 @@ struct FShuttleVisualVehicleState
 
     UPROPERTY(BlueprintReadOnly)
     FString BlockingVehicleId;
+};
+
+USTRUCT(BlueprintType)
+struct FShuttleVisualLoadState
+{
+    GENERATED_BODY()
+
+    UPROPERTY(BlueprintReadOnly)
+    FString Id;
+
+    UPROPERTY(BlueprintReadOnly)
+    EShuttleVisualLoadStatus State = EShuttleVisualLoadStatus::Waiting;
+
+    UPROPERTY(BlueprintReadOnly)
+    FString NodeId;
+
+    UPROPERTY(BlueprintReadOnly)
+    FString VehicleId;
+
+    UPROPERTY(BlueprintReadOnly)
+    float WeightKg = 0.0f;
 };

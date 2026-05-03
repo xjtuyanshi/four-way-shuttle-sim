@@ -117,6 +117,8 @@ void UShuttleStateSubscriberSubsystem::HandleMessage(const FString& Message)
 
     const TSharedPtr<FJsonObject>* StateObject = nullptr;
     const TArray<TSharedPtr<FJsonValue>>* Vehicles = nullptr;
+    TArray<FShuttleVisualLoadState> ParsedLoadStates;
+    bool bHasLoadStates = false;
     if (Type == TEXT("connectionRecovered") || Type == TEXT("simState"))
     {
         if (Type == TEXT("connectionRecovered"))
@@ -148,6 +150,37 @@ void UShuttleStateSubscriberSubsystem::HandleMessage(const FString& Message)
         if ((*StateObject)->TryGetObjectField(TEXT("kpis"), KpiObject) && KpiObject)
         {
             RecordKpis(*KpiObject);
+        }
+
+        const TArray<TSharedPtr<FJsonValue>>* Loads = nullptr;
+        if ((*StateObject)->TryGetArrayField(TEXT("loads"), Loads) && Loads)
+        {
+            bHasLoadStates = true;
+            ParsedLoadStates.Reserve(Loads->Num());
+            for (const TSharedPtr<FJsonValue>& LoadValue : *Loads)
+            {
+                const TSharedPtr<FJsonObject> LoadObject = LoadValue->AsObject();
+                if (!LoadObject.IsValid())
+                {
+                    BroadcastBridgeStatus(false, TEXT("load entry is not an object"));
+                    continue;
+                }
+
+                FShuttleVisualLoadState ParsedLoad;
+                FString ParseError;
+                if (TryParseLoadState(LoadObject, ParsedLoad, ParseError))
+                {
+                    ParsedLoadStates.Add(ParsedLoad);
+                }
+                else
+                {
+                    BroadcastBridgeStatus(false, ParseError);
+                }
+            }
+        }
+        else
+        {
+            BroadcastBridgeStatus(false, FString::Printf(TEXT("%s missing state.loads"), *Type));
         }
     }
     else if (Type == TEXT("vehicleState"))
@@ -200,12 +233,23 @@ void UShuttleStateSubscriberSubsystem::HandleMessage(const FString& Message)
             }
         }
     }
+
+    if (bHasLoadStates)
+    {
+        BroadcastLoadStates(ParsedLoadStates);
+    }
 }
 
 void UShuttleStateSubscriberSubsystem::BroadcastVehicleState(const FShuttleVisualVehicleState& VehicleState)
 {
     OnVehicleState.Broadcast(VehicleState);
     OnVehicleStateNative.Broadcast(VehicleState);
+}
+
+void UShuttleStateSubscriberSubsystem::BroadcastLoadStates(const TArray<FShuttleVisualLoadState>& LoadStates)
+{
+    OnLoadStates.Broadcast(LoadStates);
+    OnLoadStatesNative.Broadcast(LoadStates);
 }
 
 void UShuttleStateSubscriberSubsystem::BroadcastBridgeStatus(bool bConnected, const FString& Detail)
@@ -289,6 +333,41 @@ bool UShuttleStateSubscriberSubsystem::TryParseVehicleState(const TSharedPtr<FJs
     return true;
 }
 
+bool UShuttleStateSubscriberSubsystem::TryParseLoadState(const TSharedPtr<FJsonObject>& Object, FShuttleVisualLoadState& OutState, FString& OutError) const
+{
+    FString Id;
+    FString StateValue;
+    double WeightKg = 0.0;
+    if (!Object->TryGetStringField(TEXT("id"), Id) || Id.IsEmpty())
+    {
+        OutError = TEXT("load missing required id");
+        return false;
+    }
+    if (!Object->TryGetStringField(TEXT("state"), StateValue))
+    {
+        OutError = FString::Printf(TEXT("load %s missing required state"), *Id);
+        return false;
+    }
+    EShuttleVisualLoadStatus ParsedState = EShuttleVisualLoadStatus::Waiting;
+    if (!TryParseLoadStateValue(StateValue, ParsedState))
+    {
+        OutError = FString::Printf(TEXT("load %s has unknown state %s"), *Id, *StateValue);
+        return false;
+    }
+    if (!Object->TryGetNumberField(TEXT("weightKg"), WeightKg))
+    {
+        OutError = FString::Printf(TEXT("load %s missing required weightKg"), *Id);
+        return false;
+    }
+
+    OutState.Id = Id;
+    OutState.State = ParsedState;
+    Object->TryGetStringField(TEXT("nodeId"), OutState.NodeId);
+    Object->TryGetStringField(TEXT("vehicleId"), OutState.VehicleId);
+    OutState.WeightKg = static_cast<float>(WeightKg);
+    return true;
+}
+
 TArray<FString> UShuttleStateSubscriberSubsystem::ParseStringArray(const TSharedPtr<FJsonObject>& Object, const FString& FieldName) const
 {
     TArray<FString> Values;
@@ -323,6 +402,31 @@ EShuttleVisualOperationalState UShuttleStateSubscriberSubsystem::ParseState(cons
     if (Value == TEXT("charging")) return EShuttleVisualOperationalState::Charging;
     if (Value == TEXT("faulted")) return EShuttleVisualOperationalState::Faulted;
     return EShuttleVisualOperationalState::Idle;
+}
+
+bool UShuttleStateSubscriberSubsystem::TryParseLoadStateValue(const FString& Value, EShuttleVisualLoadStatus& OutState) const
+{
+    if (Value == TEXT("waiting"))
+    {
+        OutState = EShuttleVisualLoadStatus::Waiting;
+        return true;
+    }
+    if (Value == TEXT("carried"))
+    {
+        OutState = EShuttleVisualLoadStatus::Carried;
+        return true;
+    }
+    if (Value == TEXT("stored"))
+    {
+        OutState = EShuttleVisualLoadStatus::Stored;
+        return true;
+    }
+    if (Value == TEXT("delivered"))
+    {
+        OutState = EShuttleVisualLoadStatus::Delivered;
+        return true;
+    }
+    return false;
 }
 
 void UShuttleStateSubscriberSubsystem::RecordSimTime(const double SimTimeSec)

@@ -8,8 +8,10 @@
 class IWebSocket;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnShuttleVehicleState, const FShuttleVisualVehicleState&, VehicleState);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnShuttleLoadStates, const TArray<FShuttleVisualLoadState>&, LoadStates);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnShuttleBridgeStatus, bool, bConnected, const FString&, Detail);
 DECLARE_MULTICAST_DELEGATE_OneParam(FOnShuttleVehicleStateNative, const FShuttleVisualVehicleState&);
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnShuttleLoadStatesNative, const TArray<FShuttleVisualLoadState>&);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FOnShuttleBridgeStatusNative, bool, const FString&);
 
 USTRUCT(BlueprintType)
@@ -120,21 +122,28 @@ public:
     FOnShuttleVehicleState OnVehicleState;
 
     UPROPERTY(BlueprintAssignable)
+    FOnShuttleLoadStates OnLoadStates;
+
+    UPROPERTY(BlueprintAssignable)
     FOnShuttleBridgeStatus OnBridgeStatus;
 
     UFUNCTION(BlueprintPure, Category = "Shuttle")
     FShuttleBridgeMessageStats GetMessageStats() const;
 
     FOnShuttleVehicleStateNative OnVehicleStateNative;
+    FOnShuttleLoadStatesNative OnLoadStatesNative;
     FOnShuttleBridgeStatusNative OnBridgeStatusNative;
 
 private:
     void HandleMessage(const FString& Message);
     void BroadcastVehicleState(const FShuttleVisualVehicleState& VehicleState);
+    void BroadcastLoadStates(const TArray<FShuttleVisualLoadState>& LoadStates);
     void BroadcastBridgeStatus(bool bConnected, const FString& Detail);
     bool TryParseVehicleState(const TSharedPtr<FJsonObject>& Object, FShuttleVisualVehicleState& OutState, FString& OutError) const;
+    bool TryParseLoadState(const TSharedPtr<FJsonObject>& Object, FShuttleVisualLoadState& OutState, FString& OutError) const;
     TArray<FString> ParseStringArray(const TSharedPtr<FJsonObject>& Object, const FString& FieldName) const;
     EShuttleVisualOperationalState ParseState(const FString& Value) const;
+    bool TryParseLoadStateValue(const FString& Value, EShuttleVisualLoadStatus& OutState) const;
     void RecordSimTime(double SimTimeSec);
     void RecordKpis(const TSharedPtr<FJsonObject>& KpiObject);
     void RecordTaskEvents(const TArray<TSharedPtr<FJsonValue>>& Events);
