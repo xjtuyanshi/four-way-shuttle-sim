@@ -4,6 +4,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "ShuttleStateSubscriberSubsystem.h"
 #include "ShuttleVisualTwinActor.h"
 #include "UObject/ConstructorHelpers.h"
@@ -86,6 +87,7 @@ void AShuttleVisualTwinRuntimeActor::EndPlay(const EEndPlayReason::Type EndPlayR
         }
     }
     VehicleActors.Empty();
+    LastAppliedVehicleStates.Empty();
     Super::EndPlay(EndPlayReason);
 }
 
@@ -202,6 +204,7 @@ void AShuttleVisualTwinRuntimeActor::ApplyVehicleState(const FShuttleVisualVehic
     if (VehicleActor)
     {
         ReceivedVehicleStateCount += 1;
+        LastAppliedVehicleStates.Add(VehicleState.Id, VehicleState);
         VehicleActor->ApplyAuthoritativeState(VehicleState);
     }
 }
@@ -231,6 +234,58 @@ AShuttleVisualTwinActor* AShuttleVisualTwinRuntimeActor::FindVehicleActorById(co
         return ExistingActor->Get();
     }
     return nullptr;
+}
+
+TArray<FString> AShuttleVisualTwinRuntimeActor::GetObservedVehicleIdsForSmoke() const
+{
+    TArray<FString> VehicleIds;
+    LastAppliedVehicleStates.GetKeys(VehicleIds);
+    VehicleIds.Sort();
+    return VehicleIds;
+}
+
+bool AShuttleVisualTwinRuntimeActor::TryGetLastAppliedVehicleStateForSmoke(const FString& VehicleId, FShuttleVisualVehicleState& OutState) const
+{
+    if (const FShuttleVisualVehicleState* State = LastAppliedVehicleStates.Find(VehicleId))
+    {
+        OutState = *State;
+        return true;
+    }
+    return false;
+}
+
+int32 AShuttleVisualTwinRuntimeActor::GetVehicleActorCreationCountForSmoke() const
+{
+    return VehicleActorCreationCount;
+}
+
+int32 AShuttleVisualTwinRuntimeActor::GetOwnedDuplicateVehicleActorCountForSmoke() const
+{
+    const UWorld* World = GetWorld();
+    if (!World)
+    {
+        return 0;
+    }
+
+    TSet<FString> SeenIds;
+    int32 DuplicateCount = 0;
+    for (TActorIterator<AShuttleVisualTwinActor> ActorIt(World); ActorIt; ++ActorIt)
+    {
+        const AShuttleVisualTwinActor* Actor = *ActorIt;
+        if (!IsValid(Actor) || Actor->GetOwner() != this || Actor->VehicleId.IsEmpty())
+        {
+            continue;
+        }
+        if (SeenIds.Contains(Actor->VehicleId))
+        {
+            DuplicateCount += 1;
+        }
+        else
+        {
+            SeenIds.Add(Actor->VehicleId);
+        }
+    }
+    return DuplicateCount;
 }
 
 void AShuttleVisualTwinRuntimeActor::HandleBridgeStatus(bool bConnected, const FString& Detail)
@@ -285,6 +340,7 @@ AShuttleVisualTwinActor* AShuttleVisualTwinRuntimeActor::FindOrSpawnVehicleActor
     NewActor->WorldOffsetCm = GetActorLocation();
     NewActor->MeshYawOffsetDegrees = VehicleMeshYawOffsetDegrees;
     VehicleActors.Add(VehicleId, NewActor);
+    VehicleActorCreationCount += 1;
     return NewActor;
 }
 
@@ -338,4 +394,6 @@ void AShuttleVisualTwinRuntimeActor::UnbindStateSubscriber(const bool bDisconnec
         bBridgeConnected = false;
     }
     StateSubscriber.Reset();
+    ReceivedVehicleStateCount = 0;
+    LastAppliedVehicleStates.Empty();
 }

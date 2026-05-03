@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { accessSync, constants, existsSync, readFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, readFileSync, rmSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -206,6 +206,8 @@ async function runLiveBridgeSmoke() {
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const wsUrl = `ws://127.0.0.1:${port}/shuttle-ws`;
+  const summaryPath = path.join('/tmp', `shuttle-live-bridge-smoke-${process.pid}.json`);
+  rmSync(summaryPath, { force: true });
   const api = startApi(port);
   try {
     await waitForHealth(baseUrl);
@@ -217,6 +219,10 @@ async function runLiveBridgeSmoke() {
       '-run=ShuttleVisualTwinLiveSmoke',
       `-ShuttleWsUrl=${wsUrl}`,
       '-ShuttleLiveSmokeTimeoutSec=10',
+      '-ShuttleExpectedVehicleCount=2',
+      '-ShuttleMinSimTimeAdvanceSec=0.1',
+      '-ShuttlePoseToleranceCm=0.1',
+      `-ShuttleLiveSmokeSummaryPath=${summaryPath}`,
       '-NullRHI',
       '-Unattended',
       '-NoSound',
@@ -225,7 +231,21 @@ async function runLiveBridgeSmoke() {
       '-stdout',
       '-FullStdOutLogOutput'
     ]);
+    const summary = readJson('Unreal live bridge smoke summary', summaryPath);
+    if (summary.pass !== true) {
+      throw new Error(`Unreal live bridge smoke summary did not pass: ${JSON.stringify(summary, null, 2)}`);
+    }
+    if (summary.messageStats?.vehicleState < 1) {
+      throw new Error('Unreal live bridge smoke did not observe a root vehicleState stream message.');
+    }
+    if (summary.ieMetrics?.hasKpi !== true) {
+      throw new Error('Unreal live bridge smoke did not parse KPI telemetry from the stream.');
+    }
+    console.log(JSON.stringify({ unrealLiveBridgeSmoke: summary }, null, 2));
   } catch (error) {
+    if (existsSync(summaryPath)) {
+      console.error(JSON.stringify({ unrealLiveBridgeSmokeFailureSummary: readJson('Unreal live bridge smoke summary', summaryPath) }, null, 2));
+    }
     const apiOutput = api.getOutput();
     if (apiOutput) {
       console.error(apiOutput);

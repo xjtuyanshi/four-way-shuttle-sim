@@ -19,6 +19,7 @@ void UShuttleStateSubscriberSubsystem::Deinitialize()
 void UShuttleStateSubscriberSubsystem::Connect(const FString& WebSocketUrl)
 {
     Disconnect();
+    MessageStats = FShuttleBridgeMessageStats();
 
     UE_LOG(LogShuttleStateSubscriber, Display, TEXT("Connecting to %s"), *WebSocketUrl);
 
@@ -54,6 +55,11 @@ void UShuttleStateSubscriberSubsystem::Connect(const FString& WebSocketUrl)
     Socket->Connect();
 }
 
+FShuttleBridgeMessageStats UShuttleStateSubscriberSubsystem::GetMessageStats() const
+{
+    return MessageStats;
+}
+
 void UShuttleStateSubscriberSubsystem::Disconnect()
 {
     if (Socket.IsValid())
@@ -82,6 +88,30 @@ void UShuttleStateSubscriberSubsystem::HandleMessage(const FString& Message)
 
     if (Type == TEXT("kpiUpdate") || Type == TEXT("taskEvent"))
     {
+        double SimTimeSec = 0.0;
+        if (RootObject->TryGetNumberField(TEXT("simTimeSec"), SimTimeSec))
+        {
+            RecordSimTime(SimTimeSec);
+        }
+
+        if (Type == TEXT("kpiUpdate"))
+        {
+            MessageStats.KpiUpdateMessages += 1;
+            const TSharedPtr<FJsonObject>* KpiObject = nullptr;
+            if (RootObject->TryGetObjectField(TEXT("kpis"), KpiObject) && KpiObject)
+            {
+                RecordKpis(*KpiObject);
+            }
+        }
+        else
+        {
+            MessageStats.TaskEventMessages += 1;
+            const TArray<TSharedPtr<FJsonValue>>* Events = nullptr;
+            if (RootObject->TryGetArrayField(TEXT("events"), Events) && Events)
+            {
+                RecordTaskEvents(*Events);
+            }
+        }
         return;
     }
 
@@ -89,6 +119,15 @@ void UShuttleStateSubscriberSubsystem::HandleMessage(const FString& Message)
     const TArray<TSharedPtr<FJsonValue>>* Vehicles = nullptr;
     if (Type == TEXT("connectionRecovered") || Type == TEXT("simState"))
     {
+        if (Type == TEXT("connectionRecovered"))
+        {
+            MessageStats.ConnectionRecoveredMessages += 1;
+        }
+        else
+        {
+            MessageStats.SimStateMessages += 1;
+        }
+
         if (!RootObject->TryGetObjectField(TEXT("state"), StateObject))
         {
             BroadcastBridgeStatus(false, FString::Printf(TEXT("%s missing state"), *Type));
@@ -99,9 +138,26 @@ void UShuttleStateSubscriberSubsystem::HandleMessage(const FString& Message)
             BroadcastBridgeStatus(false, FString::Printf(TEXT("%s missing state.vehicles"), *Type));
             return;
         }
+
+        double SimTimeSec = 0.0;
+        if ((*StateObject)->TryGetNumberField(TEXT("simTimeSec"), SimTimeSec))
+        {
+            RecordSimTime(SimTimeSec);
+        }
+        const TSharedPtr<FJsonObject>* KpiObject = nullptr;
+        if ((*StateObject)->TryGetObjectField(TEXT("kpis"), KpiObject) && KpiObject)
+        {
+            RecordKpis(*KpiObject);
+        }
     }
     else if (Type == TEXT("vehicleState"))
     {
+        MessageStats.VehicleStateMessages += 1;
+        double SimTimeSec = 0.0;
+        if (RootObject->TryGetNumberField(TEXT("simTimeSec"), SimTimeSec))
+        {
+            RecordSimTime(SimTimeSec);
+        }
         if (!RootObject->TryGetArrayField(TEXT("vehicles"), Vehicles))
         {
             BroadcastBridgeStatus(false, TEXT("vehicleState missing vehicles"));
@@ -112,6 +168,20 @@ void UShuttleStateSubscriberSubsystem::HandleMessage(const FString& Message)
     {
         return;
     }
+
+    if (Type == TEXT("connectionRecovered"))
+    {
+        MessageStats.VehicleUpdatesFromConnectionRecovered += Vehicles->Num();
+    }
+    else if (Type == TEXT("simState"))
+    {
+        MessageStats.VehicleUpdatesFromSimState += Vehicles->Num();
+    }
+    else if (Type == TEXT("vehicleState"))
+    {
+        MessageStats.VehicleUpdatesFromVehicleState += Vehicles->Num();
+    }
+    MessageStats.TotalVehicleUpdates += Vehicles->Num();
 
     for (const TSharedPtr<FJsonValue>& VehicleValue : *Vehicles)
     {
@@ -253,4 +323,93 @@ EShuttleVisualOperationalState UShuttleStateSubscriberSubsystem::ParseState(cons
     if (Value == TEXT("charging")) return EShuttleVisualOperationalState::Charging;
     if (Value == TEXT("faulted")) return EShuttleVisualOperationalState::Faulted;
     return EShuttleVisualOperationalState::Idle;
+}
+
+void UShuttleStateSubscriberSubsystem::RecordSimTime(const double SimTimeSec)
+{
+    const float SimTime = static_cast<float>(SimTimeSec);
+    if (!MessageStats.bHasSimTime)
+    {
+        MessageStats.FirstSimTimeSec = SimTime;
+        MessageStats.bHasSimTime = true;
+    }
+    MessageStats.LastSimTimeSec = SimTime;
+}
+
+void UShuttleStateSubscriberSubsystem::RecordKpis(const TSharedPtr<FJsonObject>& KpiObject)
+{
+    if (!KpiObject.IsValid())
+    {
+        return;
+    }
+
+    FShuttleBridgeKpiTelemetry NextKpis;
+    NextKpis.bHasKpi = true;
+
+    double NumberValue = 0.0;
+    if (KpiObject->TryGetNumberField(TEXT("inboundPph"), NumberValue))
+    {
+        NextKpis.InboundPph = static_cast<float>(NumberValue);
+    }
+    if (KpiObject->TryGetNumberField(TEXT("outboundPph"), NumberValue))
+    {
+        NextKpis.OutboundPph = static_cast<float>(NumberValue);
+    }
+    if (KpiObject->TryGetNumberField(TEXT("totalPph"), NumberValue))
+    {
+        NextKpis.TotalPph = static_cast<float>(NumberValue);
+    }
+    if (KpiObject->TryGetNumberField(TEXT("completedInbound"), NumberValue))
+    {
+        NextKpis.CompletedInbound = static_cast<int32>(NumberValue);
+    }
+    if (KpiObject->TryGetNumberField(TEXT("completedOutbound"), NumberValue))
+    {
+        NextKpis.CompletedOutbound = static_cast<int32>(NumberValue);
+    }
+    if (KpiObject->TryGetNumberField(TEXT("averageTaskCycleSec"), NumberValue))
+    {
+        NextKpis.AverageTaskCycleSec = static_cast<float>(NumberValue);
+    }
+    if (KpiObject->TryGetNumberField(TEXT("averageTaskWaitSec"), NumberValue))
+    {
+        NextKpis.AverageTaskWaitSec = static_cast<float>(NumberValue);
+    }
+    if (KpiObject->TryGetNumberField(TEXT("reservationConflictCount"), NumberValue))
+    {
+        NextKpis.ReservationConflictCount = static_cast<int32>(NumberValue);
+    }
+    if (KpiObject->TryGetNumberField(TEXT("deadlockCount"), NumberValue))
+    {
+        NextKpis.DeadlockCount = static_cast<int32>(NumberValue);
+    }
+
+    const TSharedPtr<FJsonObject>* BlockedTimeObject = nullptr;
+    if (KpiObject->TryGetObjectField(TEXT("blockedTimeByReasonSec"), BlockedTimeObject) && BlockedTimeObject && BlockedTimeObject->IsValid())
+    {
+        for (const TPair<FString, TSharedPtr<FJsonValue>>& Entry : (*BlockedTimeObject)->Values)
+        {
+            double BlockedTimeSec = 0.0;
+            if (Entry.Value.IsValid() && Entry.Value->TryGetNumber(BlockedTimeSec))
+            {
+                NextKpis.BlockedTimeByReasonSec.Add(Entry.Key, static_cast<float>(BlockedTimeSec));
+            }
+        }
+    }
+
+    MessageStats.LastKpis = NextKpis;
+}
+
+void UShuttleStateSubscriberSubsystem::RecordTaskEvents(const TArray<TSharedPtr<FJsonValue>>& Events)
+{
+    MessageStats.TaskEvents += Events.Num();
+    for (const TSharedPtr<FJsonValue>& EventValue : Events)
+    {
+        const TSharedPtr<FJsonObject> EventObject = EventValue.IsValid() ? EventValue->AsObject() : nullptr;
+        FString EventType;
+        if (EventObject.IsValid() && EventObject->TryGetStringField(TEXT("eventType"), EventType) && EventType == TEXT("task-completed"))
+        {
+            MessageStats.CompletedTaskEvents += 1;
+        }
+    }
 }
