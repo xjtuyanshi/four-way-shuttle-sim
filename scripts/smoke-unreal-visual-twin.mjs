@@ -276,17 +276,43 @@ async function main() {
     return;
   }
 
-  await run(unrealEditor, [
-    projectPath,
-    '-run=ShuttleVisualTwinSmoke',
-    '-NullRHI',
-    '-Unattended',
-    '-NoSound',
-    '-NoSplash',
-    '-NoAssetRegistryCache',
-    '-stdout',
-    '-FullStdOutLogOutput'
-  ]);
+  const staticSceneSummaryPath = path.join('/tmp', `shuttle-static-scene-smoke-${process.pid}.json`);
+  rmSync(staticSceneSummaryPath, { force: true });
+  try {
+    await run(unrealEditor, [
+      projectPath,
+      '-run=ShuttleVisualTwinSmoke',
+      `-ShuttleStaticSceneSummaryPath=${staticSceneSummaryPath}`,
+      '-NullRHI',
+      '-Unattended',
+      '-NoSound',
+      '-NoSplash',
+      '-NoAssetRegistryCache',
+      '-stdout',
+      '-FullStdOutLogOutput'
+    ]);
+  } catch (error) {
+    if (existsSync(staticSceneSummaryPath)) {
+      console.error(JSON.stringify({ unrealStaticSceneSmokeFailureSummary: readJson('Unreal static scene smoke summary', staticSceneSummaryPath) }, null, 2));
+    }
+    throw error;
+  }
+  const staticSceneSummary = readJson('Unreal static scene smoke summary', staticSceneSummaryPath);
+  if (staticSceneSummary.pass !== true) {
+    throw new Error(`Unreal static scene smoke summary did not pass: ${JSON.stringify(staticSceneSummary, null, 2)}`);
+  }
+  if (
+    staticSceneSummary.storageRows !== 6 ||
+    staticSceneSummary.storageColumns !== 8 ||
+    staticSceneSummary.storageCellCount !== 48 ||
+    staticSceneSummary.diagonalTrackCount !== 0 ||
+    staticSceneSummary.inboundSide !== 'right' ||
+    staticSceneSummary.outboundSide !== 'left' ||
+    staticSceneSummary.dedicatedLiftPorts !== true
+  ) {
+    throw new Error(`Unreal static scene contract is not a single-level dense four-way shuttle layout: ${JSON.stringify(staticSceneSummary, null, 2)}`);
+  }
+  console.log(JSON.stringify({ unrealStaticSceneSmoke: staticSceneSummary }, null, 2));
 
   await run(unrealEditor, [
     projectPath,
