@@ -43,6 +43,9 @@ public:
     UPROPERTY(BlueprintReadOnly, Category = "Shuttle|Runtime")
     FString LastBridgeStatus;
 
+    UPROPERTY(BlueprintReadOnly, Category = "Shuttle|Runtime")
+    int32 ReceivedVehicleStateCount = 0;
+
     UFUNCTION(BlueprintCallable, Category = "Shuttle|Runtime")
     void RebuildStaticScene();
 
@@ -72,6 +75,9 @@ public:
 
     UFUNCTION(BlueprintPure, Category = "Shuttle|Runtime")
     int32 GetSpawnedVehicleActorCount() const;
+
+    UFUNCTION(BlueprintPure, Category = "Shuttle|Runtime")
+    int32 GetReceivedVehicleStateCount() const;
 
     UFUNCTION(BlueprintPure, Category = "Shuttle|Runtime")
     AShuttleVisualTwinActor* FindVehicleActorById(const FString& VehicleId) const;
