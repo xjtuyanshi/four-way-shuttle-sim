@@ -249,6 +249,70 @@ const DEFAULT_STORAGE_COLUMNS = 8;
 const DEFAULT_STORAGE_CELL_PITCH_X_M = 1.25;
 const DEFAULT_STORAGE_CELL_PITCH_Z_M = 1.2;
 
+export type ShuttleStaticSceneContract = {
+  schemaVersion: 'shuttle.simCoreStaticSceneContract.v1';
+  scenarioId: string;
+  units: 'meter';
+  storageRows: number;
+  storageColumns: number;
+  storageCellCount: number;
+  trackBedCount: number;
+  storageLaneTrackCount: number;
+  sideAisleTrackCount: number;
+  crossAisleTrackCount: number;
+  inboundConnectorTrackCount: number;
+  outboundConnectorTrackCount: number;
+  parkingConnectorTrackCount: number;
+  diagonalTrackCount: number;
+  inboundLiftPadCount: number;
+  outboundLiftPadCount: number;
+  parkingPadCount: number;
+  storagePitchXM: number;
+  storagePitchZM: number;
+  storageBlockMinXM: number;
+  storageBlockMaxXM: number;
+  storageBlockMinZM: number;
+  storageBlockMaxZM: number;
+  inboundLiftXM: number;
+  outboundLiftXM: number;
+  singleLevel: boolean;
+  denseStorageBlock: boolean;
+  orthogonalTrackOnly: boolean;
+  dedicatedLiftPorts: boolean;
+  inboundSide: 'left' | 'right' | 'mixed';
+  outboundSide: 'left' | 'right' | 'mixed';
+};
+
+function sortedUniqueNumbers(values: number[]): number[] {
+  return [...new Set(values.map((value) => round(value, 6)))].sort((left, right) => left - right);
+}
+
+function minimumPositivePitch(values: number[]): number {
+  const sorted = sortedUniqueNumbers(values);
+  const deltas = sorted.slice(1).map((value, index) => round(value - sorted[index]!, 6)).filter((value) => value > 1e-6);
+  return deltas.length > 0 ? deltas[0]! : 0;
+}
+
+function averageX(nodes: LayoutNode[]): number {
+  if (nodes.length === 0) {
+    return 0;
+  }
+  return round(nodes.reduce((total, node) => total + node.x, 0) / nodes.length, 6);
+}
+
+function sideForNodes(nodes: LayoutNode[], storageMinX: number, storageMaxX: number): 'left' | 'right' | 'mixed' {
+  if (nodes.length === 0) {
+    return 'mixed';
+  }
+  if (nodes.every((node) => node.x > storageMaxX)) {
+    return 'right';
+  }
+  if (nodes.every((node) => node.x < storageMinX)) {
+    return 'left';
+  }
+  return 'mixed';
+}
+
 function storageNodeId(rowIndex: number, columnIndex: number): string {
   return `storage-r${String(rowIndex + 1).padStart(2, '0')}-c${String(columnIndex + 1).padStart(2, '0')}`;
 }
@@ -482,6 +546,118 @@ export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides
     routingPolicy: { ...base.routingPolicy, ...overrides.routingPolicy },
     trafficPolicy: { ...base.trafficPolicy, ...overrides.trafficPolicy }
   });
+}
+
+export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario = createDefaultShuttleScenario()): ShuttleStaticSceneContract {
+  const storageNodes = scenario.layout.nodes.filter((node) => node.type === 'storage');
+  const storageCellIds = new Set<string>();
+  const storageRowsById = new Set<number>();
+  const storageColumnsById = new Set<number>();
+  for (const node of storageNodes) {
+    const match = /^storage-r(\d+)-c(\d+)$/.exec(node.id);
+    if (!match) {
+      continue;
+    }
+    storageRowsById.add(Number(match[1]));
+    storageColumnsById.add(Number(match[2]));
+    storageCellIds.add(`${Number(match[1])}:${Number(match[2])}`);
+  }
+
+  const storageXs = sortedUniqueNumbers(storageNodes.map((node) => node.x));
+  const storageZs = sortedUniqueNumbers(storageNodes.map((node) => node.z));
+  const storageRows = storageRowsById.size;
+  const storageColumns = storageColumnsById.size;
+  const storageBlockMinXM = storageXs[0] ?? 0;
+  const storageBlockMaxXM = storageXs[storageXs.length - 1] ?? 0;
+  const storageBlockMinZM = storageZs[0] ?? 0;
+  const storageBlockMaxZM = storageZs[storageZs.length - 1] ?? 0;
+  const expectedCellCount = storageRows * storageColumns;
+  const completeIdGrid =
+    storageRows > 0 &&
+    storageColumns > 0 &&
+    Array.from({ length: storageRows }, (_, rowIndex) => rowIndex + 1).every((row) =>
+      Array.from({ length: storageColumns }, (_, columnIndex) => columnIndex + 1).every((column) =>
+        storageCellIds.has(`${row}:${column}`)
+      )
+    );
+
+  const nodesById = new Map(scenario.layout.nodes.map((node) => [node.id, node]));
+  const diagonalTrackCount = scenario.layout.edges.filter((edge) => {
+    const from = nodesById.get(edge.from);
+    const to = nodesById.get(edge.to);
+    return Boolean(from && to && Math.abs(from.x - to.x) > 1e-6 && Math.abs(from.z - to.z) > 1e-6);
+  }).length;
+  const hasLeftAisle = scenario.layout.nodes.some((node) => node.id.startsWith('left-'));
+  const hasRightAisle = scenario.layout.nodes.some((node) => node.id.startsWith('right-'));
+  const crossAisleTrackCount = scenario.layout.edges.filter((edge) => {
+    const from = nodesById.get(edge.from);
+    const to = nodesById.get(edge.to);
+    if (!from || !to || from.type !== 'aisle' || to.type !== 'aisle') {
+      return false;
+    }
+    return from.z === to.z && ((from.id.startsWith('left-') && to.id.startsWith('right-')) || (from.id.startsWith('right-') && to.id.startsWith('left-')));
+  }).length;
+  const inboundLiftNodes = scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.id.startsWith('inbound-lift-'));
+  const outboundLiftNodes = scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.id.startsWith('outbound-lift-'));
+  const parkingNodes = scenario.layout.nodes.filter((node) => node.type === 'parking');
+  const inboundSide = sideForNodes(inboundLiftNodes, storageBlockMinXM, storageBlockMaxXM);
+  const outboundSide = sideForNodes(outboundLiftNodes, storageBlockMinXM, storageBlockMaxXM);
+  const storageLaneTrackCount = storageRows;
+  const sideAisleTrackCount = Number(hasLeftAisle) + Number(hasRightAisle);
+  const inboundConnectorTrackCount = inboundLiftNodes.length;
+  const outboundConnectorTrackCount = outboundLiftNodes.length;
+  const parkingConnectorTrackCount = parkingNodes.length;
+  const trackBedCount =
+    storageLaneTrackCount +
+    sideAisleTrackCount +
+    crossAisleTrackCount +
+    inboundConnectorTrackCount +
+    outboundConnectorTrackCount +
+    parkingConnectorTrackCount;
+
+  return {
+    schemaVersion: 'shuttle.simCoreStaticSceneContract.v1',
+    scenarioId: scenario.id,
+    units: scenario.layout.units,
+    storageRows,
+    storageColumns,
+    storageCellCount: storageNodes.length,
+    trackBedCount,
+    storageLaneTrackCount,
+    sideAisleTrackCount,
+    crossAisleTrackCount,
+    inboundConnectorTrackCount,
+    outboundConnectorTrackCount,
+    parkingConnectorTrackCount,
+    diagonalTrackCount,
+    inboundLiftPadCount: inboundLiftNodes.length,
+    outboundLiftPadCount: outboundLiftNodes.length,
+    parkingPadCount: parkingNodes.length,
+    storagePitchXM: minimumPositivePitch(storageNodes.map((node) => node.x)),
+    storagePitchZM: minimumPositivePitch(storageNodes.map((node) => node.z)),
+    storageBlockMinXM,
+    storageBlockMaxXM,
+    storageBlockMinZM,
+    storageBlockMaxZM,
+    inboundLiftXM: averageX(inboundLiftNodes),
+    outboundLiftXM: averageX(outboundLiftNodes),
+    singleLevel: sortedUniqueNumbers(scenario.layout.nodes.map((node) => node.y)).length === 1,
+    denseStorageBlock:
+      expectedCellCount > 0 &&
+      storageNodes.length === expectedCellCount &&
+      storageXs.length === storageColumns &&
+      storageZs.length === storageRows &&
+      completeIdGrid,
+    orthogonalTrackOnly: diagonalTrackCount === 0,
+    dedicatedLiftPorts:
+      inboundLiftNodes.length > 0 &&
+      outboundLiftNodes.length > 0 &&
+      inboundSide !== 'mixed' &&
+      outboundSide !== 'mixed' &&
+      inboundSide !== outboundSide,
+    inboundSide,
+    outboundSide
+  };
 }
 
 class TrafficReservationController {

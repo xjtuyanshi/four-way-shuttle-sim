@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { accessSync, constants, existsSync, readFileSync, rmSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -37,6 +37,74 @@ function assertExecutable(label, targetPath) {
 function readJson(label, targetPath) {
   assertPath(label, targetPath);
   return JSON.parse(readFileSync(targetPath, 'utf8'));
+}
+
+function readSimCoreStaticSceneContract() {
+  const child = spawnSync('pnpm', ['exec', 'tsx', 'scripts/print-default-static-scene-contract.ts'], {
+    cwd: repoRoot,
+    encoding: 'utf8'
+  });
+  if (child.error) {
+    throw child.error;
+  }
+  if (child.status !== 0) {
+    throw new Error(`Could not read SimCore static scene contract.\nstdout:\n${child.stdout}\nstderr:\n${child.stderr}`);
+  }
+  return JSON.parse(child.stdout);
+}
+
+function assertExactFieldParity(field, unrealSummary, simCoreContract) {
+  if (unrealSummary[field] !== simCoreContract[field]) {
+    throw new Error(`Unreal static scene ${field}=${JSON.stringify(unrealSummary[field])} does not match SimCore default ${field}=${JSON.stringify(simCoreContract[field])}.`);
+  }
+}
+
+function assertCloseFieldParity(field, unrealSummary, simCoreContract, tolerance = 0.001) {
+  const observed = Number(unrealSummary[field]);
+  const expected = Number(simCoreContract[field]);
+  if (!Number.isFinite(observed) || !Number.isFinite(expected) || Math.abs(observed - expected) > tolerance) {
+    throw new Error(`Unreal static scene ${field}=${JSON.stringify(unrealSummary[field])} does not match SimCore default ${field}=${JSON.stringify(simCoreContract[field])} within ${tolerance}.`);
+  }
+}
+
+function assertStaticSceneParityWithSimCore(unrealSummary, simCoreContract) {
+  for (const field of [
+    'storageRows',
+    'storageColumns',
+    'storageCellCount',
+    'trackBedCount',
+    'storageLaneTrackCount',
+    'sideAisleTrackCount',
+    'crossAisleTrackCount',
+    'inboundConnectorTrackCount',
+    'outboundConnectorTrackCount',
+    'parkingConnectorTrackCount',
+    'diagonalTrackCount',
+    'inboundLiftPadCount',
+    'outboundLiftPadCount',
+    'parkingPadCount',
+    'singleLevel',
+    'denseStorageBlock',
+    'orthogonalTrackOnly',
+    'dedicatedLiftPorts',
+    'inboundSide',
+    'outboundSide'
+  ]) {
+    assertExactFieldParity(field, unrealSummary, simCoreContract);
+  }
+
+  for (const field of [
+    'storagePitchXM',
+    'storagePitchZM',
+    'storageBlockMinXM',
+    'storageBlockMaxXM',
+    'storageBlockMinZM',
+    'storageBlockMaxZM',
+    'inboundLiftXM',
+    'outboundLiftXM'
+  ]) {
+    assertCloseFieldParity(field, unrealSummary, simCoreContract);
+  }
 }
 
 function assertPluginEnabled(project, pluginName) {
@@ -301,18 +369,17 @@ async function main() {
   if (staticSceneSummary.pass !== true) {
     throw new Error(`Unreal static scene smoke summary did not pass: ${JSON.stringify(staticSceneSummary, null, 2)}`);
   }
+  const simCoreStaticSceneContract = readSimCoreStaticSceneContract();
   if (
-    staticSceneSummary.storageRows !== 6 ||
-    staticSceneSummary.storageColumns !== 8 ||
-    staticSceneSummary.storageCellCount !== 48 ||
-    staticSceneSummary.diagonalTrackCount !== 0 ||
-    staticSceneSummary.inboundSide !== 'right' ||
-    staticSceneSummary.outboundSide !== 'left' ||
-    staticSceneSummary.dedicatedLiftPorts !== true
+    simCoreStaticSceneContract.singleLevel !== true ||
+    simCoreStaticSceneContract.denseStorageBlock !== true ||
+    simCoreStaticSceneContract.orthogonalTrackOnly !== true ||
+    simCoreStaticSceneContract.dedicatedLiftPorts !== true
   ) {
-    throw new Error(`Unreal static scene contract is not a single-level dense four-way shuttle layout: ${JSON.stringify(staticSceneSummary, null, 2)}`);
+    throw new Error(`SimCore default scene contract is not a single-level dense four-way shuttle layout: ${JSON.stringify(simCoreStaticSceneContract, null, 2)}`);
   }
-  console.log(JSON.stringify({ unrealStaticSceneSmoke: staticSceneSummary }, null, 2));
+  assertStaticSceneParityWithSimCore(staticSceneSummary, simCoreStaticSceneContract);
+  console.log(JSON.stringify({ simCoreStaticSceneContract, unrealStaticSceneSmoke: staticSceneSummary }, null, 2));
 
   await run(unrealEditor, [
     projectPath,
