@@ -5,7 +5,8 @@ import {
   calculateTravelTimeSec,
   createDefaultShuttleScenario,
   hashEventLog,
-  motionProfileAt
+  motionProfileAt,
+  summarizeScenarioStaticSceneContract
 } from './index.js';
 
 function testScenario(overrides: Partial<ShuttleScenario>): ShuttleScenario {
@@ -156,6 +157,44 @@ describe('shuttle phase 0 SimCore', () => {
     expect(outboundLifts.every((node) => Math.abs(node.z) > 0)).toBe(true);
     expect(scenario.layout.edges.some((edge) => edge.id === 'inbound-lift-a-right-row-01')).toBe(true);
     expect(scenario.layout.edges.some((edge) => edge.id === 'outbound-lift-a-left-row-01')).toBe(true);
+  });
+
+  it('summarizes the default layout contract used by the Unreal static scaffold', () => {
+    const contract = summarizeScenarioStaticSceneContract(createDefaultShuttleScenario());
+
+    expect(contract).toMatchObject({
+      schemaVersion: 'shuttle.simCoreStaticSceneContract.v1',
+      scenarioId: 'shuttle-phase0-balanced',
+      units: 'meter',
+      storageRows: 6,
+      storageColumns: 8,
+      storageCellCount: 48,
+      trackBedCount: 16,
+      storageLaneTrackCount: 6,
+      sideAisleTrackCount: 2,
+      crossAisleTrackCount: 2,
+      inboundConnectorTrackCount: 2,
+      outboundConnectorTrackCount: 2,
+      parkingConnectorTrackCount: 2,
+      diagonalTrackCount: 0,
+      inboundLiftPadCount: 2,
+      outboundLiftPadCount: 2,
+      parkingPadCount: 2,
+      singleLevel: true,
+      denseStorageBlock: true,
+      orthogonalTrackOnly: true,
+      dedicatedLiftPorts: true,
+      inboundSide: 'right',
+      outboundSide: 'left'
+    });
+    expect(contract.storagePitchXM).toBeCloseTo(1.25, 6);
+    expect(contract.storagePitchZM).toBeCloseTo(1.2, 6);
+    expect(contract.storageBlockMinXM).toBeCloseTo(2.5, 6);
+    expect(contract.storageBlockMaxXM).toBeCloseTo(11.25, 6);
+    expect(contract.storageBlockMinZM).toBeCloseTo(-3, 6);
+    expect(contract.storageBlockMaxZM).toBeCloseTo(3, 6);
+    expect(contract.inboundLiftXM).toBeCloseTo(18, 6);
+    expect(contract.outboundLiftXM).toBeCloseTo(-4, 6);
   });
 
   it('rejects multi-capacity traffic resources for Phase 0', () => {
