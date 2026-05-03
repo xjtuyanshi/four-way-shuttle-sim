@@ -65,6 +65,7 @@ describe('phase 0 validation', () => {
   it('checks same-seed hash stability and seed sweep health', () => {
     const result = validatePhase0Scenario(createDefaultShuttleScenario({ durationSec: 120 }), {
       durationSec: 120,
+      longRunDurationSec: 240,
       repeatCount: 3,
       sweepSeeds: [20260502, 20260503]
     });
@@ -77,6 +78,13 @@ describe('phase 0 validation', () => {
     expect(result.seedSweep.runs.every((run) => run.physicalViolationCount === 0)).toBe(true);
     expect(result.seedSweep.runs.every((run) => run.physicalViolationsByCode.unreservedEdgeOccupancy === 0)).toBe(true);
     expect(result.seedSweep.runs.every((run) => run.physicalViolationExamples.length === 0)).toBe(true);
+    expect(result.longRun.durationSec).toBe(240);
+    expect(result.longRun.runs).toHaveLength(2);
+    expect(result.longRun.maxQueuedTasks).toBeLessThanOrEqual(40);
+    expect(result.acceptance.longRunEventLogsPresent).toBe(true);
+    expect(result.acceptance.longRunThroughputPositive).toBe(true);
+    expect(result.acceptance.longRunQueuesBounded).toBe(true);
+    expect(result.acceptance.noLongRunPhysicalSafetyViolations).toBe(true);
     expect(result.acceptance.pass).toBe(true);
   });
 

@@ -29,8 +29,8 @@ Default local URLs:
 - WebSocket: `ws://localhost:8791/shuttle-ws`
 - Dashboard: `http://localhost:5179`
 
-Unreal / Pixel Streaming validation is blocked until Unreal Engine 5.7.4 and full Xcode are installed on the Mac.
+Unreal Engine 5.7.4 and full Xcode are installed on the local Mac. The source bridge has compile/headless smoke coverage; packaged Pixel Streaming soak is still pending until the real Unreal visual scene exists.
 
-`pnpm shuttle:validate` runs the Phase 0 acceptance gate without rendering: same-seed event-log hash stability, a small seed sweep, prerequisite inspection, KPI summary, deadlock checks, reservation coverage checks, and physical safety checks for speed, acceleration, finite coordinates, and vehicle separation.
+`pnpm shuttle:validate` runs the Phase 0 acceptance gate without rendering: same-seed event-log hash stability, a small seed sweep, a 600-second long-run sweep, prerequisite inspection, KPI summary, deadlock checks, reservation coverage checks, and physical safety checks for speed, acceleration, finite coordinates, and rectangular vehicle footprint clearance.
 
 Phase 0 enforces edge, node, and zone capacity as `1`, and requires at least one parking node per vehicle so reset can assign one authoritative current-node occupant per shuttle. Multi-capacity reservation accounting is reserved for Phase 1.

@@ -147,6 +147,30 @@ export const ShuttleScenarioSchema = z.object({
       message: 'Phase 0 requires at least one parking node per vehicle because node capacity is fixed at 1.'
     });
   }
+  const storageRows = new Set<string>();
+  for (const node of scenario.layout.nodes.filter((candidate) => candidate.type === 'storage')) {
+    const match = /^storage-r(\d+)-c(\d+)$/.exec(node.id);
+    if (!match) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['layout', 'nodes', node.id, 'id'],
+        message: 'Phase 1 FIFO storage nodes must use storage-rNN-cNN ids until explicit row/column metadata is added.'
+      });
+      continue;
+    }
+    storageRows.add(match[1]!);
+  }
+  for (const row of storageRows) {
+    for (const sideNodeId of [`left-row-${row}`, `right-row-${row}`]) {
+      if (!nodeIds.has(sideNodeId)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['layout', 'nodes'],
+          message: `FIFO storage row ${row} requires side access node ${sideNodeId}.`
+        });
+      }
+    }
+  }
   if (scenario.trafficPolicy.edgeCapacity !== 1) {
     context.addIssue({
       code: z.ZodIssueCode.custom,

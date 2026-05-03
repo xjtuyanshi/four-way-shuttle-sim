@@ -45,6 +45,11 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 - Made storage-cell pass-through explicit: occupied storage cells are blocked for routing unless that cell is the current task endpoint.
 - Changed live playback speed to substep internally at `scenario.timeStepSec`, so `10x` playback does not skip the same motion/reservation checks used by validation.
 - Added same-row multi-cycle outbound regression coverage so FIFO draining cannot reintroduce hidden pallet compaction.
+- Tightened safety validation to use oriented rectangular shuttle footprints plus configured clearance; center-to-center separation remains diagnostic only.
+- Added a 600-second long-run validation sweep with queue, waiting vehicle, lift-port queue, deadlock, physical safety, and reservation coverage gates.
+- Added schema enforcement for the temporary FIFO storage naming contract: `storage-rNN-cNN` cells plus matching `left-row-NN` / `right-row-NN` access nodes.
+- Fixed route planning so future queued inbound slots reserve logical destinations without becoming physical obstacles before work is assigned.
+- Validated and clamped playback speed input, including `SHUTTLE_SPEED`.
 
 ## Next TODO
 

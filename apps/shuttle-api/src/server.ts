@@ -12,7 +12,19 @@ import { validatePhase0Scenario } from './validation.js';
 
 const port = Number(process.env.SHUTTLE_PORT ?? process.env.PORT ?? 8791);
 const tickMs = Number(process.env.SHUTTLE_TICK_MS ?? 250);
-let playbackSpeed = Number(process.env.SHUTTLE_SPEED ?? 1);
+
+function parsePlaybackSpeed(value: unknown): number | null {
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    return null;
+  }
+  if (typeof value === 'string' && value.trim() === '') {
+    return null;
+  }
+  const speed = Number(value);
+  return Number.isFinite(speed) && speed > 0 && speed <= 20 ? speed : null;
+}
+
+let playbackSpeed = parsePlaybackSpeed(process.env.SHUTTLE_SPEED) ?? 1;
 
 const app = express();
 app.use(cors());
@@ -86,8 +98,8 @@ app.get('/api/shuttle/playbackSpeed', (_request: Request, response: Response) =>
 });
 
 app.post('/api/shuttle/playbackSpeed', (request: Request, response: Response) => {
-  const speed = Number(request.body?.speed);
-  if (!Number.isFinite(speed) || speed <= 0 || speed > 20) {
+  const speed = parsePlaybackSpeed(request.body?.speed);
+  if (speed === null) {
     response.status(422).json({ ok: false, error: 'Playback speed must be greater than 0 and at most 20.' });
     return;
   }

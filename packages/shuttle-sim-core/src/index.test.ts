@@ -94,6 +94,7 @@ describe('shuttle phase 0 SimCore', () => {
     const parsed = ShuttleScenarioSchema.parse(scenario);
 
     expect(parsed.schemaVersion).toBe('shuttle.phase0.v0');
+    expect(parsed.vehicles.safetyRadiusM).toBe(0.1);
     expect(parsed.layout.nodes.filter((node) => node.type === 'lift-blackbox').map((node) => node.id).sort()).toEqual([
       'inbound-lift-a',
       'inbound-lift-b',
@@ -193,6 +194,34 @@ describe('shuttle phase 0 SimCore', () => {
         }
       })
     ).toThrow(/Duplicate node id parking-a/);
+  });
+
+  it('rejects storage nodes without explicit FIFO row and column ids', () => {
+    const scenario = createDefaultShuttleScenario();
+    expect(() =>
+      ShuttleScenarioSchema.parse({
+        ...scenario,
+        layout: {
+          ...scenario.layout,
+          nodes: scenario.layout.nodes.map((node) =>
+            node.id === 'storage-r01-c01' ? { ...node, id: 'storage-a' } : node
+          )
+        }
+      })
+    ).toThrow(/storage-rNN-cNN/);
+  });
+
+  it('rejects storage rows without left and right side access nodes', () => {
+    const scenario = createDefaultShuttleScenario();
+    expect(() =>
+      ShuttleScenarioSchema.parse({
+        ...scenario,
+        layout: {
+          ...scenario.layout,
+          nodes: scenario.layout.nodes.filter((node) => node.id !== 'left-row-01')
+        }
+      })
+    ).toThrow(/requires side access node left-row-01/);
   });
 
   it('produces the same event log hash for the same seed', () => {
@@ -322,22 +351,26 @@ describe('shuttle phase 0 SimCore', () => {
           { id: 'parking-a', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
           { id: 'parking-b', type: 'parking', x: 0, y: 0, z: 4, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
           { id: 'inbound-lift-test', type: 'lift-blackbox', x: 1, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-          { id: 'storage-blocker', type: 'storage', x: 2, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
-          { id: 'storage-target', type: 'storage', x: 3, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'left-row-01', type: 'aisle', x: 1, y: 0, z: -1, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'storage-r01-c01', type: 'storage', x: 2, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'storage-r01-c02', type: 'storage', x: 3, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'right-row-01', type: 'aisle', x: 4, y: 0, z: -1, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
           { id: 'bypass', type: 'aisle', x: 2, y: 0, z: 2, noStop: false, noParking: true, capacity: 1, allowedDirections: [] }
         ],
         edges: [
           { id: 'parking-a-inbound-lift-test', from: 'parking-a', to: 'inbound-lift-test', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'parking-lift', noParking: true },
-          { id: 'inbound-lift-test-storage-blocker', from: 'inbound-lift-test', to: 'storage-blocker', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'blocked-storage-path', noParking: true },
-          { id: 'storage-blocker-storage-target', from: 'storage-blocker', to: 'storage-target', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'blocked-storage-path', noParking: true },
+          { id: 'inbound-lift-test-storage-r01-c01', from: 'inbound-lift-test', to: 'storage-r01-c01', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'blocked-storage-path', noParking: true },
+          { id: 'storage-r01-c01-storage-r01-c02', from: 'storage-r01-c01', to: 'storage-r01-c02', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'blocked-storage-path', noParking: true },
+          { id: 'inbound-lift-test-right-row-01', from: 'inbound-lift-test', to: 'right-row-01', lengthM: 3, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'right-row-access', noParking: true },
+          { id: 'right-row-01-storage-r01-c02', from: 'right-row-01', to: 'storage-r01-c02', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'right-row-access', noParking: true },
           { id: 'inbound-lift-test-bypass', from: 'inbound-lift-test', to: 'bypass', lengthM: 2, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'storage-bypass', noParking: true },
-          { id: 'bypass-storage-target', from: 'bypass', to: 'storage-target', lengthM: 2, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'storage-bypass', noParking: true }
+          { id: 'bypass-storage-r01-c02', from: 'bypass', to: 'storage-r01-c02', lengthM: 2, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'storage-bypass', noParking: true }
         ],
         zones: []
       }
     });
     const sim = new ShuttleSimCore(scenario);
-    sim.addLoadForTest({ id: 'load-blocker', state: 'stored', nodeId: 'storage-blocker', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'load-blocker', state: 'stored', nodeId: 'storage-r01-c01', vehicleId: null, weightKg: 100 });
     sim.addLoadForTest({ id: 'load-inbound', state: 'waiting', nodeId: 'inbound-lift-test', vehicleId: null, weightKg: 100 });
     sim.addTaskForTest({
       id: 'task-inbound',
@@ -348,7 +381,7 @@ describe('shuttle phase 0 SimCore', () => {
       startedAtSec: null,
       completedAtSec: null,
       pickupNodeId: 'inbound-lift-test',
-      dropoffNodeId: 'storage-target',
+      dropoffNodeId: 'storage-r01-c02',
       loadId: 'load-inbound',
       vehicleId: null,
       replanCount: 0,
@@ -358,8 +391,58 @@ describe('shuttle phase 0 SimCore', () => {
     sim.step(0.2);
     const assignedVehicle = sim.getState().vehicles.find((vehicle) => vehicle.taskId === 'task-inbound');
 
-    expect(assignedVehicle?.routeNodeIds).toEqual(expect.arrayContaining(['inbound-lift-test', 'bypass', 'storage-target']));
-    expect(assignedVehicle?.routeNodeIds).not.toContain('storage-blocker');
+    expect(assignedVehicle?.routeNodeIds).toEqual(expect.arrayContaining(['inbound-lift-test', 'right-row-01', 'storage-r01-c02']));
+    expect(assignedVehicle?.routeNodeIds).not.toContain('storage-r01-c01');
+  });
+
+  it('does not treat future queued inbound slots as physical storage obstacles', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario({
+      durationSec: 120,
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 10
+      }
+    }));
+    sim.addLoadForTest({ id: 'load-r06-c03', state: 'waiting', nodeId: 'inbound-lift-b', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'load-r06-c04', state: 'waiting', nodeId: 'inbound-lift-b', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'task-r06-c03',
+      kind: 'inbound',
+      state: 'queued',
+      createdAtSec: 0,
+      assignedAtSec: null,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'inbound-lift-b',
+      dropoffNodeId: 'storage-r06-c03',
+      loadId: 'load-r06-c03',
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'task-r06-c04',
+      kind: 'inbound',
+      state: 'queued',
+      createdAtSec: 0,
+      assignedAtSec: null,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'inbound-lift-b',
+      dropoffNodeId: 'storage-r06-c04',
+      loadId: 'load-r06-c04',
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: null
+    });
+
+    sim.step(0.2);
+    const assignedVehicle = sim.getState().vehicles.find((vehicle) => vehicle.taskId === 'task-r06-c03');
+
+    expect(assignedVehicle?.routeNodeIds).toEqual(expect.arrayContaining(['right-row-06', 'storage-r06-c04', 'storage-r06-c03']));
   });
 
   it('drains multiple pallets from the same FIFO row without hidden compaction', () => {

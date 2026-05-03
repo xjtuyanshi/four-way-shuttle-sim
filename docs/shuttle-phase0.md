@@ -55,6 +55,8 @@ Runtime state now includes `traffic` diagnostics alongside vehicles, tasks, load
 
 `traffic.physicalViolationCount` is an instantaneous count for the current state snapshot. The validation gate owns cumulative aggregation and reports `physicalViolationsByCode` plus the first `physicalViolationExamples`.
 
+`traffic.minVehicleSeparationM` remains a center-to-center diagnostic. Safety acceptance uses each shuttle's oriented rectangular footprint plus the configured `vehicles.safetyRadiusM` clearance, so it is not limited to a center-point disk approximation.
+
 WebSocket stream messages:
 
 - `connectionRecovered`
@@ -79,7 +81,7 @@ The Phase 0 traffic model includes the data structure needed for the harder Phas
 - wait reason codes
 - deadlock/livelock counters and detector placeholders
 
-Phase 0 enforces edge, node, and zone reservation capacity as `1`. It also requires at least one parking node per vehicle so reset can initialize one authoritative current-node occupant per shuttle. Multi-capacity reservation accounting is intentionally deferred to Phase 1.
+Phase 0 enforces edge, node, and zone reservation capacity as `1`. It also requires at least one parking node per vehicle so reset can initialize one authoritative current-node occupant per shuttle. Storage nodes must use `storage-rNN-cNN` ids and each storage row must expose `left-row-NN` and `right-row-NN` side access nodes until explicit row/column metadata is added. Multi-capacity reservation accounting is intentionally deferred to Phase 1.
 
 This is still a smoke implementation. It validates deterministic blocking and wait reason logging; it is not the final multi-agent traffic controller.
 
@@ -101,7 +103,7 @@ The Unreal bridge has been compiled inside a temporary UE 5.7 project with Pixel
 - Event log hash: implemented with SHA-256 over stable event fields.
 - Reset without UE process restart: implemented at API/SimCore level.
 - Dashboard control path: implemented for resume, pause, reset, and parameter updates.
-- Validation gate: implemented for same-seed hash stability, seed sweep health, deadlock absence, and physical safety checks.
+- Validation gate: implemented for same-seed hash stability, seed sweep health, 600-second long-run queue/lift/deadlock health, reservation coverage, and physical safety checks.
 - Local 3D preview: implemented in the dashboard as a browser-side visual twin driven by the same SimCore state stream that Unreal consumes.
 - WebSocket reconnect: dashboard reconnects and consumes `connectionRecovered`.
 - Unreal visual twin: source scaffold implemented and compile-smoked in UE 5.7.

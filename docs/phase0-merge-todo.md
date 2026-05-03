@@ -7,7 +7,7 @@ Scope: continue the `codex/phase1-validation-traffic-demo` branch toward merge w
 - Repository is public: `https://github.com/xjtuyanshi/four-way-shuttle-sim`
 - Review branch: `codex/phase1-validation-traffic-demo`
 - Base branch: `main`
-- External review verdict addressed so far: merge after fixes
+- Latest external review verdict: merge after fixes
 - Unreal Engine 5.7.4 and full Xcode are installed; bridge compile/headless smoke passed
 
 ## Autonomous Five-Round Pass
@@ -34,12 +34,12 @@ Scope: continue the `codex/phase1-validation-traffic-demo` branch toward merge w
 - Added schema/test coverage to reject duplicate node ids, including duplicate parking node ids.
 - Re-ran full local verification and browser smoke after these fixes.
 
-## Final External Review Result
+## Latest External Review Result
 
-- Final ChatGPT Pro review was run against head `28d6aeb112440998e8d6a603ab35065b73ccde52`.
-- The full GitHub-access review stalled on remote access/truncation, so a second no-network merge-blocker review was run from the final packet.
-- Result: no verified must-fix findings before merge.
-- Verdict: merge now.
+- The latest ChatGPT Pro review was run against the public UE-ready branch and returned `merge after fixes`.
+- Local fixes now address the review's must-fix items: rectangular footprint safety validation, long-run queue/lift acceptance, FIFO storage schema contract, queued-slot physical obstacle handling, playback speed validation, UE readiness wording, and lift-port diagnostic wording.
+- Result after local verification: no verified must-fix findings remain locally.
+- Verdict before final merge: ready for pushed re-review.
 - Unreal bridge compile/headless smoke is verified on this machine. Packaged Pixel Streaming soak remains pending until the real visual scene exists.
 
 ## Merge-Blocking TODO
@@ -50,6 +50,9 @@ Scope: continue the `codex/phase1-validation-traffic-demo` branch toward merge w
 - Keep dashboard stream reducers covered by tests so incremental `vehicleState` / `kpiUpdate` messages refresh the UI.
 - Keep Phase 0 reservation capacities fixed at `1`; defer multi-capacity counting to Phase 1.
 - Keep validation-owned cumulative aggregation for physical/reservation violations.
+- Keep rectangular vehicle footprint clearance as the safety acceptance check; `minVehicleSeparationM` is diagnostic only.
+- Keep the 600-second long-run validation gate green for queue, waiting vehicle, lift-port queue, deadlock, physical safety, and reservation coverage flags.
+- Keep FIFO storage ids on the `storage-rNN-cNN` contract until explicit row/column metadata is added.
 - Keep Unreal and Pixel Streaming runtime validation gated by installed UE/Xcode tools and by whether a real UE scene exists.
 - Do not merge if any of `pnpm typecheck`, `pnpm test`, `pnpm build`, or `pnpm shuttle:validate` fails.
 

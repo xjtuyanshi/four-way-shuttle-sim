@@ -74,6 +74,54 @@ function round(value: number, decimals = 6): number {
   return Math.round(value * factor) / factor;
 }
 
+type FootprintPose = Pick<VehicleState, 'x' | 'z' | 'yaw'>;
+
+type Axis2 = { x: number; z: number };
+
+function footprintAxes(yaw: number): [Axis2, Axis2] {
+  const cos = Math.cos(yaw);
+  const sin = Math.sin(yaw);
+  return [
+    { x: cos, z: sin },
+    { x: -sin, z: cos }
+  ];
+}
+
+function footprintCorners(
+  vehicle: FootprintPose,
+  config: ShuttleScenario['vehicles']
+): Array<{ x: number; z: number }> {
+  const [forward, lateral] = footprintAxes(vehicle.yaw);
+  const halfLengthM = config.lengthM / 2 + config.safetyRadiusM / 2;
+  const halfWidthM = config.widthM / 2 + config.safetyRadiusM / 2;
+  return [
+    { x: vehicle.x + forward.x * halfLengthM + lateral.x * halfWidthM, z: vehicle.z + forward.z * halfLengthM + lateral.z * halfWidthM },
+    { x: vehicle.x + forward.x * halfLengthM - lateral.x * halfWidthM, z: vehicle.z + forward.z * halfLengthM - lateral.z * halfWidthM },
+    { x: vehicle.x - forward.x * halfLengthM + lateral.x * halfWidthM, z: vehicle.z - forward.z * halfLengthM + lateral.z * halfWidthM },
+    { x: vehicle.x - forward.x * halfLengthM - lateral.x * halfWidthM, z: vehicle.z - forward.z * halfLengthM - lateral.z * halfWidthM }
+  ];
+}
+
+function projectionRange(corners: Array<{ x: number; z: number }>, axis: Axis2): { min: number; max: number } {
+  const values = corners.map((corner) => corner.x * axis.x + corner.z * axis.z);
+  return { min: Math.min(...values), max: Math.max(...values) };
+}
+
+function vehicleFootprintsOverlap(
+  left: FootprintPose,
+  right: FootprintPose,
+  config: ShuttleScenario['vehicles']
+): boolean {
+  const leftCorners = footprintCorners(left, config);
+  const rightCorners = footprintCorners(right, config);
+  const axes = [...footprintAxes(left.yaw), ...footprintAxes(right.yaw)];
+  return axes.every((axis) => {
+    const leftRange = projectionRange(leftCorners, axis);
+    const rightRange = projectionRange(rightCorners, axis);
+    return leftRange.max + 1e-6 >= rightRange.min && rightRange.max + 1e-6 >= leftRange.min;
+  });
+}
+
 function stableJson(value: unknown): string {
   if (value === null || typeof value !== 'object') {
     return JSON.stringify(value);
@@ -385,7 +433,7 @@ export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides
       liftTimeSec: 2,
       lowerTimeSec: 2,
       maxLoadKg: 1800,
-      safetyRadiusM: 0.5,
+      safetyRadiusM: 0.1,
       batteryEnabled: false,
       initialSoc: 1
     },
@@ -1201,9 +1249,21 @@ export class ShuttleSimCore {
   private blockedStorageTransitNodeIds(allowedNodeIds: Set<string>): Set<string> {
     const storageNodeIds = new Set(this.scenario.layout.nodes.filter((node) => node.type === 'storage').map((node) => node.id));
     const blockedNodeIds = new Set<string>();
-    for (const nodeId of this.storageNodeLoadOccupancy(true).keys()) {
+    for (const nodeId of this.storageNodeLoadOccupancy(false).keys()) {
       if (storageNodeIds.has(nodeId) && !allowedNodeIds.has(nodeId)) {
         blockedNodeIds.add(nodeId);
+      }
+    }
+    for (const task of this.tasks) {
+      if (
+        task.kind === 'inbound' &&
+        task.state !== 'queued' &&
+        task.state !== 'completed' &&
+        task.state !== 'failed' &&
+        storageNodeIds.has(task.dropoffNodeId) &&
+        !allowedNodeIds.has(task.dropoffNodeId)
+      ) {
+        blockedNodeIds.add(task.dropoffNodeId);
       }
     }
     return blockedNodeIds;
@@ -1742,7 +1802,6 @@ export class ShuttleSimCore {
     const deadlockCandidateVehicleIds = this.deadlockCandidateVehicleIds();
     let minVehicleSeparationM: number | null = null;
     let physicalViolationCount = 0;
-    const minCenterSeparationM = this.scenario.vehicles.safetyRadiusM * 2;
     const maxConfiguredSpeedMps = Math.max(this.scenario.physicsParams.emptySpeedMps, this.scenario.physicsParams.loadedSpeedMps);
 
     for (const vehicle of this.vehicles) {
@@ -1760,7 +1819,7 @@ export class ShuttleSimCore {
         const right = this.vehicles[rightIndex]!;
         const separationM = Math.hypot(left.x - right.x, left.z - right.z);
         minVehicleSeparationM = minVehicleSeparationM === null ? separationM : Math.min(minVehicleSeparationM, separationM);
-        if (separationM + 1e-6 < minCenterSeparationM) {
+        if (vehicleFootprintsOverlap(left, right, this.scenario.vehicles)) {
           physicalViolationCount += 1;
         }
       }

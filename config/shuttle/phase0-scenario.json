@@ -17,7 +17,7 @@
     "liftTimeSec": 2,
     "lowerTimeSec": 2,
     "maxLoadKg": 1800,
-    "safetyRadiusM": 0.5,
+    "safetyRadiusM": 0.1,
     "batteryEnabled": false,
     "initialSoc": 1
   },

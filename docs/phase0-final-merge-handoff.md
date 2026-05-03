@@ -6,9 +6,9 @@ Repository: `https://github.com/xjtuyanshi/four-way-shuttle-sim`
 
 ## Merge Verdict
 
-- Local verdict: ready to merge.
-- Prior ChatGPT Pro final review verdict: merge now; current UE-readiness re-review is pending.
-- Verified must-fix findings remaining: none.
+- Local verdict after latest fixes: ready for re-review/merge.
+- Latest ChatGPT Pro public-branch verdict: merge after fixes.
+- Verified must-fix findings remaining locally: none after this pass.
 - Unreal Engine 5.7.4 and full Xcode are now installed; bridge compile/headless smoke passed. Packaged Pixel Streaming soak remains pending.
 
 ## Verification
@@ -31,7 +31,17 @@ noDeadlocksInSweep=true
 eventLogsPresent=true
 noPhysicalSafetyViolations=true
 noReservationCoverageViolations=true
+longRunEventLogsPresent=true
+longRunThroughputPositive=true
+longRunQueuesBounded=true
+noLongRunDeadlocks=true
+noLongRunPhysicalSafetyViolations=true
+noLongRunReservationCoverageViolations=true
 physicalViolationsByCode all zero
+longRun.totalPphMean=90
+longRun.maxQueuedTasks=9
+longRun.maxWaitingVehicles=1
+longRun.maxLiftPortQueueLength=4
 ```
 
 Browser smoke:
@@ -40,8 +50,9 @@ Browser smoke:
 dashboard loads
 3D canvas appears
 runtime advances
-vehicle table shows waiting-blocked and loaded-moving
+vehicle table shows lifting and returning states
 localhost console errors/warnings none observed
+canvas screenshot sample: 3392/3393 sampled pixels non-dark, 246 unique colors
 ```
 
 ## Non-Blocking Phase 1 Backlog

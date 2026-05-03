@@ -50,7 +50,7 @@ Primary files:
   - speed limit violations
   - acceleration limit violations
   - invalid coordinates
-  - minimum center separation under the configured vehicle safety radius
+  - rectangular vehicle footprint overlap under the configured clearance
 
 Primary files:
 
@@ -130,6 +130,19 @@ Hardening highlights:
 - Enforced capacity `= 1` for Phase 0 instead of partially supporting multi-capacity reservations.
 - Dashboard now merges incremental `vehicleState` and `kpiUpdate` WebSocket messages into the current state snapshot.
 
+## Latest ChatGPT Pro Review Fixes
+
+The latest public-PR ChatGPT Pro verdict was: merge after fixes. This local pass addresses those blockers without adding product features or redesigning architecture.
+
+- Replaced center-point safety acceptance with oriented rectangular vehicle footprint overlap checks plus `vehicles.safetyRadiusM` clearance. `minVehicleSeparationM` remains a diagnostic only.
+- Added a 600-second long-run seed sweep to `pnpm shuttle:validate` with queue, waiting vehicle, lift-port queue, deadlock, physical safety, and reservation coverage acceptance flags.
+- Added long-run metrics to the validation report: `longRun.totalPphMean`, `maxQueuedTasks`, `maxWaitingVehicles`, and `maxLiftPortQueueLength`.
+- Added schema validation for Phase 1 FIFO storage naming: storage cells must use `storage-rNN-cNN`, and each row must expose `left-row-NN` and `right-row-NN` side access nodes.
+- Fixed route planning so future queued inbound storage slots reserve logical destinations but do not become physical transit obstacles before a shuttle is assigned or moving.
+- Clamped and validated `SHUTTLE_SPEED` / playback speed input.
+- Relabeled lift-port UI wording as diagnostics; Phase 0 utilization is allocation time, not measured mechanical lift service utilization.
+- Reconciled docs around UE 5.7.4 readiness: source bridge compile/headless smoke has passed; packaged Pixel Streaming soak remains pending until the real UE visual scene exists.
+
 ## Phase 1 Demo Alignment Since Hardening
 
 The browser demo has been adjusted toward the user's four-way shuttle reference:
@@ -142,7 +155,7 @@ The browser demo has been adjusted toward the user's four-way shuttle reference:
 - Lift behavior is modeled only as black-box ports, not as multi-level lift physics.
 - Dedicated inbound ports: `inbound-lift-a`, `inbound-lift-b`.
 - Dedicated outbound ports: `outbound-lift-a`, `outbound-lift-b`.
-- Dedicated lift ports expose queue length, active task id, waiting task ids, and port allocation/utilization in traffic diagnostics. In this phase, utilization means the black-box port is allocated by an active task; true lift-mechanism service utilization is a later split metric.
+- Dedicated lift ports expose queue length, active task id, waiting task ids, and allocation/utilization diagnostics. In this phase, utilization means the black-box port is allocated by an active task; true lift-mechanism service utilization is a later split metric.
 - The 3D view renders low black-box ports, dense track-cell storage, side aisles, and roller conveyor entry/exit pads.
 - Runtime playback speed supports `1x`, `2x`, `4x`, and `10x`.
 - Fast playback is internally substepped at `scenario.timeStepSec`; the API broadcasts the final state after the accumulated live interval instead of advancing the simulation in one large `10x` jump.
@@ -177,7 +190,17 @@ noDeadlocksInSweep=true
 eventLogsPresent=true
 noPhysicalSafetyViolations=true
 noReservationCoverageViolations=true
+longRunEventLogsPresent=true
+longRunThroughputPositive=true
+longRunQueuesBounded=true
+noLongRunDeadlocks=true
+noLongRunPhysicalSafetyViolations=true
+noLongRunReservationCoverageViolations=true
 totalPphMean=75
+longRun.totalPphMean=90
+longRun.maxQueuedTasks=9
+longRun.maxWaitingVehicles=1
+longRun.maxLiftPortQueueLength=4
 maxObservedSpeedMps=2
 maxObservedAccelerationMps2=1
 minVehicleSeparationM=1.2005
@@ -191,9 +214,9 @@ Browser smoke also passed:
 ```text
 Dashboard loaded at http://localhost:5179
 3D canvas count: 1
-3D canvas data URL length: 10178
-Runtime advanced to 00:01:09
-Vehicle table showed active moving/waiting states
+3D canvas screenshot sample: 3392/3393 sampled pixels non-dark, 246 unique colors
+Runtime advanced to 00:10:00
+Vehicle table showed active lifting/returning states
 Console errors: none observed
 ```
 

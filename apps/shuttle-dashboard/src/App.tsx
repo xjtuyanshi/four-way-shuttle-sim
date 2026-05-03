@@ -490,7 +490,7 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
         <strong className={traffic?.physicalViolationCount ? 'blocked' : 'ready'}>{traffic?.physicalViolationCount ?? 0}</strong>
       </div>
       <div>
-        <span>Port allocation</span>
+        <span>Port diagnostics</span>
         <strong>{activeLiftPorts}/{liftPorts.length}</strong>
         <small>{queuedLiftTasks} queued</small>
       </div>

@@ -17,6 +17,7 @@ This is the working visual reference for the Phase 0 dashboard scene. The goal i
 - Storage locations are drawn as drivable track cells, not shelving boxes or AMR pickup stands.
 - Phase 0 now uses a contiguous storage block: 6 rows x 8 columns = 48 storage cells.
 - The current visual cell footprint is 1.25 m x 1.20 m so cells touch as a dense grid instead of appearing as sparse isolated bays.
+- The current shuttle safety check uses the configured 1.09 m x 1.03 m vehicle footprint plus 0.10 m clearance as a software validation envelope. This is a placeholder until real shuttle/pallet envelope and track-gauge clearance data are available.
 - Inbound is on the right side of the storage field and outbound is on the left side.
 - The simulation is single-level. Lift behavior is modeled as dedicated black-box ports only: `inbound-lift-a/b` feed pallets into the level, and `outbound-lift-a/b` receive pallets out of the level.
 - Lift-port utilization in Phase 0/1 means port allocation by an active task, not measured lift motor/service utilization.
