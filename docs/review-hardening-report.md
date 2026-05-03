@@ -1,6 +1,6 @@
 # Review Hardening Report
 
-Branch: `codex/p1-p5-physics-traffic-3d`  
+Branch: `codex/phase1-validation-traffic-demo`  
 Base commit: `15f185a Add Phase 0 validation gate`  
 Hardening scope: branch commits after the base commit through this report.
 
@@ -138,26 +138,33 @@ Follow-up fixes:
 - `apps/shuttle-dashboard/src/App.test.ts` covers both stream reducers, and `vitest.config.ts` includes dashboard tests in the default test run.
 - `packages/shuttle-schemas/src/index.ts` rejects duplicate node ids, and `packages/shuttle-sim-core/src/index.test.ts` covers duplicate parking node ids before reset occupancy is initialized.
 
-## Final External Review Verdict
+## External Review Status
 
-Final review was run against commit `28d6aeb112440998e8d6a603ab35065b73ccde52`.
+An earlier no-network merge-blocker review against commit `28d6aeb112440998e8d6a603ab35065b73ccde52` returned `merge now`.
 
-The first full public-branch review attempt stalled on remote access/truncation. A second no-network merge-blocker review from the final packet returned:
+The latest public-branch ChatGPT Pro review against the UE-ready branch returned: `merge after fixes`. This local pass addresses the new must-fix findings:
 
-- Must-fix findings before merge: none verified.
-- Verdict: merge now.
+- Safety validation now uses oriented rectangular vehicle footprints plus configured clearance, not a center-point disk proxy.
+- `pnpm shuttle:validate` now includes a 600-second long-run sweep with queue, waiting vehicle, lift-port queue, deadlock, physical safety, and reservation coverage acceptance flags.
+- FIFO storage schema now requires `storage-rNN-cNN` cell ids and matching `left-row-NN` / `right-row-NN` side access nodes until explicit row/column metadata exists.
+- Route planning no longer treats future queued inbound slot assignments as physical storage obstacles.
+- Playback speed input is validated/clamped, including `SHUTTLE_SPEED`.
+- UE readiness docs now distinguish source bridge compile/headless smoke from the later packaged Pixel Streaming soak.
+- Lift-port wording is documented as diagnostics/allocation time, not true mechanical service utilization.
 
 Non-blocking follow-ups were moved to Phase 1:
 
 - multi-capacity reservation semantics after Phase 0
-- Unreal and Pixel Streaming runtime verification when required tools are installed
+- packaged Pixel Streaming runtime soak after the real Unreal scene exists
 - same-node/zero-distance traffic-transition coverage if future route generation can produce it
 - more dashboard stream reducer ordering/removal cases
 - positive-control validator fixtures for every violation code
+- CAD/dimension audit for the browser visual layout versus a real vendor drawing
+- packaged Pixel Streaming soak after the real Unreal scene is assembled
 
 ## Latest Verification
 
-Last full verification on this branch passed:
+Last full verification on this branch passed locally after the latest public-branch review fixes:
 
 ```bash
 pnpm typecheck
@@ -175,6 +182,16 @@ noDeadlocksInSweep=true
 eventLogsPresent=true
 noPhysicalSafetyViolations=true
 noReservationCoverageViolations=true
+longRunEventLogsPresent=true
+longRunThroughputPositive=true
+longRunQueuesBounded=true
+noLongRunDeadlocks=true
+noLongRunPhysicalSafetyViolations=true
+noLongRunReservationCoverageViolations=true
+longRun.totalPphMean=90
+longRun.maxQueuedTasks=9
+longRun.maxWaitingVehicles=1
+longRun.maxLiftPortQueueLength=4
 physicalViolationCount=0
 ```
 
@@ -183,8 +200,9 @@ Browser smoke:
 - dashboard loads
 - 3D canvas appears
 - runtime advances
-- vehicle table shows moving/waiting states
+- vehicle table shows active lifting/returning states
 - localhost console errors/warnings: none observed
+- canvas screenshot sample: 3392/3393 sampled pixels non-dark, 246 unique colors
 
 Artifacts are intentionally ignored by git:
 
@@ -195,7 +213,10 @@ Artifacts are intentionally ignored by git:
 - `output/browser/shuttle-smoke-round4.mov`
 - `output/browser/shuttle-vehicle-rows-round5.png`
 - `output/browser/shuttle-demo-round5.gif`
+- `output/playwright/shuttle-smoke-20260503.png`
+- `output/playwright/shuttle-smoke-20260503.webm`
+- `output/playwright/shuttle-smoke-20260503-final.png`
 
 ## Remaining Gate
 
-Unreal runtime and Pixel Streaming validation remain blocked until Unreal Engine 5.7.4 and full Xcode are installed. The prerequisite gate should remain `blocked` / `pending-unreal` on the current machine.
+Unreal Engine 5.7.4 and full Xcode are now installed. The bridge has passed compile/headless smoke in a temporary UE project; packaged Pixel Streaming soak remains gated on assembling the real visual scene.

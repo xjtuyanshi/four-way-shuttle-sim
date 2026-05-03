@@ -12,7 +12,19 @@ import { validatePhase0Scenario } from './validation.js';
 
 const port = Number(process.env.SHUTTLE_PORT ?? process.env.PORT ?? 8791);
 const tickMs = Number(process.env.SHUTTLE_TICK_MS ?? 250);
-const realtimeSpeed = Number(process.env.SHUTTLE_SPEED ?? 1);
+
+function parsePlaybackSpeed(value: unknown): number | null {
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    return null;
+  }
+  if (typeof value === 'string' && value.trim() === '') {
+    return null;
+  }
+  const speed = Number(value);
+  return Number.isFinite(speed) && speed > 0 && speed <= 20 ? speed : null;
+}
+
+let playbackSpeed = parsePlaybackSpeed(process.env.SHUTTLE_SPEED) ?? 1;
 
 const app = express();
 app.use(cors());
@@ -51,6 +63,16 @@ function commandResponse(response: Response): void {
   response.json({ ok: true, state: sim.getState() });
 }
 
+function advanceLiveSimulation(deltaSec: number): void {
+  const maxStepSec = Math.max(0.001, sim.getScenario().timeStepSec);
+  let remainingSec = deltaSec;
+  while (remainingSec > 1e-9 && sim.getState().status === 'running') {
+    const stepSec = Math.min(maxStepSec, remainingSec);
+    sim.step(stepSec);
+    remainingSec -= stepSec;
+  }
+}
+
 app.get('/api/shuttle/health', (_request: Request, response: Response) => {
   response.json({ ok: true, service: 'shuttle-api', protocol: 'shuttle.phase0.v0' });
 });
@@ -69,6 +91,20 @@ app.get('/api/shuttle/scenario', (_request: Request, response: Response) => {
 
 app.get('/api/shuttle/state', (_request: Request, response: Response) => {
   response.json(sim.getState());
+});
+
+app.get('/api/shuttle/playbackSpeed', (_request: Request, response: Response) => {
+  response.json({ speed: playbackSpeed });
+});
+
+app.post('/api/shuttle/playbackSpeed', (request: Request, response: Response) => {
+  const speed = parsePlaybackSpeed(request.body?.speed);
+  if (speed === null) {
+    response.status(422).json({ ok: false, error: 'Playback speed must be greater than 0 and at most 20.' });
+    return;
+  }
+  playbackSpeed = speed;
+  response.json({ ok: true, speed: playbackSpeed, state: sim.getState() });
 });
 
 app.get('/api/shuttle/exportLog', (_request: Request, response: Response) => {
@@ -187,7 +223,7 @@ wss.on('connection', (socket) => {
 
 setInterval(() => {
   if (sim.getState().status === 'running') {
-    sim.step((tickMs / 1000) * realtimeSpeed);
+    advanceLiveSimulation((tickMs / 1000) * playbackSpeed);
     broadcastState();
   }
 }, tickMs).unref();

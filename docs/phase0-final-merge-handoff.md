@@ -1,15 +1,15 @@
 # Phase 0 Final Merge Handoff
 
-Branch: `codex/p1-p5-physics-traffic-3d`  
-Head: `28d6aeb112440998e8d6a603ab35065b73ccde52`  
+Branch: `codex/phase1-validation-traffic-demo`  
+Head: latest pushed commit on `codex/phase1-validation-traffic-demo`  
 Repository: `https://github.com/xjtuyanshi/four-way-shuttle-sim`
 
 ## Merge Verdict
 
-- Local verdict: ready to merge.
-- ChatGPT Pro final review verdict: merge now.
-- Verified must-fix findings remaining: none.
-- Unreal runtime and Pixel Streaming validation remain blocked by missing Unreal Engine 5.7.4 and full Xcode.
+- Local verdict after latest fixes: ready for re-review/merge.
+- Latest ChatGPT Pro public-branch verdict: merge after fixes.
+- Verified must-fix findings remaining locally: none after this pass.
+- Unreal Engine 5.7.4 and full Xcode are now installed; bridge compile/headless smoke passed. Packaged Pixel Streaming soak remains pending.
 
 ## Verification
 
@@ -31,7 +31,17 @@ noDeadlocksInSweep=true
 eventLogsPresent=true
 noPhysicalSafetyViolations=true
 noReservationCoverageViolations=true
+longRunEventLogsPresent=true
+longRunThroughputPositive=true
+longRunQueuesBounded=true
+noLongRunDeadlocks=true
+noLongRunPhysicalSafetyViolations=true
+noLongRunReservationCoverageViolations=true
 physicalViolationsByCode all zero
+longRun.totalPphMean=90
+longRun.maxQueuedTasks=9
+longRun.maxWaitingVehicles=1
+longRun.maxLiftPortQueueLength=4
 ```
 
 Browser smoke:
@@ -40,8 +50,9 @@ Browser smoke:
 dashboard loads
 3D canvas appears
 runtime advances
-vehicle table shows waiting-blocked and loaded-moving
+vehicle table shows lifting and returning states
 localhost console errors/warnings none observed
+canvas screenshot sample: 3392/3393 sampled pixels non-dark, 246 unique colors
 ```
 
 ## Non-Blocking Phase 1 Backlog
@@ -51,5 +62,5 @@ localhost console errors/warnings none observed
 - Positive-control validator fixtures for every violation code.
 - Additional dashboard stream reducer tests for out-of-order partial updates, reconnect replacement, and vehicle removal semantics.
 - Same-node or zero-distance traffic-transition tests if future route generation can produce them.
-- Unreal Engine compile/runtime smoke after Unreal Engine 5.7.4 and full Xcode are installed.
-- Pixel Streaming 30-minute 1080p single-user validation.
+- Real Unreal scene assembly with visual assets and actor binding.
+- Pixel Streaming 30-minute 1080p single-user validation after the real scene exists.

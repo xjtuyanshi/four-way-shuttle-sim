@@ -33,7 +33,7 @@ export type ShuttleSceneLayers = {
 type VehicleObjectUserData = {
   targetPosition: THREE.Vector3;
   targetYaw: number;
-  loadedMesh: THREE.Mesh;
+  loadedMesh: THREE.Group;
   bodyMaterial: THREE.MeshStandardMaterial;
   ringMaterial: THREE.MeshBasicMaterial;
   safetyRing: THREE.Mesh;
@@ -41,8 +41,17 @@ type VehicleObjectUserData = {
 
 const FLOOR_Y = 0;
 const VEHICLE_BASE_Y = 0.08;
+const CAD_CELL_LENGTH_M = 1.25;
+const CAD_CELL_DEPTH_M = 1.2;
+const CAD_CANVAS_WIDTH = 2048;
+const CAD_CANVAS_HEIGHT = 1536;
+const STORAGE_MARKER_HEIGHT_M = 0.16;
 
 function computeBounds(nodes: ShuttleNode[]): {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
   centerX: number;
   centerZ: number;
   width: number;
@@ -58,6 +67,10 @@ function computeBounds(nodes: ShuttleNode[]): {
   const width = Math.max(1, maxX - minX + 6);
   const depth = Math.max(1, maxZ - minZ + 6);
   return {
+    minX: minX - 3,
+    maxX: maxX + 3,
+    minZ: minZ - 3,
+    maxZ: maxZ + 3,
     centerX: (minX + maxX) / 2,
     centerZ: (minZ + maxZ) / 2,
     width,
@@ -76,6 +89,10 @@ function disposeObject(object: THREE.Object3D): void {
       child.geometry.dispose();
       const materials = Array.isArray(child.material) ? child.material : [child.material];
       for (const material of materials) {
+        for (const key of ['map', 'alphaMap', 'normalMap', 'roughnessMap', 'metalnessMap'] as const) {
+          const texture = (material as THREE.Material & Partial<Record<typeof key, THREE.Texture>>)[key];
+          texture?.dispose();
+        }
         material.dispose();
       }
     }
@@ -91,6 +108,160 @@ function clearGroup(group: THREE.Group): void {
 
 function material(color: number, roughness = 0.72, metalness = 0.08): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ color, roughness, metalness });
+}
+
+type LayoutBounds = ReturnType<typeof computeBounds>;
+
+type StorageField = {
+  nodes: ShuttleNode[];
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  width: number;
+  depth: number;
+  columns: number[];
+  rows: number[];
+};
+
+function getStorageField(scenario: ShuttleScenario): StorageField | null {
+  const nodes = scenario.layout.nodes.filter((node) => node.type === 'storage');
+  if (nodes.length === 0) {
+    return null;
+  }
+  const minX = Math.min(...nodes.map((node) => node.x - CAD_CELL_LENGTH_M / 2));
+  const maxX = Math.max(...nodes.map((node) => node.x + CAD_CELL_LENGTH_M / 2));
+  const minZ = Math.min(...nodes.map((node) => node.z - CAD_CELL_DEPTH_M / 2));
+  const maxZ = Math.max(...nodes.map((node) => node.z + CAD_CELL_DEPTH_M / 2));
+  return {
+    nodes,
+    minX,
+    maxX,
+    minZ,
+    maxZ,
+    width: maxX - minX,
+    depth: maxZ - minZ,
+    columns: [...new Set(nodes.map((node) => node.x))].sort((left, right) => left - right),
+    rows: [...new Set(nodes.map((node) => node.z))].sort((left, right) => left - right)
+  };
+}
+
+function drawArrow(ctx: CanvasRenderingContext2D, fromX: number, fromY: number, toX: number, toY: number): void {
+  const angle = Math.atan2(toY - fromY, toX - fromX);
+  const arrowLength = 18;
+  ctx.beginPath();
+  ctx.moveTo(fromX, fromY);
+  ctx.lineTo(toX, toY);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(toX, toY);
+  ctx.lineTo(toX - Math.cos(angle - Math.PI / 6) * arrowLength, toY - Math.sin(angle - Math.PI / 6) * arrowLength);
+  ctx.lineTo(toX - Math.cos(angle + Math.PI / 6) * arrowLength, toY - Math.sin(angle + Math.PI / 6) * arrowLength);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function createCadFloorTexture(scenario: ShuttleScenario, bounds: LayoutBounds): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = CAD_CANVAS_WIDTH;
+  canvas.height = CAD_CANVAS_HEIGHT;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Unable to create CAD floor texture canvas.');
+  }
+
+  const inset = 92;
+  const plotWidth = canvas.width - inset * 2;
+  const plotHeight = canvas.height - inset * 2;
+  const spanX = bounds.maxX - bounds.minX;
+  const spanZ = bounds.maxZ - bounds.minZ;
+  const xToPx = (x: number) => inset + ((x - bounds.minX) / spanX) * plotWidth;
+  const zToPx = (z: number) => inset + ((z - bounds.minZ) / spanZ) * plotHeight;
+  const rectForMeterBox = (centerX: number, centerZ: number, widthM: number, depthM: number) => {
+    const left = xToPx(centerX - widthM / 2);
+    const right = xToPx(centerX + widthM / 2);
+    const top = zToPx(centerZ - depthM / 2);
+    const bottom = zToPx(centerZ + depthM / 2);
+    return { left, top, width: right - left, height: bottom - top };
+  };
+
+  ctx.fillStyle = '#0f151c';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.strokeStyle = 'rgba(75, 88, 101, 0.22)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(inset, inset, plotWidth, plotHeight);
+
+  const nodes = new Map(scenario.layout.nodes.map((node) => [node.id, node]));
+  for (const edge of scenario.layout.edges) {
+    const from = nodes.get(edge.from);
+    const to = nodes.get(edge.to);
+    if (!from || !to) {
+      continue;
+    }
+    const isFifoLane = edge.conflictGroup?.startsWith('fifo-lane') ?? false;
+    ctx.strokeStyle = isFifoLane ? '#85929b' : '#4d5a64';
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.lineWidth = isFifoLane ? 10 : 6;
+    ctx.lineCap = 'round';
+    if (edge.directionMode === 'oneWay') {
+      drawArrow(ctx, xToPx(from.x), zToPx(from.z), xToPx(to.x), zToPx(to.z));
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(xToPx(from.x), zToPx(from.z));
+      ctx.lineTo(xToPx(to.x), zToPx(to.z));
+      ctx.stroke();
+    }
+  }
+  ctx.lineCap = 'butt';
+
+  const storageField = getStorageField(scenario);
+  if (storageField) {
+    const left = xToPx(storageField.minX);
+    const top = zToPx(storageField.minZ);
+    const width = xToPx(storageField.maxX) - left;
+    const height = zToPx(storageField.maxZ) - top;
+
+    ctx.fillStyle = 'rgba(66, 80, 91, 0.32)';
+    ctx.strokeStyle = 'rgba(142, 162, 176, 0.7)';
+    ctx.lineWidth = 3;
+    ctx.fillRect(left, top, width, height);
+    ctx.strokeRect(left, top, width, height);
+  }
+
+  for (const node of scenario.layout.nodes) {
+    if (node.type === 'storage') {
+      const rect = rectForMeterBox(node.x, node.z, CAD_CELL_LENGTH_M, CAD_CELL_DEPTH_M);
+      ctx.fillStyle = 'rgba(141, 150, 156, 0.18)';
+      ctx.strokeStyle = '#6f7b84';
+      ctx.lineWidth = 2;
+      ctx.fillRect(rect.left, rect.top, rect.width, rect.height);
+      ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
+    } else {
+      const x = xToPx(node.x);
+      const z = zToPx(node.z);
+      ctx.fillStyle = node.type === 'inbound' ? '#4f8fcb' : node.type === 'outbound' ? '#6da8d6' : node.type === 'parking' ? '#7a8794' : '#e2b84b';
+      ctx.beginPath();
+      ctx.arc(x, z, node.type === 'intersection' ? 14 : 18, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 8;
+  return texture;
+}
+
+function createCadFloor(scenario: ShuttleScenario, bounds: LayoutBounds): THREE.Mesh {
+  const texture = createCadFloorTexture(scenario, bounds);
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(bounds.width, bounds.depth),
+    new THREE.MeshBasicMaterial({ map: texture })
+  );
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.set(bounds.centerX, FLOOR_Y - 0.003, bounds.centerZ);
+  return floor;
 }
 
 function createSegment(
@@ -112,6 +283,56 @@ function createSegment(
   return segment;
 }
 
+function createBoxTrackSegment(
+  from: { x: number; z: number },
+  to: { x: number; z: number },
+  options: {
+    gaugeM: number;
+    railWidthM: number;
+    railHeightM: number;
+    y: number;
+    railMaterial: THREE.Material;
+    bedMaterial?: THREE.Material;
+    bedWidthM?: number;
+  }
+): THREE.Group | null {
+  const dx = to.x - from.x;
+  const dz = to.z - from.z;
+  const length = Math.hypot(dx, dz);
+  if (length < 0.001) {
+    return null;
+  }
+
+  const group = new THREE.Group();
+  const centerX = (from.x + to.x) / 2;
+  const centerZ = (from.z + to.z) / 2;
+  const angle = -Math.atan2(dz, dx);
+  const normalX = -dz / length;
+  const normalZ = dx / length;
+
+  if (options.bedMaterial && options.bedWidthM) {
+    const bed = new THREE.Mesh(new THREE.BoxGeometry(length, 0.025, options.bedWidthM), options.bedMaterial);
+    bed.position.set(centerX, options.y - 0.018, centerZ);
+    bed.rotation.y = angle;
+    bed.receiveShadow = true;
+    group.add(bed);
+  }
+
+  for (const offset of [-options.gaugeM / 2, options.gaugeM / 2]) {
+    const rail = new THREE.Mesh(
+      new THREE.BoxGeometry(length, options.railHeightM, options.railWidthM),
+      options.railMaterial
+    );
+    rail.position.set(centerX + normalX * offset, options.y, centerZ + normalZ * offset);
+    rail.rotation.y = angle;
+    rail.castShadow = true;
+    rail.receiveShadow = true;
+    group.add(rail);
+  }
+
+  return group;
+}
+
 function nodeColor(node: ShuttleNode): number {
   switch (node.type) {
     case 'inbound':
@@ -131,9 +352,223 @@ function nodeColor(node: ShuttleNode): number {
   }
 }
 
+function createPalletLoadObject(widthM: number, depthM: number, crateColor = 0x8d969c): THREE.Group {
+  const group = new THREE.Group();
+
+  const pallet = new THREE.Mesh(new THREE.BoxGeometry(widthM, 0.08, depthM), material(0x6f777d, 0.82, 0.08));
+  pallet.position.y = 0.04;
+  pallet.castShadow = true;
+  pallet.receiveShadow = true;
+  group.add(pallet);
+
+  const crateMaterial = material(crateColor, 0.68, 0.02);
+  const crateGeometry = new THREE.BoxGeometry(widthM * 0.42, 0.28, depthM * 0.4);
+  for (const [x, z] of [
+    [-widthM * 0.22, -depthM * 0.18],
+    [widthM * 0.22, -depthM * 0.18],
+    [0, depthM * 0.2]
+  ] satisfies Array<[number, number]>) {
+    const crate = new THREE.Mesh(crateGeometry, crateMaterial);
+    crate.position.set(x, 0.22, z);
+    crate.castShadow = true;
+    crate.receiveShadow = true;
+    group.add(crate);
+  }
+
+  return group;
+}
+
+function createStorageRackBlock(scenario: ShuttleScenario): THREE.Group | null {
+  const field = getStorageField(scenario);
+  if (!field) {
+    return null;
+  }
+
+  const group = new THREE.Group();
+  const deckMaterial = material(0x182129, 0.88, 0.05);
+  const railMaterial = material(0x929da5, 0.48, 0.24);
+  const beamMaterial = material(0x35414a, 0.74, 0.16);
+  const markerMaterial = material(0x4b5660, 0.6, 0.22);
+
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(field.width, 0.035, field.depth), deckMaterial);
+  deck.position.set((field.minX + field.maxX) / 2, 0.022, (field.minZ + field.maxZ) / 2);
+  deck.receiveShadow = true;
+  group.add(deck);
+
+  for (const rowZ of field.rows) {
+    for (const railZ of [rowZ - CAD_CELL_DEPTH_M * 0.38, rowZ + CAD_CELL_DEPTH_M * 0.38]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(field.width, 0.045, 0.042), railMaterial);
+      rail.position.set((field.minX + field.maxX) / 2, 0.105, railZ);
+      rail.castShadow = true;
+      rail.receiveShadow = true;
+      group.add(rail);
+    }
+  }
+
+  for (const columnX of field.columns) {
+    for (const railX of [columnX - CAD_CELL_LENGTH_M * 0.36, columnX + CAD_CELL_LENGTH_M * 0.36]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.04, field.depth), railMaterial);
+      rail.position.set(railX, 0.108, (field.minZ + field.maxZ) / 2);
+      rail.castShadow = true;
+      rail.receiveShadow = true;
+      group.add(rail);
+    }
+  }
+
+  const boundaryXs = [
+    field.minX,
+    ...field.columns.map((columnX) => columnX + CAD_CELL_LENGTH_M / 2)
+  ];
+  const boundaryZs = [
+    field.minZ,
+    ...field.rows.map((rowZ) => rowZ + CAD_CELL_DEPTH_M / 2)
+  ];
+
+  for (const x of boundaryXs) {
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.03, field.depth), beamMaterial);
+    beam.position.set(x, 0.09, (field.minZ + field.maxZ) / 2);
+    beam.receiveShadow = true;
+    group.add(beam);
+  }
+
+  for (const z of boundaryZs) {
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(field.width, 0.03, 0.026), beamMaterial);
+    beam.position.set((field.minX + field.maxX) / 2, 0.092, z);
+    beam.receiveShadow = true;
+    group.add(beam);
+  }
+
+  for (const x of boundaryXs) {
+    for (const z of boundaryZs) {
+      const marker = new THREE.Mesh(new THREE.BoxGeometry(0.055, STORAGE_MARKER_HEIGHT_M, 0.055), markerMaterial);
+      marker.position.set(x, STORAGE_MARKER_HEIGHT_M / 2, z);
+      marker.castShadow = true;
+      marker.receiveShadow = true;
+      group.add(marker);
+    }
+  }
+
+  return group;
+}
+
+function createStorageTrackCell(node: ShuttleNode): THREE.Group {
+  const group = new THREE.Group();
+  group.position.set(node.x, 0, node.z);
+
+  const railMaterial = material(0x9aa5ad, 0.5, 0.24);
+  for (const z of [-0.46, 0.46]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(1.18, 0.04, 0.04), railMaterial);
+    rail.position.set(0, 0.12, z);
+    rail.castShadow = true;
+    group.add(rail);
+  }
+  for (const x of [-0.46, 0.46]) {
+    const crossRail = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.036, 1.04), railMaterial);
+    crossRail.position.set(x, 0.118, 0);
+    crossRail.castShadow = true;
+    group.add(crossRail);
+  }
+
+  const crossTieMaterial = material(0x3f4b54, 0.76, 0.12);
+  for (const x of [-0.42, 0, 0.42]) {
+    const tie = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.028, 0.98), crossTieMaterial);
+    tie.position.set(x, 0.095, 0);
+    tie.receiveShadow = true;
+    group.add(tie);
+  }
+
+  return group;
+}
+
+function createConveyor(node: ShuttleNode, color: number): THREE.Group {
+  const group = new THREE.Group();
+  group.position.set(node.x, 0, node.z);
+
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.12, 0.95), material(0x29333c, 0.68, 0.18));
+  frame.position.y = 0.08;
+  frame.castShadow = true;
+  frame.receiveShadow = true;
+  group.add(frame);
+
+  const rollerMaterial = material(0x96a3ad, 0.42, 0.3);
+  for (let index = 0; index < 7; index += 1) {
+    const x = -0.78 + index * 0.26;
+    const roller = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.82, 14), rollerMaterial);
+    roller.rotation.x = Math.PI / 2;
+    roller.position.set(x, 0.18, 0);
+    roller.castShadow = true;
+    group.add(roller);
+  }
+
+  const dockPlate = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.035, 1.05), material(color, 0.58, 0.12));
+  dockPlate.position.set(node.type === 'inbound' ? -1.12 : 1.12, 0.19, 0);
+  group.add(dockPlate);
+
+  return group;
+}
+
+function createLiftBlackboxPort(node: ShuttleNode): THREE.Group {
+  const group = new THREE.Group();
+  group.position.set(node.x, 0, node.z);
+
+  const isInbound = node.id.includes('inbound');
+  const accent = isInbound ? 0x4f8fcb : 0x6da8d6;
+  const base = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.09, 1.18), material(0x111820, 0.86, 0.08));
+  base.position.y = 0.055;
+  base.castShadow = true;
+  base.receiveShadow = true;
+  group.add(base);
+
+  const blackbox = new THREE.Mesh(new THREE.BoxGeometry(1.04, 0.28, 0.82), material(0x080d11, 0.72, 0.18));
+  blackbox.position.y = 0.23;
+  blackbox.castShadow = true;
+  blackbox.receiveShadow = true;
+  group.add(blackbox);
+
+  const rollerMaterial = material(0x96a3ad, 0.42, 0.28);
+  for (let index = 0; index < 5; index += 1) {
+    const x = -0.42 + index * 0.21;
+    const roller = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.72, 12), rollerMaterial);
+    roller.rotation.x = Math.PI / 2;
+    roller.position.set(x, 0.39, 0);
+    roller.castShadow = true;
+    group.add(roller);
+  }
+
+  for (const z of [-0.52, 0.52]) {
+    const guard = new THREE.Mesh(new THREE.BoxGeometry(1.52, 0.08, 0.05), material(0x303c45, 0.66, 0.18));
+    guard.position.set(0, 0.42, z);
+    guard.castShadow = true;
+    group.add(guard);
+  }
+
+  const portPlate = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.34, 1.06), material(accent, 0.54, 0.16));
+  portPlate.position.set(isInbound ? -0.82 : 0.82, 0.26, 0);
+  portPlate.castShadow = true;
+  group.add(portPlate);
+
+  return group;
+}
+
+function createParkingPad(node: ShuttleNode): THREE.Group {
+  const group = new THREE.Group();
+  group.position.set(node.x, 0, node.z);
+  const pad = new THREE.Mesh(new THREE.BoxGeometry(1.65, 0.035, 1.05), material(0x222c35, 0.82, 0.08));
+  pad.position.y = 0.025;
+  pad.receiveShadow = true;
+  group.add(pad);
+  const borderMaterial = material(0x6f7e8d, 0.66, 0.16);
+  for (const z of [-0.48, 0.48]) {
+    const border = new THREE.Mesh(new THREE.BoxGeometry(1.65, 0.035, 0.04), borderMaterial);
+    border.position.set(0, 0.075, z);
+    group.add(border);
+  }
+  return group;
+}
+
 function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   const group = new THREE.Group();
-  const bodyMaterial = material(0x2f8d86, 0.5, 0.22);
+  const bodyMaterial = material(0x287f78, 0.5, 0.22);
   const ringMaterial = new THREE.MeshBasicMaterial({
     color: 0x56a9c9,
     transparent: true,
@@ -158,6 +593,17 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   nose.position.set(scenario.vehicles.lengthM / 2 + 0.04, VEHICLE_BASE_Y + scenario.vehicles.heightM / 2, 0);
   group.add(nose);
 
+  const forkMaterial = material(0xb8c5c8, 0.42, 0.28);
+  for (const z of [-scenario.vehicles.widthM * 0.24, scenario.vehicles.widthM * 0.24]) {
+    const fork = new THREE.Mesh(
+      new THREE.BoxGeometry(scenario.vehicles.lengthM * 0.78, 0.035, 0.045),
+      forkMaterial
+    );
+    fork.position.set(0.04, VEHICLE_BASE_Y + scenario.vehicles.heightM + 0.025, z);
+    fork.castShadow = true;
+    group.add(fork);
+  }
+
   const safetyRing = new THREE.Mesh(
     new THREE.RingGeometry(Math.max(0.02, scenario.vehicles.safetyRadiusM - 0.035), scenario.vehicles.safetyRadiusM, 48),
     ringMaterial
@@ -166,13 +612,9 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   safetyRing.position.y = FLOOR_Y + 0.018;
   group.add(safetyRing);
 
-  const loadedMesh = new THREE.Mesh(
-    new THREE.BoxGeometry(scenario.vehicles.lengthM * 0.58, 0.18, scenario.vehicles.widthM * 0.72),
-    material(0xe2b84b, 0.62, 0.04)
-  );
-  loadedMesh.position.y = VEHICLE_BASE_Y + scenario.vehicles.heightM + 0.12;
+  const loadedMesh = createPalletLoadObject(scenario.vehicles.lengthM * 0.72, scenario.vehicles.widthM * 0.78);
+  loadedMesh.position.y = VEHICLE_BASE_Y + scenario.vehicles.heightM + 0.05;
   loadedMesh.visible = false;
-  loadedMesh.castShadow = true;
   group.add(loadedMesh);
 
   group.userData = {
@@ -214,12 +656,11 @@ function applyVehicleState(group: THREE.Group, vehicle: VehicleState, layers: Sh
   data.ringMaterial.color.setHex(vehicle.loaded ? 0x4fc190 : 0x56a9c9);
 }
 
-function createLoadMesh(load: LoadStateRecord, node: ShuttleNode, index: number): THREE.Mesh {
-  const loadMesh = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.32, 0.42), material(0xe2b84b, 0.68, 0.02));
-  const offset = index % 2 === 0 ? 0.38 : -0.38;
-  loadMesh.position.set(node.x + offset, 0.18, node.z + 0.42);
+function createLoadMesh(load: LoadStateRecord, node: ShuttleNode, index: number): THREE.Group {
+  const loadMesh = createPalletLoadObject(node.type === 'storage' ? 1.04 : 0.78, node.type === 'storage' ? 0.88 : 0.62, load.state === 'waiting' ? 0xb98a4a : 0x8d969c);
+  const offset = node.type === 'storage' ? 0 : index % 2 === 0 ? 0.38 : -0.38;
+  loadMesh.position.set(node.x + offset, 0.13, node.z + (node.type === 'storage' ? 0 : 0.42));
   loadMesh.userData.loadId = load.id;
-  loadMesh.castShadow = true;
   return loadMesh;
 }
 
@@ -346,48 +787,71 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario): voi
   runtime.edgeById = new Map(scenario.layout.edges.map((edge) => [edge.id, edge]));
 
   const bounds = computeBounds(scenario.layout.nodes);
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(bounds.width, bounds.depth),
-    new THREE.MeshStandardMaterial({ color: 0x17212b, roughness: 0.92, metalness: 0.02 })
-  );
-  floor.rotation.x = -Math.PI / 2;
-  floor.position.set(bounds.centerX, FLOOR_Y, bounds.centerZ);
+  const floor = createCadFloor(scenario, bounds);
   floor.receiveShadow = true;
   runtime.staticGroup.add(floor);
 
-  const grid = new THREE.GridHelper(bounds.size, 18, 0x334251, 0x273440);
-  grid.position.set(bounds.centerX, FLOOR_Y + 0.006, bounds.centerZ);
-  runtime.staticGroup.add(grid);
+  const storageBlock = createStorageRackBlock(scenario);
+  if (storageBlock) {
+    runtime.staticGroup.add(storageBlock);
+  }
 
-  const edgeMaterial = new THREE.MeshStandardMaterial({ color: 0x536271, roughness: 0.84, metalness: 0.08 });
+  const edgeMaterial = new THREE.MeshStandardMaterial({ color: 0x64727c, roughness: 0.64, metalness: 0.22 });
+  const fifoEdgeMaterial = new THREE.MeshStandardMaterial({ color: 0x8a969f, roughness: 0.58, metalness: 0.24 });
+  const edgeBedMaterial = new THREE.MeshStandardMaterial({ color: 0x1a232b, roughness: 0.86, metalness: 0.06 });
   for (const edge of scenario.layout.edges) {
     const from = runtime.nodeById.get(edge.from);
     const to = runtime.nodeById.get(edge.to);
     if (!from || !to) {
       continue;
     }
-    const segment = createSegment(from, to, 0.055, edgeMaterial, 0.07);
+    const isFifoLane = edge.conflictGroup?.startsWith('fifo-lane') ?? false;
+    const segment = createBoxTrackSegment(from, to, {
+      gaugeM: isFifoLane ? 0.92 : 0.74,
+      railWidthM: isFifoLane ? 0.045 : 0.052,
+      railHeightM: isFifoLane ? 0.042 : 0.052,
+      y: isFifoLane ? 0.155 : 0.12,
+      railMaterial: isFifoLane ? fifoEdgeMaterial : edgeMaterial,
+      bedMaterial: isFifoLane ? undefined : edgeBedMaterial,
+      bedWidthM: isFifoLane ? undefined : 0.92
+    });
     if (segment) {
       runtime.staticGroup.add(segment);
     }
   }
 
   for (const node of scenario.layout.nodes) {
-    const isStorage = node.type === 'storage';
-    const geometry = isStorage
-      ? new THREE.BoxGeometry(0.72, 0.18, 0.72)
-      : new THREE.CylinderGeometry(0.28, 0.28, 0.16, 24);
-    const nodeMesh = new THREE.Mesh(geometry, material(nodeColor(node), 0.66, 0.1));
-    nodeMesh.position.set(node.x, 0.09, node.z);
+    if (node.type === 'storage') {
+      runtime.staticGroup.add(createStorageTrackCell(node));
+      continue;
+    }
+    if (node.type === 'inbound') {
+      runtime.staticGroup.add(createConveyor(node, 0x4f8fcb));
+      continue;
+    }
+    if (node.type === 'outbound') {
+      runtime.staticGroup.add(createConveyor(node, 0x6da8d6));
+      continue;
+    }
+    if (node.type === 'lift-blackbox') {
+      runtime.staticGroup.add(createLiftBlackboxPort(node));
+      continue;
+    }
+    if (node.type === 'parking') {
+      runtime.staticGroup.add(createParkingPad(node));
+      continue;
+    }
+    const nodeMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.06, 24), material(nodeColor(node), 0.66, 0.1));
+    nodeMesh.position.set(node.x, 0.055, node.z);
     nodeMesh.castShadow = true;
     nodeMesh.receiveShadow = true;
     runtime.staticGroup.add(nodeMesh);
   }
 
   runtime.camera.position.set(
-    bounds.centerX - bounds.size * 0.68,
-    Math.max(7, bounds.size * 0.58),
-    bounds.centerZ + bounds.size * 0.82
+    bounds.centerX - bounds.size * 0.18,
+    Math.max(13, bounds.size * 0.86),
+    bounds.centerZ + bounds.size * 0.28
   );
   runtime.camera.lookAt(bounds.centerX, 0, bounds.centerZ);
 }

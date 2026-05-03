@@ -2,8 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 
 import {
   EventLogEntrySchema,
+  LoadStateRecordSchema,
   ReservationSchema,
   ShuttleScenarioSchema,
+  TaskStateRecordSchema,
   type EventLogEntry,
   type KpiSnapshot,
   type LoadStateRecord,
@@ -47,6 +49,7 @@ type ReservationAttempt =
 
 export type ShuttleSimDebugState = {
   currentNodeOccupancy: Array<{ nodeId: string; vehicleId: string }>;
+  storageNodeOccupancy: Array<{ nodeId: string; loadId: string }>;
 };
 
 type Rng = {
@@ -69,6 +72,54 @@ function makeRng(seed: number): Rng {
 function round(value: number, decimals = 6): number {
   const factor = 10 ** decimals;
   return Math.round(value * factor) / factor;
+}
+
+type FootprintPose = Pick<VehicleState, 'x' | 'z' | 'yaw'>;
+
+type Axis2 = { x: number; z: number };
+
+function footprintAxes(yaw: number): [Axis2, Axis2] {
+  const cos = Math.cos(yaw);
+  const sin = Math.sin(yaw);
+  return [
+    { x: cos, z: sin },
+    { x: -sin, z: cos }
+  ];
+}
+
+function footprintCorners(
+  vehicle: FootprintPose,
+  config: ShuttleScenario['vehicles']
+): Array<{ x: number; z: number }> {
+  const [forward, lateral] = footprintAxes(vehicle.yaw);
+  const halfLengthM = config.lengthM / 2 + config.safetyRadiusM / 2;
+  const halfWidthM = config.widthM / 2 + config.safetyRadiusM / 2;
+  return [
+    { x: vehicle.x + forward.x * halfLengthM + lateral.x * halfWidthM, z: vehicle.z + forward.z * halfLengthM + lateral.z * halfWidthM },
+    { x: vehicle.x + forward.x * halfLengthM - lateral.x * halfWidthM, z: vehicle.z + forward.z * halfLengthM - lateral.z * halfWidthM },
+    { x: vehicle.x - forward.x * halfLengthM + lateral.x * halfWidthM, z: vehicle.z - forward.z * halfLengthM + lateral.z * halfWidthM },
+    { x: vehicle.x - forward.x * halfLengthM - lateral.x * halfWidthM, z: vehicle.z - forward.z * halfLengthM - lateral.z * halfWidthM }
+  ];
+}
+
+function projectionRange(corners: Array<{ x: number; z: number }>, axis: Axis2): { min: number; max: number } {
+  const values = corners.map((corner) => corner.x * axis.x + corner.z * axis.z);
+  return { min: Math.min(...values), max: Math.max(...values) };
+}
+
+function vehicleFootprintsOverlap(
+  left: FootprintPose,
+  right: FootprintPose,
+  config: ShuttleScenario['vehicles']
+): boolean {
+  const leftCorners = footprintCorners(left, config);
+  const rightCorners = footprintCorners(right, config);
+  const axes = [...footprintAxes(left.yaw), ...footprintAxes(right.yaw)];
+  return axes.every((axis) => {
+    const leftRange = projectionRange(leftCorners, axis);
+    const rightRange = projectionRange(rightCorners, axis);
+    return leftRange.max + 1e-6 >= rightRange.min && rightRange.max + 1e-6 >= leftRange.min;
+  });
 }
 
 function stableJson(value: unknown): string {
@@ -189,6 +240,179 @@ export function motionProfileAt(
   };
 }
 
+type LayoutNode = ShuttleScenario['layout']['nodes'][number];
+type LayoutEdge = ShuttleScenario['layout']['edges'][number];
+type LayoutZone = ShuttleScenario['layout']['zones'][number];
+
+const DEFAULT_STORAGE_ROWS = 6;
+const DEFAULT_STORAGE_COLUMNS = 8;
+const DEFAULT_STORAGE_CELL_PITCH_X_M = 1.25;
+const DEFAULT_STORAGE_CELL_PITCH_Z_M = 1.2;
+
+function storageNodeId(rowIndex: number, columnIndex: number): string {
+  return `storage-r${String(rowIndex + 1).padStart(2, '0')}-c${String(columnIndex + 1).padStart(2, '0')}`;
+}
+
+function createDefaultLayout(): ShuttleScenario['layout'] {
+  const leftSpineX = 0;
+  const rightSpineX = 14;
+  const inboundX = 18;
+  const outboundX = -4;
+  const firstStorageX = 2.5;
+  const topZ = -4.8;
+  const bottomZ = 4.8;
+  const parkingTopZ = -7.2;
+  const parkingBottomZ = 7.2;
+  const rowZs = Array.from({ length: DEFAULT_STORAGE_ROWS }, (_, rowIndex) =>
+    round((rowIndex - (DEFAULT_STORAGE_ROWS - 1) / 2) * DEFAULT_STORAGE_CELL_PITCH_Z_M, 3)
+  );
+  const columnXs = Array.from({ length: DEFAULT_STORAGE_COLUMNS }, (_, columnIndex) =>
+    round(firstStorageX + columnIndex * DEFAULT_STORAGE_CELL_PITCH_X_M, 3)
+  );
+
+  const nodes: LayoutNode[] = [
+    { id: 'outbound-lift-a', type: 'lift-blackbox', x: outboundX, y: 0, z: rowZs[0]!, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'outbound-lift-b', type: 'lift-blackbox', x: outboundX, y: 0, z: rowZs[rowZs.length - 1]!, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'x-outbound', type: 'intersection', x: leftSpineX, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'left-top', type: 'aisle', x: leftSpineX, y: 0, z: topZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'left-bottom', type: 'aisle', x: leftSpineX, y: 0, z: bottomZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'right-top', type: 'aisle', x: rightSpineX, y: 0, z: topZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'right-bottom', type: 'aisle', x: rightSpineX, y: 0, z: bottomZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'x-main', type: 'intersection', x: rightSpineX, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'inbound-lift-a', type: 'lift-blackbox', x: inboundX, y: 0, z: rowZs[0]!, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'inbound-lift-b', type: 'lift-blackbox', x: inboundX, y: 0, z: rowZs[rowZs.length - 1]!, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+    { id: 'parking-a', type: 'parking', x: rightSpineX, y: 0, z: parkingTopZ, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+    { id: 'parking-b', type: 'parking', x: rightSpineX, y: 0, z: parkingBottomZ, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
+  ];
+
+  for (let rowIndex = 0; rowIndex < rowZs.length; rowIndex += 1) {
+    const z = rowZs[rowIndex]!;
+    const rowLabel = String(rowIndex + 1).padStart(2, '0');
+    nodes.push(
+      { id: `left-row-${rowLabel}`, type: 'intersection', x: leftSpineX, y: 0, z, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+      { id: `right-row-${rowLabel}`, type: 'intersection', x: rightSpineX, y: 0, z, noStop: true, noParking: true, capacity: 1, allowedDirections: [] }
+    );
+    for (let columnIndex = 0; columnIndex < columnXs.length; columnIndex += 1) {
+      nodes.push({
+        id: storageNodeId(rowIndex, columnIndex),
+        type: 'storage',
+        x: columnXs[columnIndex]!,
+        y: 0,
+        z,
+        noStop: false,
+        noParking: true,
+        capacity: 1,
+        allowedDirections: []
+      });
+    }
+  }
+
+  const edges: LayoutEdge[] = [
+    { id: 'inbound-lift-a-right-row-01', from: 'inbound-lift-a', to: 'right-row-01', lengthM: Math.abs(inboundX - rightSpineX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'inbound-lift-a-dock', noParking: true },
+    { id: `inbound-lift-b-right-row-${String(DEFAULT_STORAGE_ROWS).padStart(2, '0')}`, from: 'inbound-lift-b', to: `right-row-${String(DEFAULT_STORAGE_ROWS).padStart(2, '0')}`, lengthM: Math.abs(inboundX - rightSpineX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'inbound-lift-b-dock', noParking: true },
+    { id: 'outbound-lift-a-left-row-01', from: 'outbound-lift-a', to: 'left-row-01', lengthM: Math.abs(leftSpineX - outboundX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'outbound-lift-a-dock', noParking: true },
+    { id: `outbound-lift-b-left-row-${String(DEFAULT_STORAGE_ROWS).padStart(2, '0')}`, from: 'outbound-lift-b', to: `left-row-${String(DEFAULT_STORAGE_ROWS).padStart(2, '0')}`, lengthM: Math.abs(leftSpineX - outboundX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'outbound-lift-b-dock', noParking: true },
+    { id: 'parking-a-right-top', from: 'parking-a', to: 'right-top', lengthM: Math.abs(parkingTopZ - topZ), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'parking-approach', noParking: true },
+    { id: 'parking-b-right-bottom', from: 'parking-b', to: 'right-bottom', lengthM: Math.abs(parkingBottomZ - bottomZ), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'parking-approach', noParking: true },
+    { id: 'left-top-right-top', from: 'left-top', to: 'right-top', lengthM: rightSpineX - leftSpineX, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'north-cross-aisle', noParking: true },
+    { id: 'left-bottom-right-bottom', from: 'left-bottom', to: 'right-bottom', lengthM: rightSpineX - leftSpineX, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'south-cross-aisle', noParking: true }
+  ];
+
+  const leftSpineNodeIds = ['left-top', ...rowZs.map((_, rowIndex) => `left-row-${String(rowIndex + 1).padStart(2, '0')}`), 'left-bottom'];
+  const rightSpineNodeIds = ['right-top', ...rowZs.map((_, rowIndex) => `right-row-${String(rowIndex + 1).padStart(2, '0')}`), 'right-bottom'];
+  for (let index = 1; index < leftSpineNodeIds.length; index += 1) {
+    const from = leftSpineNodeIds[index - 1]!;
+    const to = leftSpineNodeIds[index]!;
+    const fromNode = nodes.find((node) => node.id === from)!;
+    const toNode = nodes.find((node) => node.id === to)!;
+    edges.push({ id: `${from}-${to}`, from, to, lengthM: round(Math.abs(toNode.z - fromNode.z), 3), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'left-upright', noParking: true });
+  }
+  for (let index = 1; index < rightSpineNodeIds.length; index += 1) {
+    const from = rightSpineNodeIds[index - 1]!;
+    const to = rightSpineNodeIds[index]!;
+    const fromNode = nodes.find((node) => node.id === from)!;
+    const toNode = nodes.find((node) => node.id === to)!;
+    edges.push({ id: `${from}-${to}`, from, to, lengthM: round(Math.abs(toNode.z - fromNode.z), 3), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'right-upright', noParking: true });
+  }
+
+  const upperMiddleRow = Math.floor((DEFAULT_STORAGE_ROWS - 1) / 2);
+  const lowerMiddleRow = upperMiddleRow + 1;
+  for (const rowIndex of [upperMiddleRow, lowerMiddleRow]) {
+    const rowLabel = String(rowIndex + 1).padStart(2, '0');
+    edges.push(
+      { id: `x-main-right-row-${rowLabel}`, from: 'x-main', to: `right-row-${rowLabel}`, lengthM: Math.abs(rowZs[rowIndex]!), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'right-upright', noParking: true },
+      { id: `x-outbound-left-row-${rowLabel}`, from: 'x-outbound', to: `left-row-${rowLabel}`, lengthM: Math.abs(rowZs[rowIndex]!), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'left-upright', noParking: true }
+    );
+  }
+
+  for (let rowIndex = 0; rowIndex < rowZs.length; rowIndex += 1) {
+    const rowLabel = String(rowIndex + 1).padStart(2, '0');
+    const rightRowId = `right-row-${rowLabel}`;
+    const leftRowId = `left-row-${rowLabel}`;
+    const rightmostStorageId = storageNodeId(rowIndex, DEFAULT_STORAGE_COLUMNS - 1);
+    edges.push({
+      id: `${rightRowId}-${rightmostStorageId}`,
+      from: rightRowId,
+      to: rightmostStorageId,
+      lengthM: round(rightSpineX - columnXs[DEFAULT_STORAGE_COLUMNS - 1]!, 3),
+      directionMode: 'twoWay',
+      reservationType: 'edge',
+      conflictGroup: `fifo-lane-${rowLabel}`,
+      noParking: true
+    });
+    for (let columnIndex = DEFAULT_STORAGE_COLUMNS - 1; columnIndex > 0; columnIndex -= 1) {
+      const from = storageNodeId(rowIndex, columnIndex);
+      const to = storageNodeId(rowIndex, columnIndex - 1);
+      edges.push({
+        id: `${from}-${to}`,
+        from,
+        to,
+        lengthM: DEFAULT_STORAGE_CELL_PITCH_X_M,
+        directionMode: 'twoWay',
+        reservationType: 'edge',
+        conflictGroup: `fifo-lane-${rowLabel}`,
+        noParking: true
+      });
+    }
+    const leftmostStorageId = storageNodeId(rowIndex, 0);
+    edges.push({
+      id: `${leftmostStorageId}-${leftRowId}`,
+      from: leftmostStorageId,
+      to: leftRowId,
+      lengthM: round(columnXs[0]! - leftSpineX, 3),
+      directionMode: 'twoWay',
+      reservationType: 'edge',
+      conflictGroup: `fifo-lane-${rowLabel}`,
+      noParking: true
+    });
+  }
+
+  const zones: LayoutZone[] = [
+    {
+      id: 'zone-x-main',
+      type: 'intersection',
+      nodeIds: ['x-main'],
+      edgeIds: [`x-main-right-row-${String(upperMiddleRow + 1).padStart(2, '0')}`, `x-main-right-row-${String(lowerMiddleRow + 1).padStart(2, '0')}`],
+      noStop: true,
+      noParking: true,
+      capacity: 1,
+      conflictGroup: 'intersection-x-main'
+    },
+    {
+      id: 'zone-x-outbound',
+      type: 'intersection',
+      nodeIds: ['x-outbound'],
+      edgeIds: [`x-outbound-left-row-${String(upperMiddleRow + 1).padStart(2, '0')}`, `x-outbound-left-row-${String(lowerMiddleRow + 1).padStart(2, '0')}`],
+      noStop: true,
+      noParking: true,
+      capacity: 1,
+      conflictGroup: 'intersection-x-outbound'
+    }
+  ];
+
+  return { units: 'meter', nodes, edges, zones };
+}
+
 export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides = {}): ShuttleScenario {
   const base: ShuttleScenario = {
     schemaVersion: 'shuttle.phase0.v0',
@@ -209,46 +433,11 @@ export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides
       liftTimeSec: 2,
       lowerTimeSec: 2,
       maxLoadKg: 1800,
-      safetyRadiusM: 0.72,
+      safetyRadiusM: 0.1,
       batteryEnabled: false,
       initialSoc: 1
     },
-    layout: {
-      units: 'meter',
-      nodes: [
-        { id: 'inbound', type: 'inbound', x: 0, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'x-main', type: 'intersection', x: 5, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'storage-a', type: 'storage', x: 10, y: 0, z: -3, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'storage-b', type: 'storage', x: 10, y: 0, z: 3, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'outbound', type: 'outbound', x: 16, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-        { id: 'parking-a', type: 'parking', x: 2, y: 0, z: -4, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
-        { id: 'parking-b', type: 'parking', x: 2, y: 0, z: 4, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
-        { id: 'lift-blackbox', type: 'lift-blackbox', x: 18, y: 0, z: 4, noStop: true, noParking: true, capacity: 1, allowedDirections: [] }
-      ],
-      edges: [
-        { id: 'parking-a-inbound', from: 'parking-a', to: 'inbound', lengthM: 4.47, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'west-yard', noParking: true },
-        { id: 'parking-b-inbound', from: 'parking-b', to: 'inbound', lengthM: 4.47, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'west-yard', noParking: true },
-        { id: 'parking-a-x-main', from: 'parking-a', to: 'x-main', lengthM: 5, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'west-yard', noParking: true },
-        { id: 'parking-b-x-main', from: 'parking-b', to: 'x-main', lengthM: 5, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'west-yard', noParking: true },
-        { id: 'inbound-x-main', from: 'inbound', to: 'x-main', lengthM: 5, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'main-aisle', noParking: true },
-        { id: 'x-main-storage-a', from: 'x-main', to: 'storage-a', lengthM: 5.83, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'storage-fan', noParking: true },
-        { id: 'x-main-storage-b', from: 'x-main', to: 'storage-b', lengthM: 5.83, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'storage-fan', noParking: true },
-        { id: 'x-main-outbound', from: 'x-main', to: 'outbound', lengthM: 11, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'main-aisle', noParking: true },
-        { id: 'outbound-lift-blackbox', from: 'outbound', to: 'lift-blackbox', lengthM: 4.47, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'lift-approach', noParking: true }
-      ],
-      zones: [
-        {
-          id: 'zone-x-main',
-          type: 'intersection',
-          nodeIds: ['x-main'],
-          edgeIds: ['inbound-x-main', 'parking-a-x-main', 'parking-b-x-main', 'x-main-storage-a', 'x-main-storage-b', 'x-main-outbound'],
-          noStop: true,
-          noParking: true,
-          capacity: 1,
-          conflictGroup: 'intersection-x-main'
-        }
-      ]
-    },
+    layout: createDefaultLayout(),
     taskGeneration: {
       inboundRatePerHour: 90,
       outboundRatePerHour: 90,
@@ -440,6 +629,8 @@ export class ShuttleSimCore {
   private deadlockCount = 0;
   private livelockCount = 0;
   private blockedTimeByReasonSec = new Map<string, number>();
+  private deferredTaskReasons: Record<'inbound' | 'outbound', string | null> = { inbound: null, outbound: null };
+  private liftPortBusyTimeSec = new Map<string, number>();
   private error: string | null = null;
 
   constructor(scenario: ShuttleScenario = createDefaultShuttleScenario()) {
@@ -482,6 +673,8 @@ export class ShuttleSimCore {
     this.deadlockCount = 0;
     this.livelockCount = 0;
     this.blockedTimeByReasonSec = new Map();
+    this.deferredTaskReasons = { inbound: null, outbound: null };
+    this.liftPortBusyTimeSec = new Map();
     this.error = null;
     this.rng = makeRng(seed);
     this.scenario = { ...this.scenario, seed };
@@ -608,9 +801,10 @@ export class ShuttleSimCore {
     this.simTimeSec = round(this.simTimeSec + stepSec);
     this.reservations = this.reservations.filter((reservation) => reservation.endTimeSec >= this.simTimeSec - 1);
 
-    this.generateDueTasks();
-    this.assignQueuedTasks();
+    this.generateDueTasks(stepSec);
+    this.assignQueuedTasks(stepSec);
     this.advanceVehicles(stepSec);
+    this.updateLiftPortUtilization(stepSec);
     this.updateDeadlockSmokeCounters();
 
     if (this.simTimeSec >= this.scenario.durationSec) {
@@ -660,7 +854,10 @@ export class ShuttleSimCore {
     return {
       currentNodeOccupancy: [...this.currentNodeOccupancy.entries()]
         .sort(([left], [right]) => left.localeCompare(right))
-        .map(([nodeId, vehicleId]) => ({ nodeId, vehicleId }))
+        .map(([nodeId, vehicleId]) => ({ nodeId, vehicleId })),
+      storageNodeOccupancy: [...this.storageNodeLoadOccupancy(true).entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([nodeId, loadId]) => ({ nodeId, loadId }))
     };
   }
 
@@ -735,6 +932,16 @@ export class ShuttleSimCore {
     return this.getState();
   }
 
+  addLoadForTest(load: LoadStateRecord): ShuttleSimState {
+    this.loads.push(LoadStateRecordSchema.parse(load));
+    return this.getState();
+  }
+
+  addTaskForTest(task: TaskStateRecord): ShuttleSimState {
+    this.tasks.push(TaskStateRecordSchema.parse(task));
+    return this.getState();
+  }
+
   private intervalForRate(ratePerHour: number): number {
     if (ratePerHour <= 0) {
       return Number.POSITIVE_INFINITY;
@@ -742,18 +949,30 @@ export class ShuttleSimCore {
     return 3600 / ratePerHour;
   }
 
-  private generateDueTasks(): void {
+  private generateDueTasks(dtSec: number): void {
     if (this.tasks.length >= this.scenario.taskGeneration.maxTasks) {
       return;
     }
 
     while (this.simTimeSec >= this.nextInboundSec && this.tasks.length < this.scenario.taskGeneration.maxTasks) {
-      this.createTask('inbound');
+      const result = this.createTask('inbound');
+      if (!result.created) {
+        this.deferTask('inbound', result.reason, dtSec);
+        this.nextInboundSec = this.simTimeSec + this.scenario.timeStepSec;
+        break;
+      }
+      this.deferredTaskReasons.inbound = null;
       this.nextInboundSec += this.nextArrivalInterval('inbound');
     }
 
     while (this.simTimeSec >= this.nextOutboundSec && this.tasks.length < this.scenario.taskGeneration.maxTasks) {
-      this.createTask('outbound');
+      const result = this.createTask('outbound');
+      if (!result.created) {
+        this.deferTask('outbound', result.reason, dtSec);
+        this.nextOutboundSec = this.simTimeSec + this.scenario.timeStepSec;
+        break;
+      }
+      this.deferredTaskReasons.outbound = null;
       this.nextOutboundSec += this.nextArrivalInterval('outbound');
     }
   }
@@ -768,20 +987,19 @@ export class ShuttleSimCore {
     return -Math.log(u) * deterministic;
   }
 
-  private createTask(kind: 'inbound' | 'outbound'): void {
+  private createTask(kind: 'inbound' | 'outbound'): { created: true } | { created: false; reason: string } {
+    const storageSelection = kind === 'inbound' ? this.selectInboundStorageNode() : this.selectOutboundLoad();
+    if (!storageSelection) {
+      return { created: false, reason: kind === 'inbound' ? 'storage-full' : 'storage-empty' };
+    }
+
     this.taskSequence += 1;
     const taskId = `task-${String(this.taskSequence).padStart(4, '0')}`;
-    const loadId = `load-${String(this.taskSequence).padStart(4, '0')}`;
-    const storageNodeId = this.taskSequence % 2 === 0 ? 'storage-b' : 'storage-a';
-    const pickupNodeId = kind === 'inbound' ? 'inbound' : storageNodeId;
-    const dropoffNodeId = kind === 'inbound' ? storageNodeId : 'outbound';
-    const load: LoadStateRecord = {
-      id: loadId,
-      state: 'waiting',
-      nodeId: pickupNodeId,
-      vehicleId: null,
-      weightKg: 450 + Math.round(this.rng.next() * 350)
-    };
+    const generatedLoadId = `load-${String(this.taskSequence).padStart(4, '0')}`;
+    const loadId = kind === 'inbound' ? generatedLoadId : storageSelection.loadId;
+    const liftNodeId = this.selectLiftPortNodeId(kind, storageSelection.nodeId);
+    const pickupNodeId = kind === 'inbound' ? liftNodeId : storageSelection.nodeId;
+    const dropoffNodeId = kind === 'inbound' ? storageSelection.nodeId : liftNodeId;
     const task: TaskStateRecord = {
       id: taskId,
       kind,
@@ -797,20 +1015,182 @@ export class ShuttleSimCore {
       replanCount: 0,
       waitReason: null
     };
-    this.loads.push(load);
+    if (kind === 'inbound') {
+      const load: LoadStateRecord = {
+        id: loadId,
+        state: 'waiting',
+        nodeId: pickupNodeId,
+        vehicleId: null,
+        weightKg: 450 + Math.round(this.rng.next() * 350)
+      };
+      this.loads.push(load);
+    }
     this.tasks.push(task);
-    this.logEvent('task-created', null, task.id, load.id, null, pickupNodeId, 'task-generation', nodePosition(this.scenario, pickupNodeId), { kind });
+    this.logEvent('task-created', null, task.id, loadId, null, pickupNodeId, 'task-generation', nodePosition(this.scenario, pickupNodeId), {
+      kind,
+      fifoNodeId: storageSelection.nodeId
+    });
+    return { created: true };
   }
 
-  private assignQueuedTasks(): void {
+  private selectLiftPortNodeId(kind: 'inbound' | 'outbound', relatedNodeId: string): string {
+    const fallbackNodeId = this.scenario.layout.nodes.find((node) => node.type === kind)?.id ?? relatedNodeId;
+    const relatedNode = this.scenario.layout.nodes.find((node) => node.id === relatedNodeId);
+    const liftNodes = this.scenario.layout.nodes
+      .filter((node) => node.type === 'lift-blackbox' && node.id.startsWith(`${kind}-lift`))
+      .sort((left, right) => {
+        const leftDistance = relatedNode ? Math.abs(left.z - relatedNode.z) + Math.abs(left.x - relatedNode.x) : 0;
+        const rightDistance = relatedNode ? Math.abs(right.z - relatedNode.z) + Math.abs(right.x - relatedNode.x) : 0;
+        return leftDistance - rightDistance || left.id.localeCompare(right.id);
+      });
+    const candidates = liftNodes.length > 0 ? liftNodes.map((node) => node.id) : [fallbackNodeId];
+    return candidates[0]!;
+  }
+
+  private taskLiftPortNodeId(task: TaskStateRecord): string | null {
+    if (task.kind === 'inbound' && task.pickupNodeId.startsWith('inbound-lift')) {
+      return task.pickupNodeId;
+    }
+    if (task.kind === 'outbound' && task.dropoffNodeId.startsWith('outbound-lift')) {
+      return task.dropoffNodeId;
+    }
+    return null;
+  }
+
+  private isLiftPortBusyForAssignment(kind: 'inbound' | 'outbound', liftNodeId: string): boolean {
+    return this.tasks.some((task) => this.isTaskUsingLiftPortResource(task, kind, liftNodeId));
+  }
+
+  private isTaskUsingLiftPortResource(task: TaskStateRecord, kind: 'inbound' | 'outbound', liftNodeId: string): boolean {
+    if (task.kind !== kind || task.state === 'queued' || task.state === 'completed' || task.state === 'failed') {
+      return false;
+    }
+    const taskLiftPortId = this.taskLiftPortNodeId(task);
+    if (taskLiftPortId !== liftNodeId) {
+      return false;
+    }
+    if (kind === 'outbound') {
+      return true;
+    }
+    const load = this.loads.find((candidate) => candidate.id === task.loadId);
+    return load?.state === 'waiting' && load.nodeId === liftNodeId;
+  }
+
+  private deferTask(kind: 'inbound' | 'outbound', reason: string, dtSec: number): void {
+    this.blockedTimeByReasonSec.set(reason, round((this.blockedTimeByReasonSec.get(reason) ?? 0) + dtSec));
+    if (this.deferredTaskReasons[kind] === reason) {
+      return;
+    }
+
+    this.deferredTaskReasons[kind] = reason;
+    this.logEvent('task-deferred', null, null, null, null, null, reason, null, { kind });
+  }
+
+  private isStorageNode(nodeId: string): boolean {
+    return this.scenario.layout.nodes.some((node) => node.id === nodeId && node.type === 'storage');
+  }
+
+  private storageLanes(): ShuttleScenario['layout']['nodes'][] {
+    const laneByZ = new Map<number, ShuttleScenario['layout']['nodes']>();
+    for (const node of this.scenario.layout.nodes.filter((candidate) => candidate.type === 'storage')) {
+      const lane = laneByZ.get(node.z) ?? [];
+      lane.push(node);
+      laneByZ.set(node.z, lane);
+    }
+
+    return [...laneByZ.entries()]
+      .sort(([leftZ], [rightZ]) => leftZ - rightZ)
+      .map(([, lane]) => lane.sort((left, right) => left.x - right.x || left.id.localeCompare(right.id)));
+  }
+
+  private storageNodeLoadOccupancy(includePendingInbound: boolean): Map<string, string> {
+    const occupancy = new Map<string, string>();
+    for (const load of this.loads) {
+      if (load.nodeId && load.state === 'stored' && this.isStorageNode(load.nodeId)) {
+        occupancy.set(load.nodeId, load.id);
+      }
+    }
+
+    if (!includePendingInbound) {
+      return occupancy;
+    }
+
+    for (const task of this.tasks) {
+      if (
+        task.kind === 'inbound' &&
+        task.state !== 'completed' &&
+        task.state !== 'failed' &&
+        this.isStorageNode(task.dropoffNodeId)
+      ) {
+        occupancy.set(task.dropoffNodeId, task.loadId);
+      }
+    }
+
+    return occupancy;
+  }
+
+  private selectInboundStorageNode(): { nodeId: string; loadId: string } | null {
+    const lanes = this.storageLanes();
+    if (lanes.length === 0) {
+      return null;
+    }
+
+    const occupancy = this.storageNodeLoadOccupancy(true);
+    for (let offset = 0; offset < lanes.length; offset += 1) {
+      const lane = lanes[(this.taskSequence + offset) % lanes.length]!;
+      const candidate = lane.find((node, index) => {
+        if (occupancy.has(node.id)) {
+          return false;
+        }
+        const nodesBetweenCandidateAndInfeed = lane.slice(index + 1);
+        return nodesBetweenCandidateAndInfeed.every((rightSideNode) => !occupancy.has(rightSideNode.id));
+      });
+      if (candidate) {
+        return { nodeId: candidate.id, loadId: '' };
+      }
+    }
+    return null;
+  }
+
+  private selectOutboundLoad(): { nodeId: string; loadId: string } | null {
+    const lanes = this.storageLanes();
+    const assignedOutboundLoadIds = new Set(
+      this.tasks
+        .filter((task) => task.kind === 'outbound' && task.state !== 'completed' && task.state !== 'failed')
+        .map((task) => task.loadId)
+    );
+
+    for (let offset = 0; offset < lanes.length; offset += 1) {
+      const lane = lanes[(this.taskSequence + offset) % lanes.length]!;
+      for (const node of lane) {
+        const load = this.loads.find(
+          (candidate) => candidate.state === 'stored' && candidate.nodeId === node.id && !assignedOutboundLoadIds.has(candidate.id)
+        );
+        if (load) {
+          return { nodeId: node.id, loadId: load.id };
+        }
+      }
+    }
+    return null;
+  }
+
+  private assignQueuedTasks(dtSec: number): void {
+    for (const task of this.tasks.filter((candidate) => candidate.state === 'queued')) {
+      const reason = this.liftPortBlockReason(task);
+      task.waitReason = reason;
+      if (reason) {
+        this.blockedTimeByReasonSec.set(reason, round((this.blockedTimeByReasonSec.get(reason) ?? 0) + dtSec));
+      }
+    }
+
     const idleVehicles = this.vehicles.filter((vehicle) => vehicle.state === 'idle');
     for (const vehicle of idleVehicles) {
-      const task = this.tasks.find((candidate) => candidate.state === 'queued');
+      const task = this.tasks.find((candidate) => candidate.state === 'queued' && !this.liftPortBlockReason(candidate));
       if (!task) {
         return;
       }
 
-      const route = this.planRoute(vehicle.currentNodeId, task.pickupNodeId, task.dropoffNodeId, this.parkingNodeFor(vehicle.id));
+      const route = this.planRoute(vehicle.currentNodeId, task, this.parkingNodeFor(vehicle.id));
       vehicle.taskId = task.id;
       vehicle.routeNodeIds = route;
       vehicle.routeIndex = 0;
@@ -822,22 +1202,74 @@ export class ShuttleSimCore {
       task.state = 'assigned';
       task.vehicleId = vehicle.id;
       task.assignedAtSec = this.simTimeSec;
+      task.waitReason = null;
       this.logEvent('task-assigned', vehicle.id, task.id, task.loadId, vehicle.currentNodeId, task.pickupNodeId, 'nearest-idle', this.vehiclePosition(vehicle), {
         route: route.join('>')
       });
     }
   }
 
-  private planRoute(currentNodeId: string, pickupNodeId: string, dropoffNodeId: string, parkingNodeId: string): string[] {
+  private liftPortBlockReason(task: TaskStateRecord): string | null {
+    if (task.kind === 'inbound' && task.pickupNodeId.startsWith('inbound-lift')) {
+      return this.isLiftPortBusyForAssignment('inbound', task.pickupNodeId) ? `inbound-lift-busy:${task.pickupNodeId}` : null;
+    }
+    if (task.kind === 'outbound' && task.dropoffNodeId.startsWith('outbound-lift')) {
+      return this.isLiftPortBusyForAssignment('outbound', task.dropoffNodeId) ? `outbound-lift-busy:${task.dropoffNodeId}` : null;
+    }
+    return null;
+  }
+
+  private planRoute(currentNodeId: string, task: TaskStateRecord, parkingNodeId: string): string[] {
     const route: string[] = [currentNodeId];
-    for (const target of [pickupNodeId, dropoffNodeId, parkingNodeId]) {
-      const segment = this.shortestPath(route[route.length - 1]!, target);
+    const storageEntrySideNodeId = task.kind === 'inbound' ? this.storageSideNodeId(task.dropoffNodeId, 'right') : this.storageSideNodeId(task.pickupNodeId, 'left');
+    const targets = task.kind === 'inbound'
+      ? [task.pickupNodeId, storageEntrySideNodeId, task.dropoffNodeId, storageEntrySideNodeId, parkingNodeId]
+      : [storageEntrySideNodeId, task.pickupNodeId, storageEntrySideNodeId, task.dropoffNodeId, parkingNodeId];
+    for (const target of targets) {
+      if (!target || target === route[route.length - 1]) {
+        continue;
+      }
+      const fromNodeId = route[route.length - 1]!;
+      const blockedStorageNodeIds = this.blockedStorageTransitNodeIds(new Set([fromNodeId, target]));
+      const segment = this.shortestPath(fromNodeId, target, blockedStorageNodeIds);
       route.push(...segment.slice(1));
     }
     return route;
   }
 
-  private shortestPath(fromNodeId: string, toNodeId: string): string[] {
+  private storageSideNodeId(storageNodeId: string, side: 'left' | 'right'): string | null {
+    const match = /^storage-r(\d+)-c\d+$/.exec(storageNodeId);
+    if (!match) {
+      return null;
+    }
+    const sideNodeId = `${side}-row-${match[1]}`;
+    return this.scenario.layout.nodes.some((node) => node.id === sideNodeId) ? sideNodeId : null;
+  }
+
+  private blockedStorageTransitNodeIds(allowedNodeIds: Set<string>): Set<string> {
+    const storageNodeIds = new Set(this.scenario.layout.nodes.filter((node) => node.type === 'storage').map((node) => node.id));
+    const blockedNodeIds = new Set<string>();
+    for (const nodeId of this.storageNodeLoadOccupancy(false).keys()) {
+      if (storageNodeIds.has(nodeId) && !allowedNodeIds.has(nodeId)) {
+        blockedNodeIds.add(nodeId);
+      }
+    }
+    for (const task of this.tasks) {
+      if (
+        task.kind === 'inbound' &&
+        task.state !== 'queued' &&
+        task.state !== 'completed' &&
+        task.state !== 'failed' &&
+        storageNodeIds.has(task.dropoffNodeId) &&
+        !allowedNodeIds.has(task.dropoffNodeId)
+      ) {
+        blockedNodeIds.add(task.dropoffNodeId);
+      }
+    }
+    return blockedNodeIds;
+  }
+
+  private shortestPath(fromNodeId: string, toNodeId: string, blockedNodeIds = new Set<string>()): string[] {
     if (fromNodeId === toNodeId) {
       return [fromNodeId];
     }
@@ -860,6 +1292,9 @@ export class ShuttleSimCore {
       open.delete(current);
       for (const neighbor of this.neighbors(current)) {
         if (!nodes.has(neighbor.nodeId)) {
+          continue;
+        }
+        if (blockedNodeIds.has(neighbor.nodeId)) {
           continue;
         }
         const tentative = (gScore.get(current) ?? Infinity) + neighbor.lengthM;
@@ -890,7 +1325,11 @@ export class ShuttleSimCore {
   private parkingNodeFor(vehicleId: string): string {
     const parkingNodes = this.scenario.layout.nodes.filter((node) => node.type === 'parking');
     if (parkingNodes.length === 0) {
-      return 'inbound';
+      const fallbackNode = this.scenario.layout.nodes.find((node) => !node.noParking) ?? this.scenario.layout.nodes[0];
+      if (!fallbackNode) {
+        throw new Error('Scenario has no nodes available for vehicle parking.');
+      }
+      return fallbackNode.id;
     }
     const vehicleNumber = Number(vehicleId.replace(/\D+/g, '')) || 1;
     return parkingNodes[(vehicleNumber - 1) % parkingNodes.length]!.id;
@@ -1137,7 +1576,7 @@ export class ShuttleSimCore {
     vehicle.waitReason = null;
     vehicle.blockingReservationId = null;
     vehicle.blockingVehicleId = null;
-    vehicle.state = vehicle.loaded ? 'loaded-moving' : 'moving-to-pickup';
+    vehicle.state = vehicle.loaded ? 'loaded-moving' : vehicle.taskId ? 'moving-to-pickup' : 'returning';
     vehicle.targetNodeId = toNodeId;
     vehicle.legRemainingM = edge.lengthM;
     vehicle.legElapsedSec = 0;
@@ -1279,6 +1718,41 @@ export class ShuttleSimCore {
     return this.reservations.find((reservation) => reservation.id === reservationId)?.vehicleId ?? null;
   }
 
+  private liftPortNodes(): Array<{ nodeId: string; kind: 'inbound' | 'outbound' }> {
+    return this.scenario.layout.nodes
+      .filter((node) => node.type === 'lift-blackbox' && (node.id.startsWith('inbound-lift') || node.id.startsWith('outbound-lift')))
+      .map((node) => ({ nodeId: node.id, kind: node.id.startsWith('inbound-lift') ? 'inbound' as const : 'outbound' as const }))
+      .sort((left, right) => left.nodeId.localeCompare(right.nodeId));
+  }
+
+  private updateLiftPortUtilization(dtSec: number): void {
+    for (const port of this.liftPortNodes()) {
+      if (this.isLiftPortBusyForAssignment(port.kind, port.nodeId)) {
+        this.liftPortBusyTimeSec.set(port.nodeId, round((this.liftPortBusyTimeSec.get(port.nodeId) ?? 0) + dtSec));
+      }
+    }
+  }
+
+  private liftPortDiagnostics(): ShuttleSimState['traffic']['liftPorts'] {
+    return this.liftPortNodes().map((port) => {
+      const waitingTaskIds = this.tasks
+        .filter((task) => task.state === 'queued' && task.kind === port.kind && this.taskLiftPortNodeId(task) === port.nodeId)
+        .map((task) => task.id)
+        .sort();
+      const activeTask = this.tasks
+        .filter((task) => this.isTaskUsingLiftPortResource(task, port.kind, port.nodeId))
+        .sort((left, right) => left.id.localeCompare(right.id))[0];
+      return {
+        nodeId: port.nodeId,
+        kind: port.kind,
+        queueLength: waitingTaskIds.length,
+        waitingTaskIds,
+        activeTaskId: activeTask?.id ?? null,
+        utilization: round((this.liftPortBusyTimeSec.get(port.nodeId) ?? 0) / Math.max(this.simTimeSec, 1), 4)
+      };
+    });
+  }
+
   private vehiclePosition(vehicle: MutableVehicle): { x: number; y: number; z: number } {
     return { x: vehicle.x, y: vehicle.y, z: vehicle.z };
   }
@@ -1328,7 +1802,6 @@ export class ShuttleSimCore {
     const deadlockCandidateVehicleIds = this.deadlockCandidateVehicleIds();
     let minVehicleSeparationM: number | null = null;
     let physicalViolationCount = 0;
-    const minCenterSeparationM = this.scenario.vehicles.safetyRadiusM * 2;
     const maxConfiguredSpeedMps = Math.max(this.scenario.physicsParams.emptySpeedMps, this.scenario.physicsParams.loadedSpeedMps);
 
     for (const vehicle of this.vehicles) {
@@ -1346,7 +1819,7 @@ export class ShuttleSimCore {
         const right = this.vehicles[rightIndex]!;
         const separationM = Math.hypot(left.x - right.x, left.z - right.z);
         minVehicleSeparationM = minVehicleSeparationM === null ? separationM : Math.min(minVehicleSeparationM, separationM);
-        if (separationM + 1e-6 < minCenterSeparationM) {
+        if (vehicleFootprintsOverlap(left, right, this.scenario.vehicles)) {
           physicalViolationCount += 1;
         }
       }
@@ -1355,6 +1828,7 @@ export class ShuttleSimCore {
     return {
       activeReservationCount: this.reservations.length,
       waitingVehicles,
+      liftPorts: this.liftPortDiagnostics(),
       deadlockCandidateVehicleIds,
       minVehicleSeparationM: minVehicleSeparationM === null ? null : round(minVehicleSeparationM),
       maxObservedSpeedMps: round(Math.max(0, ...this.vehicles.map((vehicle) => vehicle.speedMps))),

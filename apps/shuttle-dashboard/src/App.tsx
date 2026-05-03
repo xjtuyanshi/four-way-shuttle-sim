@@ -46,6 +46,10 @@ type CommandStatus = {
   tone: 'idle' | 'ok' | 'warn' | 'error';
 };
 
+type PlaybackSpeedResponse = {
+  speed: number;
+};
+
 type Phase0ValidationRun = {
   seed: number;
   durationSec: number;
@@ -86,6 +90,7 @@ type Phase0ValidationResult = {
     noDeadlocksInSweep: boolean;
     eventLogsPresent: boolean;
     noPhysicalSafetyViolations: boolean;
+    noReservationCoverageViolations: boolean;
     pass: boolean;
   };
 };
@@ -139,6 +144,8 @@ const CONTROLLED_PARAMS = [
     unit: 'PPH'
   }
 ] as const;
+
+const PLAYBACK_SPEEDS = [1, 2, 4, 10] as const;
 
 async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const response = await fetch(input, {
@@ -317,6 +324,14 @@ function EventLog({ events }: { events: EventLogEntry[] }) {
   );
 }
 
+function formatStorageCellLabel(nodeId: string): string {
+  const match = /^storage-r(\d+)-c(\d+)$/.exec(nodeId);
+  if (match) {
+    return `R${Number(match[1])} C${Number(match[2])}`;
+  }
+  return nodeId.replace('storage-', '').toUpperCase();
+}
+
 function AuthoritativeMap({ scenario, state }: { scenario: ShuttleScenario | null; state: ShuttleSimState | null }) {
   const geometry = useMemo(() => {
     const nodes = scenario?.layout.nodes ?? [];
@@ -444,10 +459,6 @@ function StreamingPane({
             selectedVehicleId={selectedVehicleId}
           />
         </Suspense>
-        <div className="stream-copy">
-          <strong>{ready ? 'Ready for Unreal visual twin hookup' : 'Local 3D preview is active'}</strong>
-          <span>{ready ? 'Unreal should subscribe to this same WebSocket state stream.' : 'Unreal and Pixel Streaming remain gated by local prerequisites.'}</span>
-        </div>
       </div>
     </section>
   );
@@ -456,6 +467,9 @@ function StreamingPane({
 function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
   const traffic = state?.traffic;
   const waiting = traffic?.waitingVehicles ?? [];
+  const liftPorts = traffic?.liftPorts ?? [];
+  const queuedLiftTasks = liftPorts.reduce((sum, port) => sum + port.queueLength, 0);
+  const activeLiftPorts = liftPorts.filter((port) => port.activeTaskId).length;
 
   return (
     <section className="traffic-diagnostics" aria-label="Traffic diagnostics">
@@ -475,6 +489,11 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
         <span>Physical violations</span>
         <strong className={traffic?.physicalViolationCount ? 'blocked' : 'ready'}>{traffic?.physicalViolationCount ?? 0}</strong>
       </div>
+      <div>
+        <span>Port diagnostics</span>
+        <strong>{activeLiftPorts}/{liftPorts.length}</strong>
+        <small>{queuedLiftTasks} queued</small>
+      </div>
       <div className="traffic-wait-list">
         {waiting.length === 0 ? (
           <small>No waiting vehicles</small>
@@ -485,6 +504,102 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
             </small>
           ))
         )}
+      </div>
+      <div className="traffic-lift-list">
+        {liftPorts.length === 0 ? (
+          <small>No lift ports</small>
+        ) : (
+          liftPorts.map((port) => (
+            <small key={port.nodeId}>
+              {port.nodeId} / {port.kind} / q{port.queueLength} / allocated {Math.round(port.utilization * 100)}%
+            </small>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function FifoInventoryPanel({ scenario, state }: { scenario: ShuttleScenario | null; state: ShuttleSimState | null }) {
+  const lanes = useMemo(() => {
+    const storageNodes = (scenario?.layout.nodes ?? []).filter((node) => node.type === 'storage');
+    const laneByZ = new Map<number, typeof storageNodes>();
+    for (const node of storageNodes) {
+      const lane = laneByZ.get(node.z) ?? [];
+      lane.push(node);
+      laneByZ.set(node.z, lane);
+    }
+    return [...laneByZ.entries()]
+      .sort(([leftZ], [rightZ]) => leftZ - rightZ)
+      .map(([z, lane]) => ({
+        id: `lane-${z}`,
+        z,
+        cells: lane.sort((left, right) => left.x - right.x || left.id.localeCompare(right.id))
+      }));
+  }, [scenario]);
+
+  const activeTasks = state?.tasks.filter((task) => task.state !== 'completed' && task.state !== 'failed') ?? [];
+  const storedByNode = new Map(
+    (state?.loads ?? [])
+      .filter((load) => load.state === 'stored' && load.nodeId)
+      .map((load) => [load.nodeId!, load])
+  );
+  const inboundTargets = new Set(
+    activeTasks
+      .filter((task) => task.kind === 'inbound')
+      .map((task) => task.dropoffNodeId)
+  );
+  const outboundPickups = new Set(
+    activeTasks
+      .filter((task) => task.kind === 'outbound')
+      .map((task) => task.pickupNodeId)
+  );
+  const storageEmptySec = state?.kpis.blockedTimeByReasonSec['storage-empty'] ?? 0;
+  const storageFullSec = state?.kpis.blockedTimeByReasonSec['storage-full'] ?? 0;
+  const totalCells = lanes.reduce((sum, lane) => sum + lane.cells.length, 0);
+  const occupiedCount = lanes.reduce(
+    (sum, lane) => sum + lane.cells.filter((cell) => storedByNode.has(cell.id) || inboundTargets.has(cell.id)).length,
+    0
+  );
+
+  return (
+    <section className="panel fifo-panel" aria-label="FIFO inventory">
+      <div className="panel-head">
+        <h2>FIFO Inventory</h2>
+        <span>{occupiedCount}/{totalCells} cells</span>
+      </div>
+      <div className="fifo-body">
+        <div className="fifo-lanes">
+          {lanes.map((lane, laneIndex) => (
+            <div className="fifo-lane" key={lane.id}>
+              <span className="fifo-lane-label">Row {laneIndex + 1}</span>
+              <div className="fifo-cells">
+                {lane.cells.map((cell) => {
+                  const storedLoad = storedByNode.get(cell.id);
+                  const reserved = inboundTargets.has(cell.id);
+                  const outbound = outboundPickups.has(cell.id);
+                  const status = storedLoad ? 'stored' : reserved ? 'reserved' : 'empty';
+                  return (
+                    <div className={`fifo-cell ${status} ${outbound ? 'outbound' : ''}`} key={cell.id}>
+                      <span>{formatStorageCellLabel(cell.id)}</span>
+                      <strong>{storedLoad?.id ?? (reserved ? 'inbound' : '--')}</strong>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="fifo-reasons">
+          <div>
+            <span>Empty wait</span>
+            <strong>{formatNumber(storageEmptySec, 1)}s</strong>
+          </div>
+          <div>
+            <span>Full wait</span>
+            <strong>{formatNumber(storageFullSec, 1)}s</strong>
+          </div>
+        </div>
       </div>
     </section>
   );
@@ -557,6 +672,10 @@ function ValidationPanel({
             <strong>{validation.acceptance.noPhysicalSafetyViolations ? 'clear' : 'violations'}</strong>
           </div>
           <div>
+            <span>Reservation coverage</span>
+            <strong>{validation.acceptance.noReservationCoverageViolations ? 'clear' : 'violations'}</strong>
+          </div>
+          <div>
             <span>Max accel</span>
             <strong>{formatNumber(Math.max(...validation.seedSweep.runs.map((run) => run.maxObservedAccelerationMps2)), 2)} m/s2</strong>
           </div>
@@ -580,6 +699,7 @@ export function App() {
   const [validation, setValidation] = useState<Phase0ValidationResult | null>(null);
   const [validating, setValidating] = useState(false);
   const [commandStatus, setCommandStatus] = useState<CommandStatus>({ label: 'ready', tone: 'idle' });
+  const [playbackSpeed, setPlaybackSpeedState] = useState(1);
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
   const [sceneLayers, setSceneLayers] = useState<SceneLayers>({
     traffic: true,
@@ -589,6 +709,7 @@ export function App() {
   });
   const [isPending, startTransition] = useTransition();
   const reconnectAttemptRef = useRef(0);
+  const playbackSpeedChangedRef = useRef(false);
 
   const kpis = state?.kpis ?? null;
   const vehicles = state?.vehicles ?? [];
@@ -609,14 +730,18 @@ export function App() {
     Promise.all([
       requestJson<ShuttleScenario>('/api/shuttle/scenario'),
       requestJson<ShuttleSimState>('/api/shuttle/state'),
-      requestJson<PrerequisiteReport>('/api/shuttle/prerequisites')
+      requestJson<PrerequisiteReport>('/api/shuttle/prerequisites'),
+      requestJson<PlaybackSpeedResponse>('/api/shuttle/playbackSpeed')
     ])
-      .then(([nextScenario, nextState, report]) => {
+      .then(([nextScenario, nextState, report, speedReport]) => {
         if (cancelled) return;
         setScenario(nextScenario);
         setState(nextState);
         setEvents(nextState.recentEvents);
         setPrerequisites(report);
+        if (!playbackSpeedChangedRef.current) {
+          setPlaybackSpeedState(speedReport.speed);
+        }
       })
       .catch((error) => setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' }));
     return () => {
@@ -708,6 +833,27 @@ export function App() {
     setScenario(nextScenario);
   }
 
+  async function setPlaybackSpeed(speed: number): Promise<void> {
+    playbackSpeedChangedRef.current = true;
+    setPlaybackSpeedState(speed);
+    const startedAt = performance.now();
+    setCommandStatus({ label: 'sending command...', tone: 'idle' });
+    try {
+      const response = await requestJson<PlaybackSpeedResponse & { state?: ShuttleSimState }>('/api/shuttle/playbackSpeed', {
+        method: 'POST',
+        body: JSON.stringify({ speed })
+      });
+      setPlaybackSpeedState(response.speed);
+      if (response.state) {
+        setState(response.state);
+      }
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      setCommandStatus({ label: `ack ${elapsedMs} ms`, tone: 'ok' });
+    } catch (error) {
+      setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' });
+    }
+  }
+
   async function runValidation(): Promise<void> {
     setValidating(true);
     setCommandStatus({ label: 'running validation...', tone: 'idle' });
@@ -752,9 +898,22 @@ export function App() {
             <button type="button" onClick={() => postCommand('/api/shuttle/pause')}>Pause</button>
             <button type="button" onClick={() => postCommand('/api/shuttle/reset', { seed: state?.seed })}>Reset</button>
           </div>
+          <div className="speed-row" aria-label="Playback speed">
+            {PLAYBACK_SPEEDS.map((speed) => (
+              <button
+                className={playbackSpeed === speed ? 'active' : ''}
+                key={speed}
+                type="button"
+                onClick={() => setPlaybackSpeed(speed)}
+                aria-pressed={playbackSpeed === speed}
+              >
+                {speed}x
+              </button>
+            ))}
+          </div>
           <div className={`status-line ${commandStatus.tone}`}>
             <span>{state?.status ?? 'loading'}</span>
-            <strong>{commandStatus.label}{isPending ? ' / rendering' : ''}</strong>
+            <strong>{commandStatus.label} / {playbackSpeed}x{isPending ? ' / rendering' : ''}</strong>
           </div>
         </section>
 
@@ -797,17 +956,18 @@ export function App() {
           </div>
         </header>
 
+        <StreamingPane
+          prerequisites={prerequisites}
+          scenario={scenario}
+          state={state}
+          layers={sceneLayers}
+          selectedVehicleId={selectedVehicleId}
+          onToggleLayer={toggleSceneLayer}
+        />
         <KpiStrip kpis={kpis} />
         <TrafficDiagnosticsPanel state={state} />
+        <FifoInventoryPanel scenario={scenario} state={state} />
         <div className="main-grid">
-          <StreamingPane
-            prerequisites={prerequisites}
-            scenario={scenario}
-            state={state}
-            layers={sceneLayers}
-            selectedVehicleId={selectedVehicleId}
-            onToggleLayer={toggleSceneLayer}
-          />
           <VehicleTable
             vehicles={vehicles}
             selectedVehicleId={selectedVehicleId}
