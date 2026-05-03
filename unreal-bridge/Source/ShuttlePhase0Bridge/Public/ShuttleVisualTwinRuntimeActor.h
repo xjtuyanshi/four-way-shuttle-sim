@@ -61,6 +61,15 @@ public:
     UFUNCTION(BlueprintPure, Category = "Shuttle|Runtime")
     int32 GetParkingPadInstanceCount() const;
 
+    UFUNCTION(BlueprintCallable, Category = "Shuttle|Runtime")
+    void ApplyVehicleState(const FShuttleVisualVehicleState& VehicleState);
+
+    UFUNCTION(BlueprintPure, Category = "Shuttle|Runtime")
+    int32 GetSpawnedVehicleActorCount() const;
+
+    UFUNCTION(BlueprintPure, Category = "Shuttle|Runtime")
+    AShuttleVisualTwinActor* FindVehicleActorById(const FString& VehicleId) const;
+
 protected:
     UPROPERTY(VisibleAnywhere, Category = "Shuttle|Scene")
     USceneComponent* Root;

@@ -32,7 +32,7 @@ Dynamic scene:
 - Optional carried pallet mesh parented to the shuttle while `loaded=true`.
 - Optional debug overlays for route, reservation, wait reason, and blocking vehicle.
 - No diagonal travel; actors should only follow streamed orthogonal x/z motion.
-- The first runtime slice uses `AShuttleVisualTwinRuntimeActor` as a thin manager: it builds the default single-level static layout, connects to the API stream, and spawns/binds shuttle actors by `VehicleId`.
+- The first runtime slice uses `AShuttleVisualTwinRuntimeActor` as a thin manager: it builds the default single-level static layout, connects to the API stream, and spawns/binds visible default shuttle actors by `VehicleId`.
 
 ## Bridge Binding
 
@@ -74,7 +74,7 @@ Before Pixel Streaming soak:
 - UE headless commandlet smoke.
 - Long-run validation must meet explicit thresholds reported in `validation.longRun.thresholds`, not only positive throughput.
 - Unreal setup/smoke must print machine-readable readiness diagnostics showing the generated project path, engine association, enabled `ShuttlePhase0Bridge` and `PixelStreaming` plugins, copied bridge source files, and compiled bridge binary.
-- The UE smoke commandlet must instantiate `AShuttleVisualTwinRuntimeActor` headlessly and verify the default scene scaffold counts: 48 storage cells, 16 track beds, 2 inbound lift pads, 2 outbound lift pads, and 2 parking pads.
+- The UE smoke commandlet must instantiate `AShuttleVisualTwinRuntimeActor` headlessly, verify the default scene scaffold counts, and exercise the synthetic vehicle binding path: one actor spawned per `VehicleId`, subsequent updates reuse the actor, SimCore-to-Unreal coordinate/yaw conversion holds, and carried-pallet visibility follows `loaded`.
 
 After the real UE scene exists:
 

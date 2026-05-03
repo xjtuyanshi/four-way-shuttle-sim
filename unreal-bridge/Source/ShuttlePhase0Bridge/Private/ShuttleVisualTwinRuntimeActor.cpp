@@ -103,6 +103,14 @@ void AShuttleVisualTwinRuntimeActor::EndPlay(const EEndPlayReason::Type EndPlayR
             StateSubscriber->Disconnect();
         }
     }
+    for (const TPair<FString, TWeakObjectPtr<AShuttleVisualTwinActor>>& Entry : VehicleActors)
+    {
+        AShuttleVisualTwinActor* SpawnedActor = Entry.Value.Get();
+        if (IsValid(SpawnedActor) && SpawnedActor->GetOwner() == this && !SpawnedActor->IsActorBeingDestroyed())
+        {
+            SpawnedActor->Destroy();
+        }
+    }
     VehicleActors.Empty();
     Super::EndPlay(EndPlayReason);
 }
@@ -180,11 +188,38 @@ int32 AShuttleVisualTwinRuntimeActor::GetParkingPadInstanceCount() const
 
 void AShuttleVisualTwinRuntimeActor::HandleVehicleState(const FShuttleVisualVehicleState& VehicleState)
 {
+    ApplyVehicleState(VehicleState);
+}
+
+void AShuttleVisualTwinRuntimeActor::ApplyVehicleState(const FShuttleVisualVehicleState& VehicleState)
+{
     AShuttleVisualTwinActor* VehicleActor = FindOrSpawnVehicleActor(VehicleState.Id);
     if (VehicleActor)
     {
         VehicleActor->ApplyAuthoritativeState(VehicleState);
     }
+}
+
+int32 AShuttleVisualTwinRuntimeActor::GetSpawnedVehicleActorCount() const
+{
+    int32 Count = 0;
+    for (const TPair<FString, TWeakObjectPtr<AShuttleVisualTwinActor>>& Entry : VehicleActors)
+    {
+        if (Entry.Value.IsValid())
+        {
+            Count += 1;
+        }
+    }
+    return Count;
+}
+
+AShuttleVisualTwinActor* AShuttleVisualTwinRuntimeActor::FindVehicleActorById(const FString& VehicleId) const
+{
+    if (const TWeakObjectPtr<AShuttleVisualTwinActor>* ExistingActor = VehicleActors.Find(VehicleId))
+    {
+        return ExistingActor->Get();
+    }
+    return nullptr;
 }
 
 void AShuttleVisualTwinRuntimeActor::HandleBridgeStatus(bool bConnected, const FString& Detail)

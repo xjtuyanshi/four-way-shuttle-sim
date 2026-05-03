@@ -13,7 +13,7 @@ This is a source-only Unreal plugin scaffold for Phase 0. It is intentionally th
 2. Copy `unreal-bridge` into an Unreal project's `Plugins/ShuttlePhase0Bridge` directory.
 3. Enable the `Pixel Streaming` plugin for runtime streaming. `WebSockets` is linked as an Unreal module by this bridge; it is not enabled as a separate engine plugin in UE 5.7.
 4. For the default Phase 0 scene, place one `AShuttleVisualTwinRuntimeActor` at world origin.
-5. Set its `VehicleActorClass` only if you want to use a custom shuttle mesh actor; otherwise it spawns `AShuttleVisualTwinActor`.
+5. Set its `VehicleActorClass` only if you want to use a custom shuttle mesh actor; otherwise it spawns `AShuttleVisualTwinActor` with a basic visible shuttle body and carried-pallet placeholder.
 6. The runtime actor auto-connects to `ws://localhost:8791/shuttle-ws`, spawns vehicles by `VehicleId`, and creates a simple one-level scene with dense 6x8 storage cells, side aisles, cross aisles, dedicated inbound/outbound lift pads, and parking pads.
 7. For manual Blueprint wiring, use `UShuttleStateSubscriberSubsystem::Connect("ws://localhost:8791/shuttle-ws")` and bind `OnVehicleState` to `AShuttleVisualTwinActor::ApplyAuthoritativeState`.
 
@@ -52,3 +52,5 @@ SimCore remains authoritative for event logs, KPIs, task assignment, reservation
 - 2 inbound lift pads
 - 2 outbound lift pads
 - 2 parking pads
+
+It also applies synthetic vehicle states through the runtime actor, verifies that exactly one visible default vehicle actor is spawned and reused, checks SimCore-to-Unreal position/yaw conversion, and checks that the carried-pallet placeholder follows the streamed `loaded` flag. This proves the default actor binding path in headless UE. It does not prove packaged runtime or Pixel Streaming soak readiness.
