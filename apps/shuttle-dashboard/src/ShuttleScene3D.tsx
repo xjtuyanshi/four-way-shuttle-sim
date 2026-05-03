@@ -2,9 +2,13 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 
 import type { LoadStateRecord, ShuttleScenario, ShuttleSimState, VehicleState } from '@four-way-shuttle/schemas';
+import { summarizeScenarioStaticSceneContract, type ShuttleStaticSceneContract } from '@four-way-shuttle/sim-core/static-scene';
 
 type ShuttleNode = ShuttleScenario['layout']['nodes'][number];
 type ShuttleEdge = ShuttleScenario['layout']['edges'][number];
+type ShuttleStaticSceneStorageCell = ShuttleStaticSceneContract['storageCells'][number];
+type ShuttleStaticScenePad = ShuttleStaticSceneContract['liftPads'][number];
+type ShuttleStaticSceneTrackBed = ShuttleStaticSceneContract['trackBeds'][number];
 
 type SceneRuntime = {
   renderer: THREE.WebGLRenderer;
@@ -41,8 +45,6 @@ type VehicleObjectUserData = {
 
 const FLOOR_Y = 0;
 const VEHICLE_BASE_Y = 0.08;
-const CAD_CELL_LENGTH_M = 1.25;
-const CAD_CELL_DEPTH_M = 1.2;
 const CAD_CANVAS_WIDTH = 2048;
 const CAD_CANVAS_HEIGHT = 1536;
 const STORAGE_MARKER_HEIGHT_M = 0.16;
@@ -113,7 +115,7 @@ function material(color: number, roughness = 0.72, metalness = 0.08): THREE.Mesh
 type LayoutBounds = ReturnType<typeof computeBounds>;
 
 type StorageField = {
-  nodes: ShuttleNode[];
+  cells: ShuttleStaticSceneStorageCell[];
   minX: number;
   maxX: number;
   minZ: number;
@@ -124,44 +126,37 @@ type StorageField = {
   rows: number[];
 };
 
-function getStorageField(scenario: ShuttleScenario): StorageField | null {
-  const nodes = scenario.layout.nodes.filter((node) => node.type === 'storage');
-  if (nodes.length === 0) {
+export function resolveDashboardStaticSceneContract(scenario: ShuttleScenario): ShuttleStaticSceneContract {
+  return summarizeScenarioStaticSceneContract(scenario);
+}
+
+function getStorageField(staticScene: ShuttleStaticSceneContract): StorageField | null {
+  const cells = staticScene.storageCells;
+  if (cells.length === 0) {
     return null;
   }
-  const minX = Math.min(...nodes.map((node) => node.x - CAD_CELL_LENGTH_M / 2));
-  const maxX = Math.max(...nodes.map((node) => node.x + CAD_CELL_LENGTH_M / 2));
-  const minZ = Math.min(...nodes.map((node) => node.z - CAD_CELL_DEPTH_M / 2));
-  const maxZ = Math.max(...nodes.map((node) => node.z + CAD_CELL_DEPTH_M / 2));
+  const minX = Math.min(...cells.map((cell) => cell.xM - cell.lengthXM / 2));
+  const maxX = Math.max(...cells.map((cell) => cell.xM + cell.lengthXM / 2));
+  const minZ = Math.min(...cells.map((cell) => cell.zM - cell.lengthZM / 2));
+  const maxZ = Math.max(...cells.map((cell) => cell.zM + cell.lengthZM / 2));
   return {
-    nodes,
+    cells,
     minX,
     maxX,
     minZ,
     maxZ,
     width: maxX - minX,
     depth: maxZ - minZ,
-    columns: [...new Set(nodes.map((node) => node.x))].sort((left, right) => left - right),
-    rows: [...new Set(nodes.map((node) => node.z))].sort((left, right) => left - right)
+    columns: [...new Set(cells.map((cell) => cell.xM))].sort((left, right) => left - right),
+    rows: [...new Set(cells.map((cell) => cell.zM))].sort((left, right) => left - right)
   };
 }
 
-function drawArrow(ctx: CanvasRenderingContext2D, fromX: number, fromY: number, toX: number, toY: number): void {
-  const angle = Math.atan2(toY - fromY, toX - fromX);
-  const arrowLength = 18;
-  ctx.beginPath();
-  ctx.moveTo(fromX, fromY);
-  ctx.lineTo(toX, toY);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(toX, toY);
-  ctx.lineTo(toX - Math.cos(angle - Math.PI / 6) * arrowLength, toY - Math.sin(angle - Math.PI / 6) * arrowLength);
-  ctx.lineTo(toX - Math.cos(angle + Math.PI / 6) * arrowLength, toY - Math.sin(angle + Math.PI / 6) * arrowLength);
-  ctx.closePath();
-  ctx.fill();
-}
-
-function createCadFloorTexture(scenario: ShuttleScenario, bounds: LayoutBounds): THREE.CanvasTexture {
+function createCadFloorTexture(
+  scenario: ShuttleScenario,
+  staticScene: ShuttleStaticSceneContract,
+  bounds: LayoutBounds
+): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
   canvas.width = CAD_CANVAS_WIDTH;
   canvas.height = CAD_CANVAS_HEIGHT;
@@ -192,30 +187,18 @@ function createCadFloorTexture(scenario: ShuttleScenario, bounds: LayoutBounds):
   ctx.lineWidth = 2;
   ctx.strokeRect(inset, inset, plotWidth, plotHeight);
 
-  const nodes = new Map(scenario.layout.nodes.map((node) => [node.id, node]));
-  for (const edge of scenario.layout.edges) {
-    const from = nodes.get(edge.from);
-    const to = nodes.get(edge.to);
-    if (!from || !to) {
-      continue;
-    }
-    const isFifoLane = edge.conflictGroup?.startsWith('fifo-lane') ?? false;
-    ctx.strokeStyle = isFifoLane ? '#85929b' : '#4d5a64';
-    ctx.fillStyle = ctx.strokeStyle;
-    ctx.lineWidth = isFifoLane ? 10 : 6;
-    ctx.lineCap = 'round';
-    if (edge.directionMode === 'oneWay') {
-      drawArrow(ctx, xToPx(from.x), zToPx(from.z), xToPx(to.x), zToPx(to.z));
-    } else {
-      ctx.beginPath();
-      ctx.moveTo(xToPx(from.x), zToPx(from.z));
-      ctx.lineTo(xToPx(to.x), zToPx(to.z));
-      ctx.stroke();
-    }
+  for (const track of staticScene.trackBeds) {
+    const rect = rectForMeterBox(track.xM, track.zM, Math.max(track.lengthXM, 0.08), Math.max(track.lengthZM, 0.08));
+    const isStorageLane = track.category === 'storageLane';
+    ctx.fillStyle = isStorageLane ? 'rgba(132, 145, 154, 0.38)' : 'rgba(77, 90, 100, 0.44)';
+    ctx.strokeStyle = isStorageLane ? 'rgba(180, 191, 198, 0.64)' : 'rgba(98, 113, 124, 0.58)';
+    ctx.lineWidth = 2;
+    ctx.fillRect(rect.left, rect.top, rect.width, rect.height);
+    ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
   }
   ctx.lineCap = 'butt';
 
-  const storageField = getStorageField(scenario);
+  const storageField = getStorageField(staticScene);
   if (storageField) {
     const left = xToPx(storageField.minX);
     const top = zToPx(storageField.minZ);
@@ -229,18 +212,33 @@ function createCadFloorTexture(scenario: ShuttleScenario, bounds: LayoutBounds):
     ctx.strokeRect(left, top, width, height);
   }
 
+  for (const cell of staticScene.storageCells) {
+    const rect = rectForMeterBox(cell.xM, cell.zM, cell.lengthXM, cell.lengthZM);
+    ctx.fillStyle = 'rgba(141, 150, 156, 0.18)';
+    ctx.strokeStyle = '#6f7b84';
+    ctx.lineWidth = 2;
+    ctx.fillRect(rect.left, rect.top, rect.width, rect.height);
+    ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
+  }
+
+  for (const pad of [...staticScene.liftPads, ...staticScene.parkingPads]) {
+    const rect = rectForMeterBox(pad.xM, pad.zM, pad.lengthXM, pad.lengthZM);
+    ctx.fillStyle = pad.category === 'inboundLift'
+      ? 'rgba(79, 143, 203, 0.32)'
+      : pad.category === 'outboundLift'
+        ? 'rgba(109, 168, 214, 0.32)'
+        : 'rgba(122, 135, 148, 0.26)';
+    ctx.strokeStyle = pad.category === 'parking' ? '#7a8794' : '#9fb9c8';
+    ctx.lineWidth = 2;
+    ctx.fillRect(rect.left, rect.top, rect.width, rect.height);
+    ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
+  }
+
   for (const node of scenario.layout.nodes) {
-    if (node.type === 'storage') {
-      const rect = rectForMeterBox(node.x, node.z, CAD_CELL_LENGTH_M, CAD_CELL_DEPTH_M);
-      ctx.fillStyle = 'rgba(141, 150, 156, 0.18)';
-      ctx.strokeStyle = '#6f7b84';
-      ctx.lineWidth = 2;
-      ctx.fillRect(rect.left, rect.top, rect.width, rect.height);
-      ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
-    } else {
+    if (node.type !== 'storage' && node.type !== 'lift-blackbox' && node.type !== 'parking') {
       const x = xToPx(node.x);
       const z = zToPx(node.z);
-      ctx.fillStyle = node.type === 'inbound' ? '#4f8fcb' : node.type === 'outbound' ? '#6da8d6' : node.type === 'parking' ? '#7a8794' : '#e2b84b';
+      ctx.fillStyle = node.type === 'inbound' ? '#4f8fcb' : node.type === 'outbound' ? '#6da8d6' : '#e2b84b';
       ctx.beginPath();
       ctx.arc(x, z, node.type === 'intersection' ? 14 : 18, 0, Math.PI * 2);
       ctx.fill();
@@ -253,8 +251,8 @@ function createCadFloorTexture(scenario: ShuttleScenario, bounds: LayoutBounds):
   return texture;
 }
 
-function createCadFloor(scenario: ShuttleScenario, bounds: LayoutBounds): THREE.Mesh {
-  const texture = createCadFloorTexture(scenario, bounds);
+function createCadFloor(scenario: ShuttleScenario, staticScene: ShuttleStaticSceneContract, bounds: LayoutBounds): THREE.Mesh {
+  const texture = createCadFloorTexture(scenario, staticScene, bounds);
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(bounds.width, bounds.depth),
     new THREE.MeshBasicMaterial({ map: texture })
@@ -333,6 +331,19 @@ function createBoxTrackSegment(
   return group;
 }
 
+function trackBedEndpoints(track: ShuttleStaticSceneTrackBed): [{ x: number; z: number }, { x: number; z: number }] {
+  if (track.orientation === 'z') {
+    return [
+      { x: track.xM, z: track.zM - track.lengthZM / 2 },
+      { x: track.xM, z: track.zM + track.lengthZM / 2 }
+    ];
+  }
+  return [
+    { x: track.xM - track.lengthXM / 2, z: track.zM },
+    { x: track.xM + track.lengthXM / 2, z: track.zM }
+  ];
+}
+
 function nodeColor(node: ShuttleNode): number {
   switch (node.type) {
     case 'inbound':
@@ -378,8 +389,8 @@ function createPalletLoadObject(widthM: number, depthM: number, crateColor = 0x8
   return group;
 }
 
-function createStorageRackBlock(scenario: ShuttleScenario): THREE.Group | null {
-  const field = getStorageField(scenario);
+function createStorageRackBlock(staticScene: ShuttleStaticSceneContract): THREE.Group | null {
+  const field = getStorageField(staticScene);
   if (!field) {
     return null;
   }
@@ -389,6 +400,8 @@ function createStorageRackBlock(scenario: ShuttleScenario): THREE.Group | null {
   const railMaterial = material(0x929da5, 0.48, 0.24);
   const beamMaterial = material(0x35414a, 0.74, 0.16);
   const markerMaterial = material(0x4b5660, 0.6, 0.22);
+  const averageCellLengthM = field.cells.reduce((sum, cell) => sum + cell.lengthXM, 0) / field.cells.length;
+  const averageCellDepthM = field.cells.reduce((sum, cell) => sum + cell.lengthZM, 0) / field.cells.length;
 
   const deck = new THREE.Mesh(new THREE.BoxGeometry(field.width, 0.035, field.depth), deckMaterial);
   deck.position.set((field.minX + field.maxX) / 2, 0.022, (field.minZ + field.maxZ) / 2);
@@ -396,7 +409,7 @@ function createStorageRackBlock(scenario: ShuttleScenario): THREE.Group | null {
   group.add(deck);
 
   for (const rowZ of field.rows) {
-    for (const railZ of [rowZ - CAD_CELL_DEPTH_M * 0.38, rowZ + CAD_CELL_DEPTH_M * 0.38]) {
+    for (const railZ of [rowZ - averageCellDepthM * 0.38, rowZ + averageCellDepthM * 0.38]) {
       const rail = new THREE.Mesh(new THREE.BoxGeometry(field.width, 0.045, 0.042), railMaterial);
       rail.position.set((field.minX + field.maxX) / 2, 0.105, railZ);
       rail.castShadow = true;
@@ -406,7 +419,7 @@ function createStorageRackBlock(scenario: ShuttleScenario): THREE.Group | null {
   }
 
   for (const columnX of field.columns) {
-    for (const railX of [columnX - CAD_CELL_LENGTH_M * 0.36, columnX + CAD_CELL_LENGTH_M * 0.36]) {
+    for (const railX of [columnX - averageCellLengthM * 0.36, columnX + averageCellLengthM * 0.36]) {
       const rail = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.04, field.depth), railMaterial);
       rail.position.set(railX, 0.108, (field.minZ + field.maxZ) / 2);
       rail.castShadow = true;
@@ -417,11 +430,11 @@ function createStorageRackBlock(scenario: ShuttleScenario): THREE.Group | null {
 
   const boundaryXs = [
     field.minX,
-    ...field.columns.map((columnX) => columnX + CAD_CELL_LENGTH_M / 2)
+    ...field.cells.map((cell) => cell.xM + cell.lengthXM / 2)
   ];
   const boundaryZs = [
     field.minZ,
-    ...field.rows.map((rowZ) => rowZ + CAD_CELL_DEPTH_M / 2)
+    ...field.cells.map((cell) => cell.zM + cell.lengthZM / 2)
   ];
 
   for (const x of boundaryXs) {
@@ -451,27 +464,27 @@ function createStorageRackBlock(scenario: ShuttleScenario): THREE.Group | null {
   return group;
 }
 
-function createStorageTrackCell(node: ShuttleNode): THREE.Group {
+function createStorageTrackCell(cell: ShuttleStaticSceneStorageCell): THREE.Group {
   const group = new THREE.Group();
-  group.position.set(node.x, 0, node.z);
+  group.position.set(cell.xM, cell.yM, cell.zM);
 
   const railMaterial = material(0x9aa5ad, 0.5, 0.24);
-  for (const z of [-0.46, 0.46]) {
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(1.18, 0.04, 0.04), railMaterial);
+  for (const z of [-cell.lengthZM * 0.42, cell.lengthZM * 0.42]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(cell.lengthXM * 0.94, 0.04, 0.04), railMaterial);
     rail.position.set(0, 0.12, z);
     rail.castShadow = true;
     group.add(rail);
   }
-  for (const x of [-0.46, 0.46]) {
-    const crossRail = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.036, 1.04), railMaterial);
+  for (const x of [-cell.lengthXM * 0.42, cell.lengthXM * 0.42]) {
+    const crossRail = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.036, cell.lengthZM * 0.96), railMaterial);
     crossRail.position.set(x, 0.118, 0);
     crossRail.castShadow = true;
     group.add(crossRail);
   }
 
   const crossTieMaterial = material(0x3f4b54, 0.76, 0.12);
-  for (const x of [-0.42, 0, 0.42]) {
-    const tie = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.028, 0.98), crossTieMaterial);
+  for (const x of [-cell.lengthXM * 0.34, 0, cell.lengthXM * 0.34]) {
+    const tie = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.028, cell.lengthZM * 0.9), crossTieMaterial);
     tie.position.set(x, 0.095, 0);
     tie.receiveShadow = true;
     group.add(tie);
@@ -507,19 +520,21 @@ function createConveyor(node: ShuttleNode, color: number): THREE.Group {
   return group;
 }
 
-function createLiftBlackboxPort(node: ShuttleNode): THREE.Group {
+function createLiftBlackboxPort(node: ShuttleNode, pad?: ShuttleStaticScenePad): THREE.Group {
   const group = new THREE.Group();
   group.position.set(node.x, 0, node.z);
 
   const isInbound = node.id.includes('inbound');
   const accent = isInbound ? 0x4f8fcb : 0x6da8d6;
-  const base = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.09, 1.18), material(0x111820, 0.86, 0.08));
+  const padLengthX = pad?.lengthXM ?? 1.5;
+  const padLengthZ = pad?.lengthZM ?? 1.15;
+  const base = new THREE.Mesh(new THREE.BoxGeometry(padLengthX, 0.09, padLengthZ), material(0x111820, 0.86, 0.08));
   base.position.y = 0.055;
   base.castShadow = true;
   base.receiveShadow = true;
   group.add(base);
 
-  const blackbox = new THREE.Mesh(new THREE.BoxGeometry(1.04, 0.28, 0.82), material(0x080d11, 0.72, 0.18));
+  const blackbox = new THREE.Mesh(new THREE.BoxGeometry(padLengthX * 0.7, 0.28, padLengthZ * 0.72), material(0x080d11, 0.72, 0.18));
   blackbox.position.y = 0.23;
   blackbox.castShadow = true;
   blackbox.receiveShadow = true;
@@ -527,39 +542,41 @@ function createLiftBlackboxPort(node: ShuttleNode): THREE.Group {
 
   const rollerMaterial = material(0x96a3ad, 0.42, 0.28);
   for (let index = 0; index < 5; index += 1) {
-    const x = -0.42 + index * 0.21;
-    const roller = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.72, 12), rollerMaterial);
+    const x = -padLengthX * 0.28 + index * padLengthX * 0.14;
+    const roller = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, padLengthZ * 0.62, 12), rollerMaterial);
     roller.rotation.x = Math.PI / 2;
     roller.position.set(x, 0.39, 0);
     roller.castShadow = true;
     group.add(roller);
   }
 
-  for (const z of [-0.52, 0.52]) {
-    const guard = new THREE.Mesh(new THREE.BoxGeometry(1.52, 0.08, 0.05), material(0x303c45, 0.66, 0.18));
+  for (const z of [-padLengthZ * 0.45, padLengthZ * 0.45]) {
+    const guard = new THREE.Mesh(new THREE.BoxGeometry(padLengthX, 0.08, 0.05), material(0x303c45, 0.66, 0.18));
     guard.position.set(0, 0.42, z);
     guard.castShadow = true;
     group.add(guard);
   }
 
-  const portPlate = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.34, 1.06), material(accent, 0.54, 0.16));
-  portPlate.position.set(isInbound ? -0.82 : 0.82, 0.26, 0);
+  const portPlate = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.34, padLengthZ * 0.92), material(accent, 0.54, 0.16));
+  portPlate.position.set(isInbound ? -padLengthX * 0.55 : padLengthX * 0.55, 0.26, 0);
   portPlate.castShadow = true;
   group.add(portPlate);
 
   return group;
 }
 
-function createParkingPad(node: ShuttleNode): THREE.Group {
+function createParkingPad(node: ShuttleNode, pad?: ShuttleStaticScenePad): THREE.Group {
   const group = new THREE.Group();
   group.position.set(node.x, 0, node.z);
-  const pad = new THREE.Mesh(new THREE.BoxGeometry(1.65, 0.035, 1.05), material(0x222c35, 0.82, 0.08));
-  pad.position.y = 0.025;
-  pad.receiveShadow = true;
-  group.add(pad);
+  const padLengthX = pad?.lengthXM ?? 1.5;
+  const padLengthZ = pad?.lengthZM ?? 1.15;
+  const padMesh = new THREE.Mesh(new THREE.BoxGeometry(padLengthX, 0.035, padLengthZ), material(0x222c35, 0.82, 0.08));
+  padMesh.position.y = 0.025;
+  padMesh.receiveShadow = true;
+  group.add(padMesh);
   const borderMaterial = material(0x6f7e8d, 0.66, 0.16);
-  for (const z of [-0.48, 0.48]) {
-    const border = new THREE.Mesh(new THREE.BoxGeometry(1.65, 0.035, 0.04), borderMaterial);
+  for (const z of [-padLengthZ * 0.42, padLengthZ * 0.42]) {
+    const border = new THREE.Mesh(new THREE.BoxGeometry(padLengthX, 0.035, 0.04), borderMaterial);
     border.position.set(0, 0.075, z);
     group.add(border);
   }
@@ -785,13 +802,16 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario): voi
   runtime.vehicleObjects.clear();
   runtime.nodeById = new Map(scenario.layout.nodes.map((node) => [node.id, node]));
   runtime.edgeById = new Map(scenario.layout.edges.map((edge) => [edge.id, edge]));
+  const staticScene = resolveDashboardStaticSceneContract(scenario);
+  const liftPadById = new Map(staticScene.liftPads.map((pad) => [pad.id, pad]));
+  const parkingPadById = new Map(staticScene.parkingPads.map((pad) => [pad.id, pad]));
 
   const bounds = computeBounds(scenario.layout.nodes);
-  const floor = createCadFloor(scenario, bounds);
+  const floor = createCadFloor(scenario, staticScene, bounds);
   floor.receiveShadow = true;
   runtime.staticGroup.add(floor);
 
-  const storageBlock = createStorageRackBlock(scenario);
+  const storageBlock = createStorageRackBlock(staticScene);
   if (storageBlock) {
     runtime.staticGroup.add(storageBlock);
   }
@@ -799,13 +819,9 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario): voi
   const edgeMaterial = new THREE.MeshStandardMaterial({ color: 0x64727c, roughness: 0.64, metalness: 0.22 });
   const fifoEdgeMaterial = new THREE.MeshStandardMaterial({ color: 0x8a969f, roughness: 0.58, metalness: 0.24 });
   const edgeBedMaterial = new THREE.MeshStandardMaterial({ color: 0x1a232b, roughness: 0.86, metalness: 0.06 });
-  for (const edge of scenario.layout.edges) {
-    const from = runtime.nodeById.get(edge.from);
-    const to = runtime.nodeById.get(edge.to);
-    if (!from || !to) {
-      continue;
-    }
-    const isFifoLane = edge.conflictGroup?.startsWith('fifo-lane') ?? false;
+  for (const track of staticScene.trackBeds) {
+    const [from, to] = trackBedEndpoints(track);
+    const isFifoLane = track.category === 'storageLane';
     const segment = createBoxTrackSegment(from, to, {
       gaugeM: isFifoLane ? 0.92 : 0.74,
       railWidthM: isFifoLane ? 0.045 : 0.052,
@@ -820,9 +836,12 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario): voi
     }
   }
 
+  for (const cell of staticScene.storageCells) {
+    runtime.staticGroup.add(createStorageTrackCell(cell));
+  }
+
   for (const node of scenario.layout.nodes) {
     if (node.type === 'storage') {
-      runtime.staticGroup.add(createStorageTrackCell(node));
       continue;
     }
     if (node.type === 'inbound') {
@@ -834,11 +853,11 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario): voi
       continue;
     }
     if (node.type === 'lift-blackbox') {
-      runtime.staticGroup.add(createLiftBlackboxPort(node));
+      runtime.staticGroup.add(createLiftBlackboxPort(node, liftPadById.get(node.id)));
       continue;
     }
     if (node.type === 'parking') {
-      runtime.staticGroup.add(createParkingPad(node));
+      runtime.staticGroup.add(createParkingPad(node, parkingPadById.get(node.id)));
       continue;
     }
     const nodeMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.06, 24), material(nodeColor(node), 0.66, 0.1));
