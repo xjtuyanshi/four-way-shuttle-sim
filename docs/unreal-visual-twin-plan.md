@@ -35,9 +35,9 @@ Dynamic scene:
 
 ## Bridge Binding
 
-1. Create a UE 5.7 project for the visual twin.
-2. Copy `unreal-bridge` into `Plugins/ShuttlePhase0Bridge`.
-3. Enable Pixel Streaming at the project level.
+1. Run `pnpm unreal:setup` to generate a clean UE 5.7 project under `output/unreal/ShuttleVisualTwin`.
+2. The setup script copies `unreal-bridge` into `Plugins/ShuttlePhase0Bridge`.
+3. The setup script enables the `ShuttlePhase0Bridge` and `PixelStreaming` plugins in the generated `.uproject`.
 4. Connect `UShuttleStateSubscriberSubsystem` to `ws://localhost:8791/shuttle-ws`.
 5. Spawn or place one `AShuttleVisualTwinActor` per expected vehicle.
 6. Assign each actor's `VehicleId`, then bind `OnVehicleState` to `ApplyAuthoritativeState`.
@@ -59,6 +59,9 @@ The Phase 0 yaw sign is preserved. If a mesh faces a different local forward axi
 
 Before Pixel Streaming soak:
 
+- `pnpm unreal:setup`
+- `pnpm unreal:build`
+- `pnpm unreal:smoke`
 - `pnpm typecheck`
 - `pnpm test`
 - `pnpm build`
@@ -75,6 +78,8 @@ After the real UE scene exists:
 - Inbound and outbound lift ports are visually distinct and dedicated.
 - Pixel Streaming runs a 1080p single-user 30-minute soak.
 - Record CPU/GPU/memory/network observations and any stream disconnects.
+
+Current local smoke status: `pnpm unreal:setup` and `pnpm unreal:smoke` generate the UE project, build `ShuttleVisualTwinEditor`, load the `ShuttlePhase0Bridge` plugin, and complete `CompileAllBlueprints` with 0 errors and 0 blueprint warnings. UE currently logs one host-toolchain warning: `Missing Mac Metal toolchain (macos SDK not found)`.
 
 ## Calibration Inputs Needed
 
