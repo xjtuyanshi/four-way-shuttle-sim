@@ -34,6 +34,6 @@ void AShuttleVisualTwinActor::ApplyAuthoritativeState(const FShuttleVisualVehicl
     VehicleId = NextState.Id;
 
     // SimCore uses meters with Z as floor-depth. Unreal uses centimeters with Z as vertical.
-    TargetPosition = FVector(NextState.Position.X * 100.0f, NextState.Position.Z * 100.0f, NextState.Position.Y * 100.0f);
-    TargetRotation = FRotator(0.0f, FMath::RadiansToDegrees(NextState.YawRadians), 0.0f);
+    TargetPosition = WorldOffsetCm + FVector(NextState.Position.X * 100.0f, NextState.Position.Z * 100.0f, NextState.Position.Y * 100.0f);
+    TargetRotation = FRotator(0.0f, FMath::RadiansToDegrees(NextState.YawRadians) + MeshYawOffsetDegrees, 0.0f);
 }

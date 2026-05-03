@@ -12,11 +12,12 @@ This is a source-only Unreal plugin scaffold for Phase 0. It is intentionally th
 1. Install Unreal Engine 5.7.4 and full Xcode.
 2. Copy `unreal-bridge` into an Unreal project's `Plugins/ShuttlePhase0Bridge` directory.
 3. Enable the `Pixel Streaming` plugin for runtime streaming. `WebSockets` is linked as an Unreal module by this bridge; it is not enabled as a separate engine plugin in UE 5.7.
-4. Add one `AShuttleVisualTwinActor` per expected shuttle or spawn them from Blueprint.
-5. Use `UShuttleStateSubscriberSubsystem::Connect("ws://localhost:8791/shuttle-ws")`.
-6. Bind `OnVehicleState` to `AShuttleVisualTwinActor::ApplyAuthoritativeState`.
+4. For the default Phase 0 scene, place one `AShuttleVisualTwinRuntimeActor` at world origin.
+5. Set its `VehicleActorClass` only if you want to use a custom shuttle mesh actor; otherwise it spawns `AShuttleVisualTwinActor`.
+6. The runtime actor auto-connects to `ws://localhost:8791/shuttle-ws`, spawns vehicles by `VehicleId`, and creates a simple one-level scene with dense 6x8 storage cells, side aisles, cross aisles, dedicated inbound/outbound lift pads, and parking pads.
+7. For manual Blueprint wiring, use `UShuttleStateSubscriberSubsystem::Connect("ws://localhost:8791/shuttle-ws")` and bind `OnVehicleState` to `AShuttleVisualTwinActor::ApplyAuthoritativeState`.
 
-The placeholder actor converts meters from SimCore into centimeters for Unreal.
+The placeholder actor converts meters from SimCore into centimeters for Unreal. `AShuttleVisualTwinRuntimeActor` passes its world location as `WorldOffsetCm` when spawning shuttle actors, so the generated static scene and vehicles share the same local origin.
 
 ## Coordinate Contract
 
@@ -41,3 +42,13 @@ The bridge consumes `connectionRecovered`, `simState`, and `vehicleState` WebSoc
 `AShuttleVisualTwinActor` filters by `VehicleId` when it is preassigned, so multiple actors can safely bind to the same `OnVehicleState` multicast delegate.
 
 SimCore remains authoritative for event logs, KPIs, task assignment, reservations, and traffic diagnostics. Unreal should only interpolate and render the state stream during Phase 0.
+
+## Smoke Commandlet
+
+`UShuttleVisualTwinSmokeCommandlet` runs in headless Unreal smoke tests. It creates a temporary world, spawns `AShuttleVisualTwinRuntimeActor`, rebuilds the static scene, and verifies the default scaffold counts:
+
+- 48 storage cells
+- 16 track beds
+- 2 inbound lift pads
+- 2 outbound lift pads
+- 2 parking pads

@@ -24,6 +24,12 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shuttle")
     float InterpolationSpeed = 8.0f;
 
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shuttle")
+    FVector WorldOffsetCm = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shuttle")
+    float MeshYawOffsetDegrees = 0.0f;
+
 protected:
     virtual void BeginPlay() override;
 

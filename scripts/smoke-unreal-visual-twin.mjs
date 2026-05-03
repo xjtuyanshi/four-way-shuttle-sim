@@ -50,8 +50,12 @@ function assertBridgeSourcePresent() {
     'Source/ShuttlePhase0Bridge/ShuttlePhase0Bridge.Build.cs',
     'Source/ShuttlePhase0Bridge/Public/ShuttleStateSubscriberSubsystem.h',
     'Source/ShuttlePhase0Bridge/Public/ShuttleVisualTwinActor.h',
+    'Source/ShuttlePhase0Bridge/Public/ShuttleVisualTwinRuntimeActor.h',
+    'Source/ShuttlePhase0Bridge/Public/ShuttleVisualTwinSmokeCommandlet.h',
     'Source/ShuttlePhase0Bridge/Private/ShuttleStateSubscriberSubsystem.cpp',
-    'Source/ShuttlePhase0Bridge/Private/ShuttleVisualTwinActor.cpp'
+    'Source/ShuttlePhase0Bridge/Private/ShuttleVisualTwinActor.cpp',
+    'Source/ShuttlePhase0Bridge/Private/ShuttleVisualTwinRuntimeActor.cpp',
+    'Source/ShuttlePhase0Bridge/Private/ShuttleVisualTwinSmokeCommandlet.cpp'
   ];
   for (const relativePath of requiredFiles) {
     assertPath('Copied Shuttle bridge source', path.join(bridgePluginDir, relativePath));
@@ -114,6 +118,18 @@ async function main() {
   if (buildOnly) {
     return;
   }
+
+  await run(unrealEditor, [
+    projectPath,
+    '-run=ShuttleVisualTwinSmoke',
+    '-NullRHI',
+    '-Unattended',
+    '-NoSound',
+    '-NoSplash',
+    '-NoAssetRegistryCache',
+    '-stdout',
+    '-FullStdOutLogOutput'
+  ]);
 
   await run(unrealEditor, [
     projectPath,
