@@ -740,6 +740,14 @@ th {
   text-align: right;
 }
 
+.validation-grid .validation-divider {
+  margin-top: 4px;
+  border-top-color: var(--line-strong);
+  background: rgba(86, 169, 201, 0.06);
+  border-radius: 6px;
+  padding: 9px 8px;
+}
+
 .event-row {
   display: grid;
   grid-template-columns: 64px minmax(140px, 1fr) 92px minmax(0, 1fr);

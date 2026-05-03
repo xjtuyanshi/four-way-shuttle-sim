@@ -54,4 +54,5 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 ## Next TODO
 
 - Add true multi-axis storage-grid routing or push-lane mechanics only after the FIFO lane policy is explicitly modeled against the target physical layout.
-- Prepare the Unreal bridge/scene plan after the browser demo shows the correct four-way shuttle behavior.
+- Build the Unreal visual twin scene from `docs/unreal-visual-twin-plan.md`, starting with one single-level 6x8 dense storage block, right-side inbound ports, left-side outbound ports, and orthogonal track-only shuttle movement.
+- Run the packaged or Standalone Pixel Streaming soak only after the real Unreal scene exists and the browser/API validation gate is green.

@@ -13,6 +13,9 @@
     "shuttle:prereq": "pnpm --filter shuttle-api prereq",
     "shuttle:validate": "pnpm --filter shuttle-api validate:phase0",
     "test:shuttle": "vitest run packages/shuttle-sim-core/src/index.test.ts",
+    "unreal:setup": "node scripts/setup-unreal-visual-twin.mjs",
+    "unreal:build": "node scripts/smoke-unreal-visual-twin.mjs --build-only",
+    "unreal:smoke": "node scripts/smoke-unreal-visual-twin.mjs",
     "build": "pnpm run typecheck && pnpm --filter shuttle-dashboard build"
   },
   "devDependencies": {

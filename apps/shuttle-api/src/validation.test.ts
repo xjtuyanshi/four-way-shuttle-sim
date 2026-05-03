@@ -67,7 +67,10 @@ describe('phase 0 validation', () => {
       durationSec: 120,
       longRunDurationSec: 240,
       repeatCount: 3,
-      sweepSeeds: [20260502, 20260503]
+      sweepSeeds: [20260502, 20260503],
+      longRunThresholds: {
+        minTotalPph: 75
+      }
     });
 
     expect(result.deterministic.pass).toBe(true);
@@ -80,12 +83,36 @@ describe('phase 0 validation', () => {
     expect(result.seedSweep.runs.every((run) => run.physicalViolationExamples.length === 0)).toBe(true);
     expect(result.longRun.durationSec).toBe(240);
     expect(result.longRun.runs).toHaveLength(2);
+    expect(result.longRun.thresholds.minTotalPph).toBe(75);
+    expect(result.longRun.maxQueuedTasks).toBeLessThanOrEqual(result.longRun.thresholds.maxQueuedTasks);
+    expect(result.longRun.maxLiftPortQueueLength).toBeLessThanOrEqual(result.longRun.thresholds.maxLiftPortQueueLength);
     expect(result.longRun.maxQueuedTasks).toBeLessThanOrEqual(40);
     expect(result.acceptance.longRunEventLogsPresent).toBe(true);
     expect(result.acceptance.longRunThroughputPositive).toBe(true);
+    expect(result.acceptance.longRunThroughputFloorMet).toBe(true);
     expect(result.acceptance.longRunQueuesBounded).toBe(true);
     expect(result.acceptance.noLongRunPhysicalSafetyViolations).toBe(true);
     expect(result.acceptance.pass).toBe(true);
+  });
+
+  it('fails long-run acceptance when explicit throughput and queue thresholds are missed', () => {
+    const result = validatePhase0Scenario(createDefaultShuttleScenario({ durationSec: 120 }), {
+      durationSec: 120,
+      longRunDurationSec: 240,
+      repeatCount: 1,
+      sweepSeeds: [20260502],
+      longRunThresholds: {
+        minTotalPph: 999,
+        maxQueuedTasks: 0,
+        maxWaitingVehicles: 0,
+        maxLiftPortQueueLength: 0
+      }
+    });
+
+    expect(result.acceptance.longRunThroughputPositive).toBe(true);
+    expect(result.acceptance.longRunThroughputFloorMet).toBe(false);
+    expect(result.acceptance.longRunQueuesBounded).toBe(false);
+    expect(result.acceptance.pass).toBe(false);
   });
 
   it.each([
