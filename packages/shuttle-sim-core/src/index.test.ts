@@ -195,6 +195,85 @@ describe('shuttle phase 0 SimCore', () => {
     expect(contract.storageBlockMaxZM).toBeCloseTo(3, 6);
     expect(contract.inboundLiftXM).toBeCloseTo(18, 6);
     expect(contract.outboundLiftXM).toBeCloseTo(-4, 6);
+    expect(contract.storageCells).toHaveLength(48);
+    expect(contract.storageCells[0]).toMatchObject({
+      id: 'storage-r01-c01',
+      row: 1,
+      column: 1,
+      xM: 2.5,
+      yM: 0,
+      zM: -3
+    });
+    expect(contract.storageCells.at(-1)).toMatchObject({
+      id: 'storage-r06-c08',
+      row: 6,
+      column: 8,
+      xM: 11.25,
+      yM: 0,
+      zM: 3
+    });
+    expect(contract.storageCells.every((cell) => cell.lengthXM === 1.12 && cell.lengthZM === 1.08)).toBe(true);
+    expect(
+      Array.from({ length: 6 }, (_, rowIndex) =>
+        contract.storageCells.filter((cell) => cell.row === rowIndex + 1).map((cell) => cell.column)
+      )
+    ).toEqual([
+      [1, 2, 3, 4, 5, 6, 7, 8],
+      [1, 2, 3, 4, 5, 6, 7, 8],
+      [1, 2, 3, 4, 5, 6, 7, 8],
+      [1, 2, 3, 4, 5, 6, 7, 8],
+      [1, 2, 3, 4, 5, 6, 7, 8],
+      [1, 2, 3, 4, 5, 6, 7, 8]
+    ]);
+    expect(contract.trackBeds.map((track) => track.id)).toEqual([
+      'cross-aisle-bottom',
+      'cross-aisle-top',
+      'inbound-lift-a-right-row-01',
+      'inbound-lift-b-right-row-06',
+      'outbound-lift-a-left-row-01',
+      'outbound-lift-b-left-row-06',
+      'parking-a-right-top',
+      'parking-b-right-bottom',
+      'side-aisle-left',
+      'side-aisle-right',
+      'storage-lane-r01',
+      'storage-lane-r02',
+      'storage-lane-r03',
+      'storage-lane-r04',
+      'storage-lane-r05',
+      'storage-lane-r06'
+    ]);
+    expect(contract.trackBeds.every((track) => track.orientation === 'x' || track.orientation === 'z')).toBe(true);
+    expect(contract.trackBeds.filter((track) => track.category === 'storageLane')).toHaveLength(6);
+    expect(contract.trackBeds.find((track) => track.id === 'storage-lane-r01')).toMatchObject({
+      category: 'storageLane',
+      xM: 7,
+      zM: -3,
+      lengthXM: 14,
+      lengthZM: 0.08,
+      orientation: 'x',
+      row: 1,
+      side: 'none'
+    });
+    expect(contract.trackBeds.find((track) => track.id === 'side-aisle-left')).toMatchObject({
+      category: 'sideAisle',
+      xM: 0,
+      zM: 0,
+      lengthXM: 0.1,
+      lengthZM: 9.6,
+      orientation: 'z',
+      side: 'left'
+    });
+    expect(contract.liftPads.map((pad) => `${pad.category}:${pad.id}:${pad.side}`)).toEqual([
+      'inboundLift:inbound-lift-a:right',
+      'inboundLift:inbound-lift-b:right',
+      'outboundLift:outbound-lift-a:left',
+      'outboundLift:outbound-lift-b:left'
+    ]);
+    expect(contract.parkingPads.map((pad) => `${pad.category}:${pad.id}:${pad.side}`)).toEqual([
+      'parking:parking-a:right',
+      'parking:parking-b:right'
+    ]);
   });
 
   it('rejects multi-capacity traffic resources for Phase 0', () => {

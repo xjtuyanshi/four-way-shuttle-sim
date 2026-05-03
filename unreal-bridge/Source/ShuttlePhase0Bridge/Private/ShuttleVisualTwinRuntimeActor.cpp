@@ -120,34 +120,55 @@ void AShuttleVisualTwinRuntimeActor::RebuildStaticScene()
     for (int32 Row = 0; Row < StorageRows; Row += 1)
     {
         const float Z = RowZ(Row);
-        AddTrackBedMeters((LeftSpineXM + RightSpineXM) * 0.5f, Z, RightSpineXM - LeftSpineXM, 0.08f, 0.05f, &FShuttleStaticSceneContractForSmoke::StorageLaneTrackCount);
+        AddTrackBedMeters(
+            FString::Printf(TEXT("storage-lane-r%02d"), Row + 1),
+            TEXT("storageLane"),
+            TEXT("x"),
+            Row + 1,
+            TEXT("none"),
+            (LeftSpineXM + RightSpineXM) * 0.5f,
+            Z,
+            RightSpineXM - LeftSpineXM,
+            0.08f,
+            0.05f,
+            &FShuttleStaticSceneContractForSmoke::StorageLaneTrackCount
+        );
 
         for (int32 Column = 0; Column < StorageColumns; Column += 1)
         {
             const float X = FirstStorageXM + static_cast<float>(Column) * StoragePitchXM;
-            AddStorageCellMeters(X, Z, 1.12f, 1.08f, 0.04f);
+            AddStorageCellMeters(
+                FString::Printf(TEXT("storage-r%02d-c%02d"), Row + 1, Column + 1),
+                Row + 1,
+                Column + 1,
+                X,
+                Z,
+                1.12f,
+                1.08f,
+                0.04f
+            );
         }
     }
 
-    AddTrackBedMeters(LeftSpineXM, (TopZM + BottomZM) * 0.5f, 0.10f, BottomZM - TopZM, 0.055f, &FShuttleStaticSceneContractForSmoke::SideAisleTrackCount);
-    AddTrackBedMeters(RightSpineXM, (TopZM + BottomZM) * 0.5f, 0.10f, BottomZM - TopZM, 0.055f, &FShuttleStaticSceneContractForSmoke::SideAisleTrackCount);
-    AddTrackBedMeters((LeftSpineXM + RightSpineXM) * 0.5f, TopZM, RightSpineXM - LeftSpineXM, 0.10f, 0.055f, &FShuttleStaticSceneContractForSmoke::CrossAisleTrackCount);
-    AddTrackBedMeters((LeftSpineXM + RightSpineXM) * 0.5f, BottomZM, RightSpineXM - LeftSpineXM, 0.10f, 0.055f, &FShuttleStaticSceneContractForSmoke::CrossAisleTrackCount);
+    AddTrackBedMeters(TEXT("side-aisle-left"), TEXT("sideAisle"), TEXT("z"), 0, TEXT("left"), LeftSpineXM, (TopZM + BottomZM) * 0.5f, 0.10f, BottomZM - TopZM, 0.055f, &FShuttleStaticSceneContractForSmoke::SideAisleTrackCount);
+    AddTrackBedMeters(TEXT("side-aisle-right"), TEXT("sideAisle"), TEXT("z"), 0, TEXT("right"), RightSpineXM, (TopZM + BottomZM) * 0.5f, 0.10f, BottomZM - TopZM, 0.055f, &FShuttleStaticSceneContractForSmoke::SideAisleTrackCount);
+    AddTrackBedMeters(TEXT("cross-aisle-top"), TEXT("crossAisle"), TEXT("x"), 0, TEXT("top"), (LeftSpineXM + RightSpineXM) * 0.5f, TopZM, RightSpineXM - LeftSpineXM, 0.10f, 0.055f, &FShuttleStaticSceneContractForSmoke::CrossAisleTrackCount);
+    AddTrackBedMeters(TEXT("cross-aisle-bottom"), TEXT("crossAisle"), TEXT("x"), 0, TEXT("bottom"), (LeftSpineXM + RightSpineXM) * 0.5f, BottomZM, RightSpineXM - LeftSpineXM, 0.10f, 0.055f, &FShuttleStaticSceneContractForSmoke::CrossAisleTrackCount);
 
-    AddTrackBedMeters((RightSpineXM + InboundXM) * 0.5f, RowZ(0), InboundXM - RightSpineXM, 0.12f, 0.055f, &FShuttleStaticSceneContractForSmoke::InboundConnectorTrackCount);
-    AddTrackBedMeters((RightSpineXM + InboundXM) * 0.5f, RowZ(StorageRows - 1), InboundXM - RightSpineXM, 0.12f, 0.055f, &FShuttleStaticSceneContractForSmoke::InboundConnectorTrackCount);
-    AddTrackBedMeters((OutboundXM + LeftSpineXM) * 0.5f, RowZ(0), LeftSpineXM - OutboundXM, 0.12f, 0.055f, &FShuttleStaticSceneContractForSmoke::OutboundConnectorTrackCount);
-    AddTrackBedMeters((OutboundXM + LeftSpineXM) * 0.5f, RowZ(StorageRows - 1), LeftSpineXM - OutboundXM, 0.12f, 0.055f, &FShuttleStaticSceneContractForSmoke::OutboundConnectorTrackCount);
+    AddTrackBedMeters(TEXT("inbound-lift-a-right-row-01"), TEXT("inboundConnector"), TEXT("x"), 1, TEXT("right"), (RightSpineXM + InboundXM) * 0.5f, RowZ(0), InboundXM - RightSpineXM, 0.12f, 0.055f, &FShuttleStaticSceneContractForSmoke::InboundConnectorTrackCount);
+    AddTrackBedMeters(FString::Printf(TEXT("inbound-lift-b-right-row-%02d"), StorageRows), TEXT("inboundConnector"), TEXT("x"), StorageRows, TEXT("right"), (RightSpineXM + InboundXM) * 0.5f, RowZ(StorageRows - 1), InboundXM - RightSpineXM, 0.12f, 0.055f, &FShuttleStaticSceneContractForSmoke::InboundConnectorTrackCount);
+    AddTrackBedMeters(TEXT("outbound-lift-a-left-row-01"), TEXT("outboundConnector"), TEXT("x"), 1, TEXT("left"), (OutboundXM + LeftSpineXM) * 0.5f, RowZ(0), LeftSpineXM - OutboundXM, 0.12f, 0.055f, &FShuttleStaticSceneContractForSmoke::OutboundConnectorTrackCount);
+    AddTrackBedMeters(FString::Printf(TEXT("outbound-lift-b-left-row-%02d"), StorageRows), TEXT("outboundConnector"), TEXT("x"), StorageRows, TEXT("left"), (OutboundXM + LeftSpineXM) * 0.5f, RowZ(StorageRows - 1), LeftSpineXM - OutboundXM, 0.12f, 0.055f, &FShuttleStaticSceneContractForSmoke::OutboundConnectorTrackCount);
 
-    AddTrackBedMeters(RightSpineXM, (ParkingTopZM + TopZM) * 0.5f, 0.12f, TopZM - ParkingTopZM, 0.055f, &FShuttleStaticSceneContractForSmoke::ParkingConnectorTrackCount);
-    AddTrackBedMeters(RightSpineXM, (BottomZM + ParkingBottomZM) * 0.5f, 0.12f, ParkingBottomZM - BottomZM, 0.055f, &FShuttleStaticSceneContractForSmoke::ParkingConnectorTrackCount);
+    AddTrackBedMeters(TEXT("parking-a-right-top"), TEXT("parkingConnector"), TEXT("z"), 0, TEXT("right"), RightSpineXM, (ParkingTopZM + TopZM) * 0.5f, 0.12f, TopZM - ParkingTopZM, 0.055f, &FShuttleStaticSceneContractForSmoke::ParkingConnectorTrackCount);
+    AddTrackBedMeters(TEXT("parking-b-right-bottom"), TEXT("parkingConnector"), TEXT("z"), 0, TEXT("right"), RightSpineXM, (BottomZM + ParkingBottomZM) * 0.5f, 0.12f, ParkingBottomZM - BottomZM, 0.055f, &FShuttleStaticSceneContractForSmoke::ParkingConnectorTrackCount);
 
-    AddInboundLiftPadMeters(InboundXM, RowZ(0), 1.5f, 1.15f, 0.08f);
-    AddInboundLiftPadMeters(InboundXM, RowZ(StorageRows - 1), 1.5f, 1.15f, 0.08f);
-    AddOutboundLiftPadMeters(OutboundXM, RowZ(0), 1.5f, 1.15f, 0.08f);
-    AddOutboundLiftPadMeters(OutboundXM, RowZ(StorageRows - 1), 1.5f, 1.15f, 0.08f);
-    AddParkingPadMeters(RightSpineXM, ParkingTopZM, 1.5f, 1.15f, 0.08f);
-    AddParkingPadMeters(RightSpineXM, ParkingBottomZM, 1.5f, 1.15f, 0.08f);
+    AddInboundLiftPadMeters(TEXT("inbound-lift-a"), TEXT("right"), InboundXM, RowZ(0), 1.5f, 1.15f, 0.08f);
+    AddInboundLiftPadMeters(TEXT("inbound-lift-b"), TEXT("right"), InboundXM, RowZ(StorageRows - 1), 1.5f, 1.15f, 0.08f);
+    AddOutboundLiftPadMeters(TEXT("outbound-lift-a"), TEXT("left"), OutboundXM, RowZ(0), 1.5f, 1.15f, 0.08f);
+    AddOutboundLiftPadMeters(TEXT("outbound-lift-b"), TEXT("left"), OutboundXM, RowZ(StorageRows - 1), 1.5f, 1.15f, 0.08f);
+    AddParkingPadMeters(TEXT("parking-a"), TEXT("right"), RightSpineXM, ParkingTopZM, 1.5f, 1.15f, 0.08f);
+    AddParkingPadMeters(TEXT("parking-b"), TEXT("right"), RightSpineXM, ParkingBottomZM, 1.5f, 1.15f, 0.08f);
     FinalizeStaticSceneContract();
 }
 
@@ -363,13 +384,37 @@ AShuttleVisualTwinActor* AShuttleVisualTwinRuntimeActor::FindOrSpawnVehicleActor
     return NewActor;
 }
 
-void AShuttleVisualTwinRuntimeActor::AddStorageCellMeters(float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM)
+void AShuttleVisualTwinRuntimeActor::AddStorageCellMeters(
+    const FString& Id,
+    const int32 Row,
+    const int32 Column,
+    float SimX,
+    float SimZ,
+    float SizeXM,
+    float SizeZM,
+    float HeightM
+)
 {
     AddInstanceMeters(StorageCells, SimX, SimZ, SizeXM, SizeZM, HeightM);
+    FShuttleStaticSceneStorageCellForSmoke Cell;
+    Cell.Id = Id;
+    Cell.Row = Row;
+    Cell.Column = Column;
+    Cell.XM = SimX;
+    Cell.YM = 0.0f;
+    Cell.ZM = SimZ;
+    Cell.LengthXM = SizeXM;
+    Cell.LengthZM = SizeZM;
+    StaticSceneContract.StorageCells.Add(Cell);
     StaticSceneContract.StorageCellCount += 1;
 }
 
 void AShuttleVisualTwinRuntimeActor::AddTrackBedMeters(
+    const FString& Id,
+    const FString& Category,
+    const FString& Orientation,
+    const int32 Row,
+    const FString& Side,
     float SimX,
     float SimZ,
     float SizeXM,
@@ -379,6 +424,18 @@ void AShuttleVisualTwinRuntimeActor::AddTrackBedMeters(
 )
 {
     AddInstanceMeters(TrackBeds, SimX, SimZ, SizeXM, SizeZM, HeightM);
+    FShuttleStaticSceneTrackBedForSmoke TrackBed;
+    TrackBed.Id = Id;
+    TrackBed.Category = Category;
+    TrackBed.XM = SimX;
+    TrackBed.YM = 0.0f;
+    TrackBed.ZM = SimZ;
+    TrackBed.LengthXM = SizeXM;
+    TrackBed.LengthZM = SizeZM;
+    TrackBed.Orientation = Orientation;
+    TrackBed.Row = Row;
+    TrackBed.Side = Side;
+    StaticSceneContract.TrackBeds.Add(TrackBed);
     StaticSceneContract.TrackBedCount += 1;
     if (TrackCounter)
     {
@@ -386,21 +443,51 @@ void AShuttleVisualTwinRuntimeActor::AddTrackBedMeters(
     }
 }
 
-void AShuttleVisualTwinRuntimeActor::AddInboundLiftPadMeters(float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM)
+void AShuttleVisualTwinRuntimeActor::AddInboundLiftPadMeters(const FString& Id, const FString& Side, float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM)
 {
     AddInstanceMeters(InboundLiftPads, SimX, SimZ, SizeXM, SizeZM, HeightM);
+    FShuttleStaticScenePadForSmoke Pad;
+    Pad.Id = Id;
+    Pad.Category = TEXT("inboundLift");
+    Pad.XM = SimX;
+    Pad.YM = 0.0f;
+    Pad.ZM = SimZ;
+    Pad.LengthXM = SizeXM;
+    Pad.LengthZM = SizeZM;
+    Pad.Side = Side;
+    StaticSceneContract.LiftPads.Add(Pad);
     StaticSceneContract.InboundLiftPadCount += 1;
 }
 
-void AShuttleVisualTwinRuntimeActor::AddOutboundLiftPadMeters(float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM)
+void AShuttleVisualTwinRuntimeActor::AddOutboundLiftPadMeters(const FString& Id, const FString& Side, float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM)
 {
     AddInstanceMeters(OutboundLiftPads, SimX, SimZ, SizeXM, SizeZM, HeightM);
+    FShuttleStaticScenePadForSmoke Pad;
+    Pad.Id = Id;
+    Pad.Category = TEXT("outboundLift");
+    Pad.XM = SimX;
+    Pad.YM = 0.0f;
+    Pad.ZM = SimZ;
+    Pad.LengthXM = SizeXM;
+    Pad.LengthZM = SizeZM;
+    Pad.Side = Side;
+    StaticSceneContract.LiftPads.Add(Pad);
     StaticSceneContract.OutboundLiftPadCount += 1;
 }
 
-void AShuttleVisualTwinRuntimeActor::AddParkingPadMeters(float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM)
+void AShuttleVisualTwinRuntimeActor::AddParkingPadMeters(const FString& Id, const FString& Side, float SimX, float SimZ, float SizeXM, float SizeZM, float HeightM)
 {
     AddInstanceMeters(ParkingPads, SimX, SimZ, SizeXM, SizeZM, HeightM);
+    FShuttleStaticScenePadForSmoke Pad;
+    Pad.Id = Id;
+    Pad.Category = TEXT("parking");
+    Pad.XM = SimX;
+    Pad.YM = 0.0f;
+    Pad.ZM = SimZ;
+    Pad.LengthXM = SizeXM;
+    Pad.LengthZM = SizeZM;
+    Pad.Side = Side;
+    StaticSceneContract.ParkingPads.Add(Pad);
     StaticSceneContract.ParkingPadCount += 1;
 }
 
@@ -430,11 +517,13 @@ void AShuttleVisualTwinRuntimeActor::FinalizeStaticSceneContract()
         StaticSceneContract.StorageRows == StorageRows &&
         StaticSceneContract.StorageColumns == StorageColumns &&
         StaticSceneContract.StorageCellCount == ExpectedStorageCells &&
+        StaticSceneContract.StorageCells.Num() == ExpectedStorageCells &&
         StaticSceneContract.StoragePitchXM > 0.0f &&
         StaticSceneContract.StoragePitchZM > 0.0f;
 
     StaticSceneContract.bOrthogonalTrackOnly =
         StaticSceneContract.DiagonalTrackCount == 0 &&
+        StaticSceneContract.TrackBeds.Num() == StaticSceneContract.TrackBedCount &&
         StaticSceneContract.TrackBedCount ==
             StaticSceneContract.StorageLaneTrackCount +
             StaticSceneContract.SideAisleTrackCount +
@@ -446,6 +535,8 @@ void AShuttleVisualTwinRuntimeActor::FinalizeStaticSceneContract()
     StaticSceneContract.bDedicatedLiftPorts =
         StaticSceneContract.InboundLiftPadCount == 2 &&
         StaticSceneContract.OutboundLiftPadCount == 2 &&
+        StaticSceneContract.LiftPads.Num() == 4 &&
+        StaticSceneContract.ParkingPads.Num() == StaticSceneContract.ParkingPadCount &&
         StaticSceneContract.InboundLiftXM > StaticSceneContract.StorageBlockMaxXM &&
         StaticSceneContract.OutboundLiftXM < StaticSceneContract.StorageBlockMinXM;
 }

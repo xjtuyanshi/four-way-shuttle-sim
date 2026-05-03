@@ -67,6 +67,43 @@ function assertCloseFieldParity(field, unrealSummary, simCoreContract, tolerance
   }
 }
 
+function sortedItemsById(items) {
+  return [...items].sort((left, right) => String(left.id).localeCompare(String(right.id)));
+}
+
+function assertStaticSceneElementArrayParity(arrayField, exactFields, numericFields, unrealSummary, simCoreContract, tolerance = 0.001) {
+  const unrealItems = unrealSummary[arrayField];
+  const simCoreItems = simCoreContract[arrayField];
+  if (!Array.isArray(unrealItems) || !Array.isArray(simCoreItems)) {
+    throw new Error(`Static scene ${arrayField} must be present on both Unreal and SimCore contracts.`);
+  }
+  if (unrealItems.length !== simCoreItems.length) {
+    throw new Error(`Static scene ${arrayField} length mismatch: Unreal=${unrealItems.length} SimCore=${simCoreItems.length}.`);
+  }
+
+  const sortedUnrealItems = sortedItemsById(unrealItems);
+  const sortedSimCoreItems = sortedItemsById(simCoreItems);
+  for (let index = 0; index < sortedSimCoreItems.length; index += 1) {
+    const unrealItem = sortedUnrealItems[index];
+    const simCoreItem = sortedSimCoreItems[index];
+    if (unrealItem.id !== simCoreItem.id) {
+      throw new Error(`Static scene ${arrayField}[${index}] id mismatch: Unreal=${JSON.stringify(unrealItem.id)} SimCore=${JSON.stringify(simCoreItem.id)}.`);
+    }
+    for (const field of exactFields) {
+      if (unrealItem[field] !== simCoreItem[field]) {
+        throw new Error(`Static scene ${arrayField}.${unrealItem.id}.${field}=${JSON.stringify(unrealItem[field])} does not match SimCore ${JSON.stringify(simCoreItem[field])}.`);
+      }
+    }
+    for (const field of numericFields) {
+      const observed = Number(unrealItem[field]);
+      const expected = Number(simCoreItem[field]);
+      if (!Number.isFinite(observed) || !Number.isFinite(expected) || Math.abs(observed - expected) > tolerance) {
+        throw new Error(`Static scene ${arrayField}.${unrealItem.id}.${field}=${JSON.stringify(unrealItem[field])} does not match SimCore ${JSON.stringify(simCoreItem[field])} within ${tolerance}.`);
+      }
+    }
+  }
+}
+
 function assertStaticSceneParityWithSimCore(unrealSummary, simCoreContract) {
   for (const field of [
     'storageRows',
@@ -105,6 +142,35 @@ function assertStaticSceneParityWithSimCore(unrealSummary, simCoreContract) {
   ]) {
     assertCloseFieldParity(field, unrealSummary, simCoreContract);
   }
+
+  assertStaticSceneElementArrayParity(
+    'storageCells',
+    ['id', 'row', 'column'],
+    ['xM', 'yM', 'zM', 'lengthXM', 'lengthZM'],
+    unrealSummary,
+    simCoreContract
+  );
+  assertStaticSceneElementArrayParity(
+    'trackBeds',
+    ['id', 'category', 'orientation', 'row', 'side'],
+    ['xM', 'yM', 'zM', 'lengthXM', 'lengthZM'],
+    unrealSummary,
+    simCoreContract
+  );
+  assertStaticSceneElementArrayParity(
+    'liftPads',
+    ['id', 'category', 'side'],
+    ['xM', 'yM', 'zM', 'lengthXM', 'lengthZM'],
+    unrealSummary,
+    simCoreContract
+  );
+  assertStaticSceneElementArrayParity(
+    'parkingPads',
+    ['id', 'category', 'side'],
+    ['xM', 'yM', 'zM', 'lengthXM', 'lengthZM'],
+    unrealSummary,
+    simCoreContract
+  );
 }
 
 function assertPluginEnabled(project, pluginName) {
