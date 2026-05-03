@@ -96,6 +96,12 @@ type Phase0ValidationResult = {
     seeds: number[];
     durationSec: number;
     runs: Phase0ValidationRun[];
+    thresholds?: {
+      minTotalPph: number;
+      maxQueuedTasks: number;
+      maxWaitingVehicles: number;
+      maxLiftPortQueueLength: number;
+    };
     totalPphMean: number;
     maxQueuedTasks: number;
     maxWaitingVehicles: number;
@@ -109,6 +115,7 @@ type Phase0ValidationResult = {
     noReservationCoverageViolations: boolean;
     longRunEventLogsPresent?: boolean;
     longRunThroughputPositive?: boolean;
+    longRunThroughputFloorMet?: boolean;
     longRunQueuesBounded?: boolean;
     noLongRunDeadlocks?: boolean;
     noLongRunPhysicalSafetyViolations?: boolean;
@@ -673,11 +680,17 @@ function ValidationPanel({
     ? Math.max(0, ...validation.seedSweep.runs.map((run) => run.maxObservedAccelerationMps2))
     : 0;
   const longRun = validation?.longRun ?? null;
+  const longRunThresholds = longRun?.thresholds ?? null;
+  const longRunStatus = (value: boolean | undefined, okLabel: string, blockedLabel: string): string => {
+    if (!longRun || value === undefined) return '--';
+    return value ? okLabel : blockedLabel;
+  };
   const longRunPass = validation
     ? Boolean(
         longRun &&
         validation.acceptance.longRunEventLogsPresent &&
         validation.acceptance.longRunThroughputPositive &&
+        validation.acceptance.longRunThroughputFloorMet !== false &&
         validation.acceptance.longRunQueuesBounded &&
         validation.acceptance.noLongRunDeadlocks &&
         validation.acceptance.noLongRunPhysicalSafetyViolations &&
@@ -727,31 +740,35 @@ function ValidationPanel({
           </div>
           <div>
             <span>Long-run PPH</span>
-            <strong>{longRun ? `${formatNumber(longRun.totalPphMean, 1)} avg` : '--'}</strong>
+            <strong>
+              {longRun
+                ? `${formatNumber(longRun.totalPphMean, 1)} avg / min ${longRunThresholds ? formatNumber(longRunThresholds.minTotalPph, 1) : '--'}`
+                : '--'}
+            </strong>
           </div>
           <div>
             <span>Queue high water</span>
-            <strong>{longRun ? `${longRun.maxQueuedTasks} tasks` : '--'}</strong>
+            <strong>{longRun ? `${longRun.maxQueuedTasks} / ${longRunThresholds?.maxQueuedTasks ?? '--'} tasks` : '--'}</strong>
           </div>
           <div>
             <span>Waiting high water</span>
-            <strong>{longRun ? `${longRun.maxWaitingVehicles} vehicles` : '--'}</strong>
+            <strong>{longRun ? `${longRun.maxWaitingVehicles} / ${longRunThresholds?.maxWaitingVehicles ?? '--'} vehicles` : '--'}</strong>
           </div>
           <div>
             <span>Lift queue high water</span>
-            <strong>{longRun ? `${longRun.maxLiftPortQueueLength} tasks` : '--'}</strong>
+            <strong>{longRun ? `${longRun.maxLiftPortQueueLength} / ${longRunThresholds?.maxLiftPortQueueLength ?? '--'} tasks` : '--'}</strong>
           </div>
           <div>
             <span>Long-run deadlocks</span>
-            <strong>{validation.acceptance.noLongRunDeadlocks ? 'clear' : 'blocked'}</strong>
+            <strong>{longRunStatus(validation.acceptance.noLongRunDeadlocks, 'clear', 'blocked')}</strong>
           </div>
           <div>
             <span>Long-run safety</span>
-            <strong>{validation.acceptance.noLongRunPhysicalSafetyViolations ? 'clear' : 'violations'}</strong>
+            <strong>{longRunStatus(validation.acceptance.noLongRunPhysicalSafetyViolations, 'clear', 'violations')}</strong>
           </div>
           <div>
             <span>Long-run coverage</span>
-            <strong>{validation.acceptance.noLongRunReservationCoverageViolations ? 'clear' : 'violations'}</strong>
+            <strong>{longRunStatus(validation.acceptance.noLongRunReservationCoverageViolations, 'clear', 'violations')}</strong>
           </div>
         </div>
       ) : (
@@ -930,7 +947,7 @@ export function App() {
     try {
       const response = await requestJson<{ validation: Phase0ValidationResult }>('/api/shuttle/validatePhase0', {
         method: 'POST',
-        body: JSON.stringify({ durationSec: 180, repeatCount: 3 })
+        body: JSON.stringify({ durationSec: 180, longRunDurationSec: 600, repeatCount: 3 })
       });
       setValidation(response.validation);
       setCommandStatus({

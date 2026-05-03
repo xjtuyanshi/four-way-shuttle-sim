@@ -1,5 +1,5 @@
 import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { accessSync, constants, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -14,6 +14,15 @@ const templateName = 'TP_Blank';
 async function assertPath(label, targetPath) {
   if (!existsSync(targetPath)) {
     throw new Error(`${label} not found: ${targetPath}`);
+  }
+}
+
+async function assertExecutable(label, targetPath) {
+  await assertPath(label, targetPath);
+  try {
+    accessSync(targetPath, constants.X_OK);
+  } catch {
+    throw new Error(`${label} is not executable: ${targetPath}`);
   }
 }
 
@@ -81,12 +90,18 @@ async function main() {
 
   const projectPath = path.join(outputDir, `${projectName}.uproject`);
   await updateProjectDescriptor(projectPath);
+  const projectDescriptor = JSON.parse(await readFile(projectPath, 'utf8'));
 
   const summary = {
     project: projectPath,
+    engineAssociation: projectDescriptor.EngineAssociation,
     plugin: path.join(pluginOutputDir, 'ShuttlePhase0Bridge.uplugin'),
+    enabledPlugins: projectDescriptor.Plugins
+      ?.filter((plugin) => ['ShuttlePhase0Bridge', 'PixelStreaming'].includes(plugin.Name) && plugin.Enabled)
+      .map((plugin) => plugin.Name) ?? [],
     unrealEditor: path.join(ueRoot, 'Engine', 'Binaries', 'Mac', 'UnrealEditor.app', 'Contents', 'MacOS', 'UnrealEditor')
   };
+  await assertExecutable('UE 5.7 editor', summary.unrealEditor);
   console.log(JSON.stringify(summary, null, 2));
 }
 

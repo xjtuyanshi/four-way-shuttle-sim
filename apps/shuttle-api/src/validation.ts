@@ -50,6 +50,13 @@ export type Phase0ValidationRun = {
   physicalViolationExamples: PhysicalViolationExample[];
 };
 
+export type LongRunAcceptanceThresholds = {
+  minTotalPph: number;
+  maxQueuedTasks: number;
+  maxWaitingVehicles: number;
+  maxLiftPortQueueLength: number;
+};
+
 export type Phase0ValidationResult = {
   checkedAt: string;
   scenarioId: string;
@@ -72,6 +79,7 @@ export type Phase0ValidationResult = {
     seeds: number[];
     durationSec: number;
     runs: Phase0ValidationRun[];
+    thresholds: LongRunAcceptanceThresholds;
     totalPphMean: number;
     maxQueuedTasks: number;
     maxWaitingVehicles: number;
@@ -85,6 +93,7 @@ export type Phase0ValidationResult = {
     noReservationCoverageViolations: boolean;
     longRunEventLogsPresent: boolean;
     longRunThroughputPositive: boolean;
+    longRunThroughputFloorMet: boolean;
     longRunQueuesBounded: boolean;
     noLongRunDeadlocks: boolean;
     noLongRunPhysicalSafetyViolations: boolean;
@@ -98,6 +107,7 @@ type Phase0ValidationOptions = {
   longRunDurationSec?: number;
   repeatCount?: number;
   sweepSeeds?: number[];
+  longRunThresholds?: Partial<LongRunAcceptanceThresholds>;
 };
 
 export type Phase0StateInspection = {
@@ -122,6 +132,26 @@ const VIOLATION_CODES: PhysicalViolationCode[] = [
 
 const POSITION_TOLERANCE_M = 0.35;
 const EXAMPLE_LIMIT = 20;
+
+function defaultLongRunThresholds(scenario: ShuttleScenario): LongRunAcceptanceThresholds {
+  const requestedPph = scenario.taskGeneration.inboundRatePerHour + scenario.taskGeneration.outboundRatePerHour;
+  return {
+    minTotalPph: round(Math.max(1, requestedPph * 0.5), 1),
+    maxQueuedTasks: Math.max(scenario.vehicles.count * 6, Math.ceil(scenario.taskGeneration.maxTasks * 0.5)),
+    maxWaitingVehicles: scenario.vehicles.count,
+    maxLiftPortQueueLength: Math.max(1, scenario.vehicles.count * 3)
+  };
+}
+
+function resolveLongRunThresholds(
+  scenario: ShuttleScenario,
+  overrides: Partial<LongRunAcceptanceThresholds> | undefined
+): LongRunAcceptanceThresholds {
+  return {
+    ...defaultLongRunThresholds(scenario),
+    ...overrides
+  };
+}
 
 function round(value: number, decimals = 4): number {
   const factor = 10 ** decimals;
@@ -494,6 +524,7 @@ export function validatePhase0Scenario(
   const longRunDurationSec = options.longRunDurationSec ?? 600;
   const repeatCount = options.repeatCount ?? 3;
   const sweepSeeds = options.sweepSeeds ?? [scenario.seed, scenario.seed + 1, scenario.seed + 2];
+  const longRunThresholds = resolveLongRunThresholds(scenario, options.longRunThresholds);
 
   const repeatRuns = Array.from({ length: repeatCount }, () => runOnce(scenario, scenario.seed, durationSec));
   const hashes = repeatRuns.map((run) => run.eventLogHash);
@@ -521,11 +552,14 @@ export function validatePhase0Scenario(
   );
   const longRunEventLogsPresent = longRunRuns.every((run) => run.eventCount > 0);
   const longRunThroughputPositive = longRunRuns.every((run) => run.completedInbound + run.completedOutbound > 0 && run.totalPph > 0);
+  const longRunThroughputFloorMet = longRunRuns.every(
+    (run) => run.completedInbound + run.completedOutbound > 0 && run.totalPph >= longRunThresholds.minTotalPph
+  );
   const longRunQueuesBounded = longRunRuns.every(
     (run) =>
-      run.maxQueuedTasks <= scenario.taskGeneration.maxTasks &&
-      run.maxLiftPortQueueLength <= scenario.taskGeneration.maxTasks &&
-      run.maxWaitingVehicles <= scenario.vehicles.count
+      run.maxQueuedTasks <= longRunThresholds.maxQueuedTasks &&
+      run.maxLiftPortQueueLength <= longRunThresholds.maxLiftPortQueueLength &&
+      run.maxWaitingVehicles <= longRunThresholds.maxWaitingVehicles
   );
   const noLongRunDeadlocks = longRunRuns.every((run) => run.deadlockCount === 0);
   const noLongRunPhysicalSafetyViolations = longRunRuns.every((run) => run.physicalViolationCount === 0);
@@ -563,6 +597,7 @@ export function validatePhase0Scenario(
       seeds: sweepSeeds,
       durationSec: longRunDurationSec,
       runs: longRunRuns,
+      thresholds: longRunThresholds,
       totalPphMean: round(longRunTotalPphValues.reduce((sum, value) => sum + value, 0) / Math.max(1, longRunTotalPphValues.length)),
       maxQueuedTasks: Math.max(0, ...longRunRuns.map((run) => run.maxQueuedTasks)),
       maxWaitingVehicles: Math.max(0, ...longRunRuns.map((run) => run.maxWaitingVehicles)),
@@ -576,6 +611,7 @@ export function validatePhase0Scenario(
       noReservationCoverageViolations,
       longRunEventLogsPresent,
       longRunThroughputPositive,
+      longRunThroughputFloorMet,
       longRunQueuesBounded,
       noLongRunDeadlocks,
       noLongRunPhysicalSafetyViolations,
@@ -588,6 +624,7 @@ export function validatePhase0Scenario(
         noReservationCoverageViolations &&
         longRunEventLogsPresent &&
         longRunThroughputPositive &&
+        longRunThroughputFloorMet &&
         longRunQueuesBounded &&
         noLongRunDeadlocks &&
         noLongRunPhysicalSafetyViolations &&

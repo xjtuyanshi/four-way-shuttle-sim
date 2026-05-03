@@ -114,6 +114,7 @@ app.get('/api/shuttle/exportLog', (_request: Request, response: Response) => {
 app.post('/api/shuttle/validatePhase0', async (request: Request, response: Response, next: NextFunction) => {
   try {
     const durationSec = Number.isFinite(Number(request.body?.durationSec)) ? Number(request.body.durationSec) : undefined;
+    const longRunDurationSec = Number.isFinite(Number(request.body?.longRunDurationSec)) ? Number(request.body.longRunDurationSec) : undefined;
     const repeatCount = Number.isFinite(Number(request.body?.repeatCount)) ? Number(request.body.repeatCount) : undefined;
     const sweepSeeds = Array.isArray(request.body?.sweepSeeds)
       ? request.body.sweepSeeds.map(Number).filter((value: number) => Number.isInteger(value) && value >= 0)
@@ -121,7 +122,7 @@ app.post('/api/shuttle/validatePhase0', async (request: Request, response: Respo
     response.json({
       ok: true,
       prerequisites: await collectPrerequisites(),
-      validation: validatePhase0Scenario(sim.getScenario(), { durationSec, repeatCount, sweepSeeds })
+      validation: validatePhase0Scenario(sim.getScenario(), { durationSec, longRunDurationSec, repeatCount, sweepSeeds })
     });
   } catch (error) {
     next(error);

@@ -69,6 +69,8 @@ Before Pixel Streaming soak:
 - Browser smoke: dashboard loads, 3D canvas renders, runtime advances, vehicles show moving/waiting states, no mount/unmount console errors.
 - UE source bridge compile smoke.
 - UE headless commandlet smoke.
+- Long-run validation must meet explicit thresholds reported in `validation.longRun.thresholds`, not only positive throughput.
+- Unreal setup/smoke must print machine-readable readiness diagnostics showing the generated project path, engine association, enabled `ShuttlePhase0Bridge` and `PixelStreaming` plugins, copied bridge source files, and compiled bridge binary.
 
 After the real UE scene exists:
 
@@ -79,7 +81,7 @@ After the real UE scene exists:
 - Pixel Streaming runs a 1080p single-user 30-minute soak.
 - Record CPU/GPU/memory/network observations and any stream disconnects.
 
-Current local smoke status: `pnpm unreal:setup` and `pnpm unreal:smoke` generate the UE project, build `ShuttleVisualTwinEditor`, load the `ShuttlePhase0Bridge` plugin, and complete `CompileAllBlueprints` with 0 errors and 0 blueprint warnings. UE currently logs one host-toolchain warning: `Missing Mac Metal toolchain (macos SDK not found)`.
+Current local smoke status: `pnpm unreal:setup` and `pnpm unreal:smoke` generate the UE project, verify bridge and Pixel Streaming plugin enablement, verify copied bridge source coverage, build `ShuttleVisualTwinEditor`, verify the compiled bridge plugin binary, load the `ShuttlePhase0Bridge` plugin, and complete `CompileAllBlueprints` with 0 errors and 0 blueprint warnings. This proves local UE bridge readiness, not the final physical scene or Pixel Streaming soak. UE currently logs one host-toolchain warning: `Missing Mac Metal toolchain (macos SDK not found)`.
 
 ## Calibration Inputs Needed
 
