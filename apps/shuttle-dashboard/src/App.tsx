@@ -56,9 +56,16 @@ type Phase0ValidationRun = {
   status: string;
   eventLogHash: string;
   eventCount: number;
+  completedInbound: number;
+  completedOutbound: number;
   totalPph: number;
   inboundPph: number;
   outboundPph: number;
+  queuedTasks: number;
+  maxQueuedTasks: number;
+  maxWaitingVehicles: number;
+  maxLiftPortQueueLength: number;
+  blockedTimeByReasonSec: Record<string, number>;
   reservationConflictCount: number;
   deadlockCount: number;
   maxObservedSpeedMps: number;
@@ -85,12 +92,27 @@ type Phase0ValidationResult = {
     totalPphMax: number;
     totalPphRange: number;
   };
+  longRun?: {
+    seeds: number[];
+    durationSec: number;
+    runs: Phase0ValidationRun[];
+    totalPphMean: number;
+    maxQueuedTasks: number;
+    maxWaitingVehicles: number;
+    maxLiftPortQueueLength: number;
+  };
   acceptance: {
     sameSeedEventHashStable: boolean;
     noDeadlocksInSweep: boolean;
     eventLogsPresent: boolean;
     noPhysicalSafetyViolations: boolean;
     noReservationCoverageViolations: boolean;
+    longRunEventLogsPresent?: boolean;
+    longRunThroughputPositive?: boolean;
+    longRunQueuesBounded?: boolean;
+    noLongRunDeadlocks?: boolean;
+    noLongRunPhysicalSafetyViolations?: boolean;
+    noLongRunReservationCoverageViolations?: boolean;
     pass: boolean;
   };
 };
@@ -647,6 +669,22 @@ function ValidationPanel({
   validating: boolean;
   onRun: () => void;
 }) {
+  const seedSweepMaxAccel = validation
+    ? Math.max(0, ...validation.seedSweep.runs.map((run) => run.maxObservedAccelerationMps2))
+    : 0;
+  const longRun = validation?.longRun ?? null;
+  const longRunPass = validation
+    ? Boolean(
+        longRun &&
+        validation.acceptance.longRunEventLogsPresent &&
+        validation.acceptance.longRunThroughputPositive &&
+        validation.acceptance.longRunQueuesBounded &&
+        validation.acceptance.noLongRunDeadlocks &&
+        validation.acceptance.noLongRunPhysicalSafetyViolations &&
+        validation.acceptance.noLongRunReservationCoverageViolations
+      )
+    : false;
+
   return (
     <section className="panel validation-panel">
       <div className="panel-head">
@@ -677,15 +715,47 @@ function ValidationPanel({
           </div>
           <div>
             <span>Max accel</span>
-            <strong>{formatNumber(Math.max(...validation.seedSweep.runs.map((run) => run.maxObservedAccelerationMps2)), 2)} m/s2</strong>
+            <strong>{formatNumber(seedSweepMaxAccel, 2)} m/s2</strong>
           </div>
           <div>
             <span>Hash</span>
             <strong>{validation.deterministic.hashes[0]?.slice(0, 12) ?? '--'}</strong>
           </div>
+          <div className="validation-divider">
+            <span>Long run</span>
+            <strong className={longRunPass ? 'ready' : 'blocked'}>{longRunPass ? 'clear' : 'check'}</strong>
+          </div>
+          <div>
+            <span>Long-run PPH</span>
+            <strong>{longRun ? `${formatNumber(longRun.totalPphMean, 1)} avg` : '--'}</strong>
+          </div>
+          <div>
+            <span>Queue high water</span>
+            <strong>{longRun ? `${longRun.maxQueuedTasks} tasks` : '--'}</strong>
+          </div>
+          <div>
+            <span>Waiting high water</span>
+            <strong>{longRun ? `${longRun.maxWaitingVehicles} vehicles` : '--'}</strong>
+          </div>
+          <div>
+            <span>Lift queue high water</span>
+            <strong>{longRun ? `${longRun.maxLiftPortQueueLength} tasks` : '--'}</strong>
+          </div>
+          <div>
+            <span>Long-run deadlocks</span>
+            <strong>{validation.acceptance.noLongRunDeadlocks ? 'clear' : 'blocked'}</strong>
+          </div>
+          <div>
+            <span>Long-run safety</span>
+            <strong>{validation.acceptance.noLongRunPhysicalSafetyViolations ? 'clear' : 'violations'}</strong>
+          </div>
+          <div>
+            <span>Long-run coverage</span>
+            <strong>{validation.acceptance.noLongRunReservationCoverageViolations ? 'clear' : 'violations'}</strong>
+          </div>
         </div>
       ) : (
-        <p className="muted">Run the deterministic same-seed and seed-sweep gate before a Pixel Streaming test.</p>
+        <p className="muted">Run the deterministic, seed-sweep, and long-run gate before a Pixel Streaming test.</p>
       )}
     </section>
   );
