@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { accessSync, constants, existsSync, readFileSync } from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -50,10 +51,12 @@ function assertBridgeSourcePresent() {
     'Source/ShuttlePhase0Bridge/ShuttlePhase0Bridge.Build.cs',
     'Source/ShuttlePhase0Bridge/Public/ShuttleStateSubscriberSubsystem.h',
     'Source/ShuttlePhase0Bridge/Public/ShuttleVisualTwinActor.h',
+    'Source/ShuttlePhase0Bridge/Public/ShuttleVisualTwinLiveSmokeCommandlet.h',
     'Source/ShuttlePhase0Bridge/Public/ShuttleVisualTwinRuntimeActor.h',
     'Source/ShuttlePhase0Bridge/Public/ShuttleVisualTwinSmokeCommandlet.h',
     'Source/ShuttlePhase0Bridge/Private/ShuttleStateSubscriberSubsystem.cpp',
     'Source/ShuttlePhase0Bridge/Private/ShuttleVisualTwinActor.cpp',
+    'Source/ShuttlePhase0Bridge/Private/ShuttleVisualTwinLiveSmokeCommandlet.cpp',
     'Source/ShuttlePhase0Bridge/Private/ShuttleVisualTwinRuntimeActor.cpp',
     'Source/ShuttlePhase0Bridge/Private/ShuttleVisualTwinSmokeCommandlet.cpp'
   ];
@@ -99,6 +102,140 @@ function run(command, args) {
   });
 }
 
+function getFreePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : null;
+      server.close(() => {
+        if (!port) {
+          reject(new Error('Could not allocate a local Unreal live-smoke API port.'));
+          return;
+        }
+        resolve(port);
+      });
+    });
+  });
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForHealth(baseUrl) {
+  const deadline = Date.now() + 20_000;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`${baseUrl}/api/shuttle/health`);
+      if (response.ok) {
+        const body = await response.json();
+        if (body.ok === true && body.protocol === 'shuttle.phase0.v0') {
+          return;
+        }
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(250);
+  }
+  throw new Error(`API did not become healthy for Unreal live smoke: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+}
+
+async function postJson(baseUrl, endpoint, body = {}) {
+  const response = await fetch(`${baseUrl}${endpoint}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) {
+    throw new Error(`${endpoint} returned HTTP ${response.status}: ${await response.text()}`);
+  }
+}
+
+function startApi(port) {
+  const child = spawn('pnpm', ['--filter', 'shuttle-api', 'dev'], {
+    cwd: repoRoot,
+    detached: true,
+    env: {
+      ...process.env,
+      SHUTTLE_PORT: String(port),
+      SHUTTLE_TICK_MS: '50',
+      SHUTTLE_SPEED: '4'
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  let output = '';
+  child.stdout.on('data', (chunk) => {
+    output += chunk.toString();
+  });
+  child.stderr.on('data', (chunk) => {
+    output += chunk.toString();
+  });
+  return {
+    child,
+    getOutput: () => output.trim().split('\n').slice(-40).join('\n')
+  };
+}
+
+async function stopApi(child) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  try {
+    process.kill(-child.pid, 'SIGTERM');
+  } catch {
+    child.kill('SIGTERM');
+  }
+  await Promise.race([
+    new Promise((resolve) => child.once('exit', resolve)),
+    delay(3_000).then(() => {
+      try {
+        process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        child.kill('SIGKILL');
+      }
+    })
+  ]);
+}
+
+async function runLiveBridgeSmoke() {
+  const port = await getFreePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const wsUrl = `ws://127.0.0.1:${port}/shuttle-ws`;
+  const api = startApi(port);
+  try {
+    await waitForHealth(baseUrl);
+    await postJson(baseUrl, '/api/shuttle/playbackSpeed', { speed: 4 });
+    await postJson(baseUrl, '/api/shuttle/reset');
+    await postJson(baseUrl, '/api/shuttle/resume');
+    await run(unrealEditor, [
+      projectPath,
+      '-run=ShuttleVisualTwinLiveSmoke',
+      `-ShuttleWsUrl=${wsUrl}`,
+      '-ShuttleLiveSmokeTimeoutSec=10',
+      '-NullRHI',
+      '-Unattended',
+      '-NoSound',
+      '-NoSplash',
+      '-NoAssetRegistryCache',
+      '-stdout',
+      '-FullStdOutLogOutput'
+    ]);
+  } catch (error) {
+    const apiOutput = api.getOutput();
+    if (apiOutput) {
+      console.error(apiOutput);
+    }
+    throw error;
+  } finally {
+    await stopApi(api.child);
+  }
+}
+
 async function main() {
   assertPath('UE 5.7 build script', buildScript);
   assertExecutable('UE 5.7 editor', unrealEditor);
@@ -142,6 +279,8 @@ async function main() {
     '-stdout',
     '-FullStdOutLogOutput'
   ]);
+
+  await runLiveBridgeSmoke();
 }
 
 main().catch((error) => {

@@ -8,6 +8,8 @@
 #include "Serialization/JsonSerializer.h"
 #include "WebSocketsModule.h"
 
+DEFINE_LOG_CATEGORY_STATIC(LogShuttleStateSubscriber, Log, All);
+
 void UShuttleStateSubscriberSubsystem::Deinitialize()
 {
     Disconnect();
@@ -18,23 +20,35 @@ void UShuttleStateSubscriberSubsystem::Connect(const FString& WebSocketUrl)
 {
     Disconnect();
 
+    UE_LOG(LogShuttleStateSubscriber, Display, TEXT("Connecting to %s"), *WebSocketUrl);
+
     if (!FModuleManager::Get().IsModuleLoaded(TEXT("WebSockets")))
     {
         FModuleManager::Get().LoadModule(TEXT("WebSockets"));
     }
 
     Socket = FWebSocketsModule::Get().CreateWebSocket(WebSocketUrl);
+    if (!Socket.IsValid())
+    {
+        UE_LOG(LogShuttleStateSubscriber, Error, TEXT("Failed to create WebSocket for %s"), *WebSocketUrl);
+        BroadcastBridgeStatus(false, TEXT("failed to create websocket"));
+        return;
+    }
+
     Socket->OnConnected().AddLambda([this]()
     {
-        OnBridgeStatus.Broadcast(true, TEXT("connected"));
+        UE_LOG(LogShuttleStateSubscriber, Display, TEXT("Connected."));
+        BroadcastBridgeStatus(true, TEXT("connected"));
     });
     Socket->OnConnectionError().AddLambda([this](const FString& Error)
     {
-        OnBridgeStatus.Broadcast(false, Error);
+        UE_LOG(LogShuttleStateSubscriber, Warning, TEXT("Connection error: %s"), *Error);
+        BroadcastBridgeStatus(false, Error);
     });
     Socket->OnClosed().AddLambda([this](int32 StatusCode, const FString& Reason, bool)
     {
-        OnBridgeStatus.Broadcast(false, FString::Printf(TEXT("closed %d %s"), StatusCode, *Reason));
+        UE_LOG(LogShuttleStateSubscriber, Display, TEXT("Closed %d %s"), StatusCode, *Reason);
+        BroadcastBridgeStatus(false, FString::Printf(TEXT("closed %d %s"), StatusCode, *Reason));
     });
     Socket->OnMessage().AddUObject(this, &UShuttleStateSubscriberSubsystem::HandleMessage);
     Socket->Connect();
@@ -55,14 +69,14 @@ void UShuttleStateSubscriberSubsystem::HandleMessage(const FString& Message)
     const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Message);
     if (!FJsonSerializer::Deserialize(Reader, RootObject) || !RootObject.IsValid())
     {
-        OnBridgeStatus.Broadcast(false, TEXT("invalid JSON"));
+        BroadcastBridgeStatus(false, TEXT("invalid JSON"));
         return;
     }
 
     FString Type;
     if (!RootObject->TryGetStringField(TEXT("type"), Type))
     {
-        OnBridgeStatus.Broadcast(false, TEXT("missing message type"));
+        BroadcastBridgeStatus(false, TEXT("missing message type"));
         return;
     }
 
@@ -77,12 +91,12 @@ void UShuttleStateSubscriberSubsystem::HandleMessage(const FString& Message)
     {
         if (!RootObject->TryGetObjectField(TEXT("state"), StateObject))
         {
-            OnBridgeStatus.Broadcast(false, FString::Printf(TEXT("%s missing state"), *Type));
+            BroadcastBridgeStatus(false, FString::Printf(TEXT("%s missing state"), *Type));
             return;
         }
         if (!StateObject || !(*StateObject)->TryGetArrayField(TEXT("vehicles"), Vehicles))
         {
-            OnBridgeStatus.Broadcast(false, FString::Printf(TEXT("%s missing state.vehicles"), *Type));
+            BroadcastBridgeStatus(false, FString::Printf(TEXT("%s missing state.vehicles"), *Type));
             return;
         }
     }
@@ -90,7 +104,7 @@ void UShuttleStateSubscriberSubsystem::HandleMessage(const FString& Message)
     {
         if (!RootObject->TryGetArrayField(TEXT("vehicles"), Vehicles))
         {
-            OnBridgeStatus.Broadcast(false, TEXT("vehicleState missing vehicles"));
+            BroadcastBridgeStatus(false, TEXT("vehicleState missing vehicles"));
             return;
         }
     }
@@ -108,14 +122,26 @@ void UShuttleStateSubscriberSubsystem::HandleMessage(const FString& Message)
             FString ParseError;
             if (TryParseVehicleState(VehicleObject, ParsedState, ParseError))
             {
-                OnVehicleState.Broadcast(ParsedState);
+                BroadcastVehicleState(ParsedState);
             }
             else
             {
-                OnBridgeStatus.Broadcast(false, ParseError);
+                BroadcastBridgeStatus(false, ParseError);
             }
         }
     }
+}
+
+void UShuttleStateSubscriberSubsystem::BroadcastVehicleState(const FShuttleVisualVehicleState& VehicleState)
+{
+    OnVehicleState.Broadcast(VehicleState);
+    OnVehicleStateNative.Broadcast(VehicleState);
+}
+
+void UShuttleStateSubscriberSubsystem::BroadcastBridgeStatus(bool bConnected, const FString& Detail)
+{
+    OnBridgeStatus.Broadcast(bConnected, Detail);
+    OnBridgeStatusNative.Broadcast(bConnected, Detail);
 }
 
 bool UShuttleStateSubscriberSubsystem::TryParseVehicleState(const TSharedPtr<FJsonObject>& Object, FShuttleVisualVehicleState& OutState, FString& OutError) const

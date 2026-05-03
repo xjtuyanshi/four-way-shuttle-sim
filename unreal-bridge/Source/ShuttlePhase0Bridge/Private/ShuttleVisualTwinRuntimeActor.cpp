@@ -154,10 +154,10 @@ void AShuttleVisualTwinRuntimeActor::ConnectToBridge()
     }
 
     StateSubscriber = NextStateSubscriber;
-    StateSubscriber->OnVehicleState.RemoveDynamic(this, &AShuttleVisualTwinRuntimeActor::HandleVehicleState);
-    StateSubscriber->OnBridgeStatus.RemoveDynamic(this, &AShuttleVisualTwinRuntimeActor::HandleBridgeStatus);
-    StateSubscriber->OnVehicleState.AddDynamic(this, &AShuttleVisualTwinRuntimeActor::HandleVehicleState);
-    StateSubscriber->OnBridgeStatus.AddDynamic(this, &AShuttleVisualTwinRuntimeActor::HandleBridgeStatus);
+    StateSubscriber->OnVehicleStateNative.RemoveAll(this);
+    StateSubscriber->OnBridgeStatusNative.RemoveAll(this);
+    StateSubscriber->OnVehicleStateNative.AddUObject(this, &AShuttleVisualTwinRuntimeActor::HandleVehicleState);
+    StateSubscriber->OnBridgeStatusNative.AddUObject(this, &AShuttleVisualTwinRuntimeActor::HandleBridgeStatus);
     StateSubscriber->Connect(WebSocketUrl);
 }
 
@@ -201,6 +201,7 @@ void AShuttleVisualTwinRuntimeActor::ApplyVehicleState(const FShuttleVisualVehic
     AShuttleVisualTwinActor* VehicleActor = FindOrSpawnVehicleActor(VehicleState.Id);
     if (VehicleActor)
     {
+        ReceivedVehicleStateCount += 1;
         VehicleActor->ApplyAuthoritativeState(VehicleState);
     }
 }
@@ -216,6 +217,11 @@ int32 AShuttleVisualTwinRuntimeActor::GetSpawnedVehicleActorCount() const
         }
     }
     return Count;
+}
+
+int32 AShuttleVisualTwinRuntimeActor::GetReceivedVehicleStateCount() const
+{
+    return ReceivedVehicleStateCount;
 }
 
 AShuttleVisualTwinActor* AShuttleVisualTwinRuntimeActor::FindVehicleActorById(const FString& VehicleId) const
@@ -324,8 +330,8 @@ void AShuttleVisualTwinRuntimeActor::UnbindStateSubscriber(const bool bDisconnec
         return;
     }
 
-    StateSubscriber->OnVehicleState.RemoveDynamic(this, &AShuttleVisualTwinRuntimeActor::HandleVehicleState);
-    StateSubscriber->OnBridgeStatus.RemoveDynamic(this, &AShuttleVisualTwinRuntimeActor::HandleBridgeStatus);
+    StateSubscriber->OnVehicleStateNative.RemoveAll(this);
+    StateSubscriber->OnBridgeStatusNative.RemoveAll(this);
     if (bDisconnect)
     {
         StateSubscriber->Disconnect();
