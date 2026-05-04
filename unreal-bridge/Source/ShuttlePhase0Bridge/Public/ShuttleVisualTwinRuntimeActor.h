@@ -90,6 +90,9 @@ struct FShuttleStaticSceneContractForSmoke
     bool bHasStorageRailGrid = false;
     bool bHasTransferRollers = false;
     bool bHasLiftBlackBoxes = false;
+    FString StoragePolicy;
+    FString InboundStorageFlow;
+    FString OutboundStorageFlow;
 };
 
 UCLASS()

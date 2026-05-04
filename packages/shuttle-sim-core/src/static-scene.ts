@@ -49,6 +49,9 @@ export type ShuttleStaticSceneContract = {
   dedicatedLiftPorts: boolean;
   inboundSide: 'left' | 'right' | 'mixed';
   outboundSide: 'left' | 'right' | 'mixed';
+  storagePolicy: 'rowContiguousLaneFill';
+  inboundStorageFlow: 'rightToLeft';
+  outboundStorageFlow: 'leftPick';
 };
 
 export type ShuttleStaticSceneStorageCell = {
@@ -407,6 +410,9 @@ export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario):
       inboundLiftNodes.length > 0 &&
       outboundLiftNodes.length > 0,
     inboundSide,
-    outboundSide
+    outboundSide,
+    storagePolicy: 'rowContiguousLaneFill',
+    inboundStorageFlow: 'rightToLeft',
+    outboundStorageFlow: 'leftPick'
   };
 }

@@ -30,6 +30,9 @@ bool StaticSceneContractPass(const FShuttleStaticSceneContractForSmoke& Contract
         !Contract.bDenseStorageBlock &&
         Contract.bOrthogonalTrackOnly &&
         Contract.bDedicatedLiftPorts &&
+        Contract.StoragePolicy == TEXT("rowContiguousLaneFill") &&
+        Contract.InboundStorageFlow == TEXT("rightToLeft") &&
+        Contract.OutboundStorageFlow == TEXT("leftPick") &&
         Contract.StorageRows == 16 &&
         Contract.StorageColumns == 24 &&
         Contract.StorageCellCount == 384 &&
@@ -168,6 +171,9 @@ TSharedRef<FJsonObject> StaticSceneContractToJson(const FShuttleStaticSceneContr
         TEXT("outboundSide"),
         Contract.OutboundLiftXM > Contract.StorageBlockMaxXM ? TEXT("right") : Contract.OutboundLiftXM < Contract.StorageBlockMinXM ? TEXT("left") : TEXT("mixed")
     );
+    Summary->SetStringField(TEXT("storagePolicy"), Contract.StoragePolicy);
+    Summary->SetStringField(TEXT("inboundStorageFlow"), Contract.InboundStorageFlow);
+    Summary->SetStringField(TEXT("outboundStorageFlow"), Contract.OutboundStorageFlow);
     return Summary;
 }
 

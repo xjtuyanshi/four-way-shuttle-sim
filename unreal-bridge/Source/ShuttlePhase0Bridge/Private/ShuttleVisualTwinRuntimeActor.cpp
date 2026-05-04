@@ -213,6 +213,9 @@ void AShuttleVisualTwinRuntimeActor::RebuildStaticScene()
     StaticSceneContract.OutboundLiftXM = StaticSceneContract.InboundLiftXM;
     StaticSceneContract.bSingleLevel = true;
     StaticSceneContract.StorageIslandCount = StorageColumnBays * StorageRowBanks;
+    StaticSceneContract.StoragePolicy = TEXT("rowContiguousLaneFill");
+    StaticSceneContract.InboundStorageFlow = TEXT("rightToLeft");
+    StaticSceneContract.OutboundStorageFlow = TEXT("leftPick");
 
     constexpr int32 MainNodeCount = StorageColumnBays + 2;
     const int32 LastMainIndex = MainNodeCount - 1;

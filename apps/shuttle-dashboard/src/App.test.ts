@@ -125,6 +125,9 @@ describe('dashboard static scene contract', () => {
     expect(contract.denseStorageBlock).toBe(false);
     expect(contract.orthogonalTrackOnly).toBe(true);
     expect(contract.dedicatedLiftPorts).toBe(true);
+    expect(contract.storagePolicy).toBe('rowContiguousLaneFill');
+    expect(contract.inboundStorageFlow).toBe('rightToLeft');
+    expect(contract.outboundStorageFlow).toBe('leftPick');
     expect(contract.storageCells).toHaveLength(384);
     expect(contract.storageRows).toBe(16);
     expect(contract.storageColumns).toBe(24);

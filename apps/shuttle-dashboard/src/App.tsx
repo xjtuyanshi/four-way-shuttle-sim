@@ -8,6 +8,7 @@ import type {
   ShuttleStreamMessage,
   VehicleState
 } from '@four-way-shuttle/schemas';
+import { summarizeScenarioStaticSceneContract } from '@four-way-shuttle/sim-core/static-scene';
 
 const ShuttleScene3D = lazy(() =>
   import('./ShuttleScene3D.js').then((module) => ({ default: module.ShuttleScene3D }))
@@ -361,6 +362,16 @@ function formatStorageCellLabel(nodeId: string): string {
   return nodeId.replace('storage-', '').toUpperCase();
 }
 
+function formatStoragePolicy(policy: string): string {
+  return policy === 'rowContiguousLaneFill' ? 'row-contiguous lane-fill' : policy;
+}
+
+function formatStorageFlow(flow: string): string {
+  if (flow === 'rightToLeft') return 'right-to-left';
+  if (flow === 'leftPick') return 'left pick';
+  return flow;
+}
+
 function AuthoritativeMap({ scenario, state }: { scenario: ShuttleScenario | null; state: ShuttleSimState | null }) {
   const geometry = useMemo(() => {
     const nodes = scenario?.layout.nodes ?? [];
@@ -579,6 +590,7 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
 }
 
 function FifoInventoryPanel({ scenario, state }: { scenario: ShuttleScenario | null; state: ShuttleSimState | null }) {
+  const staticScene = useMemo(() => scenario ? summarizeScenarioStaticSceneContract(scenario) : null, [scenario]);
   const lanes = useMemo(() => {
     const storageNodes = (scenario?.layout.nodes ?? []).filter((node) => node.type === 'storage');
     const laneByZ = new Map<number, typeof storageNodes>();
@@ -667,8 +679,12 @@ function FifoInventoryPanel({ scenario, state }: { scenario: ShuttleScenario | n
         <div className="fifo-reasons">
           <div className="fifo-policy-card">
             <span>Storage policy</span>
-            <strong>row-contiguous lane-fill</strong>
-            <small>Inbound right-to-left. Outbound left pick. No hidden compaction.</small>
+            <strong>{formatStoragePolicy(staticScene?.storagePolicy ?? 'rowContiguousLaneFill')}</strong>
+            <small>
+              Inbound {formatStorageFlow(staticScene?.inboundStorageFlow ?? 'rightToLeft')}.
+              Outbound {formatStorageFlow(staticScene?.outboundStorageFlow ?? 'leftPick')}.
+              No hidden compaction.
+            </small>
           </div>
           <div className="fifo-row-summary">
             <span>Active rows</span>

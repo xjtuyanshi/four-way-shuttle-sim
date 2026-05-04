@@ -127,7 +127,10 @@ function assertStaticSceneParityWithSimCore(unrealSummary, simCoreContract) {
     'orthogonalTrackOnly',
     'dedicatedLiftPorts',
     'inboundSide',
-    'outboundSide'
+    'outboundSide',
+    'storagePolicy',
+    'inboundStorageFlow',
+    'outboundStorageFlow'
   ]) {
     assertExactFieldParity(field, unrealSummary, simCoreContract);
   }
