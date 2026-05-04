@@ -1,12 +1,15 @@
 # ChatGPT Pro Review Packet: P1-P5 Shuttle SimCore / 3D / Unreal Bridge
 
-Use this packet to review the current branch:
+Use this packet to review the current public main branch:
 
 - Repository: `https://github.com/xjtuyanshi/four-way-shuttle-sim` (public)
-- Base branch: `main`
-- Base commit: `af1347b Merge pull request #14 from xjtuyanshi/codex/pixel-streaming-readiness`
-- Review branch: `codex/real-layout-multibank-scene`
-- Review branch head: latest pushed tip of `codex/real-layout-multibank-scene`
+- Review branch: `main`
+- Review commit: `ff1269d Update Phase 1 roadmap after hardening`
+- Immediate prior commits to inspect first:
+  - `d1d34e1 Add targeted congestion regression tests`
+  - `53c48f8 Expose storage policy in static scene contract`
+  - `e0b4d62 Expose IE-focused dashboard diagnostics`
+  - `652d428 Calibrate layout visuals from CAD reference`
 
 If GitHub clone or browsing fails, use `docs/chatgpt-pro-stable-review.md` instead. It contains direct raw/patch URLs and a no-network fallback prompt.
 
@@ -18,9 +21,16 @@ This project is a four-way shuttle simulation prototype. The core architecture d
 - The browser 3D view is a local visual twin for fast validation.
 - Unreal / Pixel Streaming should be a visual twin that consumes the same state stream, not the source of truth.
 
-Unreal Engine 5.7.4, full Xcode, and the Pixel Streaming plugin are now available on the local Mac. The TypeScript API/dashboard/SimCore path is fully testable locally, and the Unreal bridge has passed a source-plugin compile plus headless editor commandlet smoke in a temporary UE project.
+Unreal Engine 5.7.4, full Xcode, and Pixel Streaming infrastructure are now available on the local Mac. The TypeScript API/dashboard/SimCore path is fully testable locally. The Unreal bridge has passed source-plugin compile, static-scene commandlet smoke, live WebSocket bridge smoke, staged Mac runtime generation, and browser Pixel Streaming smoke against both `UnrealEditor -game` and the staged app.
 
-## What Changed In This Branch
+The latest hardening pass also made the four-way shuttle storage interpretation explicit:
+
+- The shared static-scene contract now exposes `storagePolicy: "rowContiguousLaneFill"`, `inboundStorageFlow: "rightToLeft"`, and `outboundStorageFlow: "leftPick"`.
+- Dashboard and Unreal smoke compare those fields against the SimCore contract so review language cannot drift between software, visual twin, and IE notes.
+- SimCore regression tests now include near-full storage, four-vehicle mixed lift/FIFO pressure, inbound-only pressure, and outbound-only pressure. These are not throughput proof tests; they are merge-regression tests for bounded behavior under congestion.
+- `docs/phase1-plan.md` now separates current merge-hardening from next calibrated-layout work.
+
+## What Changed In Current Main
 
 ### P1: Traffic Control Core
 
@@ -171,7 +181,7 @@ Current branch files that matter for this alignment:
 
 ## Latest Pro Merge Blockers Closed
 
-This pass closes the latest Pro "merge after fixes" blockers:
+This pass closes the latest Pro "merge after fixes" blockers and follow-up realism gaps:
 
 - Default Phase 0 demand is aligned with the validation acceptance floor: 18 inbound PPH + 18 outbound PPH, with long-run acceptance requiring 50% of requested throughput and no vehicle-count cap.
 - The UI sliders now represent 18 PPH exactly instead of snapping the browser control to a 10-PPH step.
@@ -181,19 +191,23 @@ This pass closes the latest Pro "merge after fixes" blockers:
 - Added default-layout contention coverage for portal/lift/main-lane behavior so the dedicated lift approach does not create artificial deadlocks.
 - FIFO assignment now opens one row contiguously from outfeed toward infeed, blocks conflicting row/network assignments, and prevents unrelated storage rows from becoming AMR-like transit shortcuts.
 - Browser/Unreal visuals use purple dense pallet-cell islands and yellow aisle tracks, matching the single-level four-way shuttle layout direction.
+- Static-scene storage-policy wording is now part of the SimCore contract and Unreal smoke parity, not only dashboard prose.
+- Targeted congestion tests now cover near-full inbound, four-vehicle mixed pressure, inbound-only pressure, and outbound-only pressure.
 
 ## Verification Already Run
 
-All passed locally after the latest merge-blocker fixes:
+All passed locally after the latest merge-blocker fixes and current-main hardening:
 
 ```bash
+pnpm test:shuttle
 pnpm typecheck
-pnpm test
+pnpm test  # 46 tests
 pnpm build
 pnpm shuttle:validate
 pnpm shuttle:ws-smoke
 pnpm unreal:setup
 pnpm unreal:smoke
+pnpm unreal:stage
 ```
 
 Key validation output:
@@ -228,12 +242,12 @@ deadlockCount=0
 Browser smoke also passed:
 
 ```text
-Dashboard loaded at http://localhost:5179
+Dashboard loaded at http://127.0.0.1:5179
 Dense 384-cell layout appears with purple pallet-cell islands and yellow aisle tracks
-Screenshot captured at output/browser-smoke/real-layout-dashboard.png
-Runtime advanced to 45.0s after UI reset/resume at 10x
-Vehicle table/state stream showed active loaded-moving state
-Console errors for localhost app: none observed
+Current SimCore dashboard screenshot captured at output/playwright/static-contract-dashboard-smoke.png
+FIFO policy panel screenshot captured at output/playwright/static-contract-fifo-policy-smoke.png
+Runtime completed to 00:10:00 at 4x
+Vehicle table/state stream showed idle and moving-to-pickup states
 ```
 
 Environment gate output:
@@ -246,12 +260,14 @@ Pixel Streaming: ready
 Unreal bridge compile smoke: passed
 Unreal static commandlet smoke: passed with 384 storage cells, 474 track beds, 8 lift pads, storageIslandCount=8, denseStorageIslands=true, and denseStorageBlock=false
 Unreal live bridge smoke: passed with vehicleState/kpiUpdate parsing, 2 vehicle actors, no duplicate actors, and max target pose error 0cm
+Unreal staged Mac runtime: passed, staged app exists under output/unreal/ShuttleVisualTwin/Saved/StagedBuilds/Mac/ShuttleVisualTwin.app
+Browser Pixel Streaming smoke: passed against both UnrealEditor -game and staged app; screenshot/video evidence is under output/playwright/
 CompileAllBlueprints reported 0 blueprint errors / 0 blueprint warnings
 ```
 
 ## Review Request
 
-Please review this latest branch head as a multidisciplinary reviewer. Prioritize correctness and engineering realism over style. This is no longer only a software review: also challenge whether the modeled warehouse behavior makes sense as a four-way shuttle / pallet storage system.
+Please review the current public `main` head (`ff1269d`) as a multidisciplinary reviewer. Prioritize correctness and engineering realism over style. This is no longer only a software review: also challenge whether the modeled warehouse behavior makes sense as a four-way shuttle / pallet storage system.
 
 Focus areas:
 
