@@ -131,6 +131,16 @@ type StorageField = {
   rows: number[];
 };
 
+export type CadDimensionAnnotations = {
+  storagePitchXLabelMm: string;
+  storagePitchZLabelMm: string;
+  innerBankGap: {
+    startZM: number;
+    endZM: number;
+    labelMm: string;
+  } | null;
+};
+
 export function resolveDashboardStaticSceneContract(scenario: ShuttleScenario): ShuttleStaticSceneContract {
   return summarizeScenarioStaticSceneContract(scenario);
 }
@@ -190,6 +200,36 @@ function getStorageFields(staticScene: ShuttleStaticSceneContract): StorageField
     .sort((left, right) => left.minZ - right.minZ || left.minX - right.minX);
 }
 
+function millimeterLabel(valueM: number): string {
+  return `${Math.round(valueM * 1000)}`;
+}
+
+function calibrationDimensionValue(staticScene: ShuttleStaticSceneContract, key: string): number | null {
+  return staticScene.layoutCalibrationProfile?.dimensions.find((dimension) => dimension.key === key)?.valueM ?? null;
+}
+
+export function resolveCadDimensionAnnotations(staticScene: ShuttleStaticSceneContract): CadDimensionAnnotations {
+  const rows = [...new Set(staticScene.storageCells.map((cell) => cell.zM))].sort((left, right) => left - right);
+  const northInnerRowZ = rows.filter((z) => z < 0).at(-1);
+  const southInnerRowZ = rows.find((z) => z > 0);
+  const measuredInnerGapM = northInnerRowZ !== undefined && southInnerRowZ !== undefined
+    ? southInnerRowZ - northInnerRowZ
+    : null;
+  const calibratedInnerGapM = calibrationDimensionValue(staticScene, 'innerStorageBankGapZ') ?? measuredInnerGapM;
+
+  return {
+    storagePitchXLabelMm: millimeterLabel(calibrationDimensionValue(staticScene, 'storageCellPitchX') ?? staticScene.storagePitchXM),
+    storagePitchZLabelMm: millimeterLabel(calibrationDimensionValue(staticScene, 'storageCellPitchZ') ?? staticScene.storagePitchZM),
+    innerBankGap: northInnerRowZ !== undefined && southInnerRowZ !== undefined && calibratedInnerGapM !== null
+      ? {
+          startZM: northInnerRowZ,
+          endZM: southInnerRowZ,
+          labelMm: millimeterLabel(calibratedInnerGapM)
+        }
+      : null
+  };
+}
+
 function createCadFloorTexture(
   scenario: ShuttleScenario,
   staticScene: ShuttleStaticSceneContract,
@@ -208,6 +248,7 @@ function createCadFloorTexture(
   const plotHeight = canvas.height - inset * 2;
   const spanX = bounds.maxX - bounds.minX;
   const spanZ = bounds.maxZ - bounds.minZ;
+  const dimensionAnnotations = resolveCadDimensionAnnotations(staticScene);
   const xToPx = (x: number) => inset + ((x - bounds.minX) / spanX) * plotWidth;
   const zToPx = (z: number) => inset + ((z - bounds.minZ) / spanZ) * plotHeight;
   const rectForMeterBox = (centerX: number, centerZ: number, widthM: number, depthM: number) => {
@@ -316,18 +357,20 @@ function createCadFloorTexture(
     drawDimensionLine(
       { x: sample.xM - sample.lengthXM / 2, z: sample.zM - sample.lengthZM * 0.95 },
       { x: sample.xM + sample.lengthXM / 2, z: sample.zM - sample.lengthZM * 0.95 },
-      `${Math.round(staticScene.storagePitchXM * 1000)}`
+      dimensionAnnotations.storagePitchXLabelMm
     );
     drawDimensionLine(
       { x: sample.xM - sample.lengthXM * 0.85, z: sample.zM - sample.lengthZM / 2 },
       { x: sample.xM - sample.lengthXM * 0.85, z: sample.zM + sample.lengthZM / 2 },
-      `${Math.round(staticScene.storagePitchZM * 1000)}`
+      dimensionAnnotations.storagePitchZLabelMm
     );
-    drawDimensionLine(
-      { x: sample.xM, z: -2.2 },
-      { x: sample.xM, z: 2.2 },
-      '4400'
-    );
+    if (dimensionAnnotations.innerBankGap) {
+      drawDimensionLine(
+        { x: sample.xM, z: dimensionAnnotations.innerBankGap.startZM },
+        { x: sample.xM, z: dimensionAnnotations.innerBankGap.endZM },
+        dimensionAnnotations.innerBankGap.labelMm
+      );
+    }
   }
 
   const texture = new THREE.CanvasTexture(canvas);

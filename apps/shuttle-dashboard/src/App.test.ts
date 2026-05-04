@@ -3,7 +3,7 @@ import { createDefaultShuttleScenario, summarizeScenarioStaticSceneContract } fr
 import { describe, expect, it } from 'vitest';
 
 import { mergeKpiUpdate, mergeVehicleStateUpdate } from './App.js';
-import { resolveDashboardStaticSceneContract } from './ShuttleScene3D.js';
+import { resolveCadDimensionAnnotations, resolveDashboardStaticSceneContract } from './ShuttleScene3D.js';
 
 function vehicle(overrides: Partial<VehicleState> & { id: string }): VehicleState {
   const { id, ...rest } = overrides;
@@ -116,6 +116,7 @@ describe('dashboard stream reducers', () => {
 describe('dashboard static scene contract', () => {
   it('uses the SimCore item-level layout contract for the browser visual twin', () => {
     const contract = resolveDashboardStaticSceneContract(createDefaultShuttleScenario());
+    const cadDimensions = resolveCadDimensionAnnotations(contract);
 
     expect(contract).toEqual(summarizeScenarioStaticSceneContract(createDefaultShuttleScenario()));
     expect(contract.schemaVersion).toBe('shuttle.simCoreStaticSceneContract.v1');
@@ -139,5 +140,40 @@ describe('dashboard static scene contract', () => {
     expect(contract.liftPads.some((pad) => pad.side === 'mixed')).toBe(true);
     expect(contract.trackBeds.some((track) => track.category === 'storageLane')).toBe(true);
     expect(contract.diagonalTrackCount).toBe(0);
+    expect(cadDimensions).toMatchObject({
+      storagePitchXLabelMm: '1250',
+      storagePitchZLabelMm: '1200',
+      innerBankGap: {
+        startZM: -2.2,
+        endZM: 2.2,
+        labelMm: '4400'
+      }
+    });
+  });
+
+  it('keeps CAD floor dimension annotations synchronized with layout-profile overrides', () => {
+    const contract = resolveDashboardStaticSceneContract(createDefaultShuttleScenario({
+      layoutProfile: {
+        storageCellPitchXM: 1.3,
+        storageCellPitchZM: 1.25,
+        storageInnerRowZM: 2.35,
+        calibrationProfile: {
+          id: 'dashboard-dimension-test-profile',
+          label: 'Dashboard dimension test profile',
+          status: 'partial-cad',
+          sourceDescription: 'Test profile for dashboard CAD annotation sync.'
+        }
+      }
+    }));
+
+    expect(resolveCadDimensionAnnotations(contract)).toMatchObject({
+      storagePitchXLabelMm: '1300',
+      storagePitchZLabelMm: '1250',
+      innerBankGap: {
+        startZM: -2.35,
+        endZM: 2.35,
+        labelMm: '4700'
+      }
+    });
   });
 });
