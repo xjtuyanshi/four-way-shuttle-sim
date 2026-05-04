@@ -20,7 +20,8 @@ import { summarizeScenarioStaticSceneContract as summarizeStaticSceneContract, t
 import {
   DEFAULT_SHUTTLE_LAYOUT_PROFILE,
   createShuttleLayoutProfile,
-  type ShuttleLayoutGeometryProfile
+  type ShuttleLayoutGeometryProfile,
+  type ShuttleLayoutGeometryProfileOverride
 } from './layout-profile.js';
 export type {
   ShuttleStaticSceneContract,
@@ -33,7 +34,8 @@ export type {
 export {
   DEFAULT_SHUTTLE_LAYOUT_PROFILE,
   createShuttleLayoutProfile,
-  type ShuttleLayoutGeometryProfile
+  type ShuttleLayoutGeometryProfile,
+  type ShuttleLayoutGeometryProfileOverride
 } from './layout-profile.js';
 
 type RuntimeStatus = ShuttleSimState['status'];
@@ -55,7 +57,7 @@ type ShuttleScenarioOverrides = Partial<Omit<
   ShuttleScenario,
   'vehicles' | 'layout' | 'taskGeneration' | 'physicsParams' | 'routingPolicy' | 'trafficPolicy'
 >> & {
-  layoutProfile?: Partial<ShuttleLayoutGeometryProfile>;
+  layoutProfile?: ShuttleLayoutGeometryProfileOverride;
   vehicles?: Partial<ShuttleScenario['vehicles']>;
   layout?: Partial<ShuttleScenario['layout']>;
   taskGeneration?: Partial<ShuttleScenario['taskGeneration']>;

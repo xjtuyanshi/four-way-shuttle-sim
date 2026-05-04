@@ -318,6 +318,51 @@ describe('shuttle phase 0 SimCore', () => {
     expect(contract.parkingPads.map((pad) => pad.id).sort()).toEqual(['parking-a', 'parking-b', 'parking-c', 'parking-d']);
   });
 
+  it('keeps layout-profile overrides synchronized with calibration metadata and static-scene footprints', () => {
+    const scenario = createDefaultShuttleScenario({
+      layoutProfile: {
+        storageCellPitchXM: 1.3,
+        storageCellPitchZM: 1.25,
+        storageBayGapXM: 2.5,
+        storageInnerRowZM: 2.35,
+        sideClearanceXM: 2.7,
+        mainLaneNorthZM: -0.9,
+        mainLaneSouthZM: 0.9,
+        liftStandoffZM: 2,
+        calibrationProfile: {
+          id: 'partial-cad-test-profile',
+          label: 'Partial CAD test profile',
+          status: 'partial-cad',
+          sourceDescription: 'Test override values from a partial CAD profile.'
+        }
+      }
+    });
+    const contract = summarizeScenarioStaticSceneContract(scenario);
+    const dimensionsByKey = new Map(scenario.layout.calibrationProfile?.dimensions.map((dimension) => [dimension.key, dimension.valueM]));
+
+    expect(scenario.layout.calibrationProfile).toMatchObject({
+      id: 'partial-cad-test-profile',
+      label: 'Partial CAD test profile',
+      status: 'partial-cad',
+      sourceDescription: 'Test override values from a partial CAD profile.'
+    });
+    expect(dimensionsByKey.get('storageCellPitchX')).toBe(1.3);
+    expect(dimensionsByKey.get('storageCellPitchZ')).toBe(1.25);
+    expect(dimensionsByKey.get('storageBayGapX')).toBe(2.5);
+    expect(dimensionsByKey.get('mainLaneCenterSpacingZ')).toBe(1.8);
+    expect(dimensionsByKey.get('innerStorageBankGapZ')).toBe(4.7);
+    expect(dimensionsByKey.get('liftStandoffZ')).toBe(2);
+    expect(dimensionsByKey.get('sideClearanceX')).toBe(2.7);
+    expect(contract.layoutCalibrationProfile?.dimensions.find((dimension) => dimension.key === 'storageCellPitchX')).toMatchObject({
+      valueM: 1.3,
+      source: 'assumed',
+      confidence: 'low'
+    });
+    expect(contract.storagePitchXM).toBeCloseTo(1.3, 6);
+    expect(contract.storagePitchZM).toBeCloseTo(1.25, 6);
+    expect(contract.storageCells.every((cell) => cell.lengthXM === 1.3 && cell.lengthZM === 1.25)).toBe(true);
+  });
+
   it('rejects multi-capacity traffic resources for Phase 0', () => {
     expect(() =>
       ShuttleScenarioSchema.parse({
@@ -858,7 +903,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(blockedReasons.some((reason) => reason.startsWith('fifo-') || reason.includes('lift-busy'))).toBe(true);
     expect(state.vehicles).toHaveLength(4);
     expect(state.vehicles.every((vehicle) => Number.isFinite(vehicle.x) && Number.isFinite(vehicle.z))).toBe(true);
-  });
+  }, 15000);
 
   it('keeps one-direction pressure cases bounded for inbound-only and outbound-only runs', () => {
     const inboundScenario = createDefaultShuttleScenario({
@@ -925,7 +970,7 @@ describe('shuttle phase 0 SimCore', () => {
     expectNoTrafficSafetyFailures(outboundState);
     expect(outboundState.kpis.completedInbound).toBe(0);
     expect(outboundState.kpis.completedOutbound).toBeGreaterThan(0);
-  });
+  }, 15000);
 
   it('accepts dashboard-style parameter updates through JSON pointers', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario());

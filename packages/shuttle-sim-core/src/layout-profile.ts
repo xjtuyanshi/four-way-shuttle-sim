@@ -19,6 +19,12 @@ export type ShuttleLayoutGeometryProfile = {
   parkingStandoffXM: number;
 };
 
+export type ShuttleLayoutCalibrationProfileOverride = Partial<LayoutCalibrationProfile>;
+
+export type ShuttleLayoutGeometryProfileOverride = Partial<Omit<ShuttleLayoutGeometryProfile, 'calibrationProfile'>> & {
+  calibrationProfile?: ShuttleLayoutCalibrationProfileOverride;
+};
+
 export const DEFAULT_SHUTTLE_LAYOUT_PROFILE: ShuttleLayoutGeometryProfile = {
   calibrationProfile: {
     id: 'phase0-cad-assumption-v1',
@@ -106,16 +112,51 @@ export const DEFAULT_SHUTTLE_LAYOUT_PROFILE: ShuttleLayoutGeometryProfile = {
   parkingStandoffXM: 2.4
 };
 
-export function createShuttleLayoutProfile(overrides: Partial<ShuttleLayoutGeometryProfile> = {}): ShuttleLayoutGeometryProfile {
+function roundProfileValue(value: number): number {
+  return Number(value.toFixed(6));
+}
+
+function calibrationDimensionValues(profile: ShuttleLayoutGeometryProfile): Record<string, number> {
+  return {
+    storageCellPitchX: roundProfileValue(profile.storageCellPitchXM),
+    storageCellPitchZ: roundProfileValue(profile.storageCellPitchZM),
+    storageBayGapX: roundProfileValue(profile.storageBayGapXM),
+    mainLaneCenterSpacingZ: roundProfileValue(Math.abs(profile.mainLaneSouthZM - profile.mainLaneNorthZM)),
+    innerStorageBankGapZ: roundProfileValue(profile.storageInnerRowZM * 2),
+    liftStandoffZ: roundProfileValue(profile.liftStandoffZM),
+    sideClearanceX: roundProfileValue(profile.sideClearanceXM)
+  };
+}
+
+function syncedCalibrationDimensions(
+  profile: ShuttleLayoutGeometryProfile,
+  dimensions: LayoutCalibrationProfile['dimensions']
+): LayoutCalibrationProfile['dimensions'] {
+  const valuesByKey = calibrationDimensionValues(profile);
+  return dimensions.map((dimension) => ({
+    ...dimension,
+    valueM: valuesByKey[dimension.key] ?? dimension.valueM
+  }));
+}
+
+export function createShuttleLayoutProfile(overrides: ShuttleLayoutGeometryProfileOverride = {}): ShuttleLayoutGeometryProfile {
+  const { calibrationProfile: calibrationProfileOverrides, ...geometryOverrides } = overrides;
+  const geometryProfile: ShuttleLayoutGeometryProfile = {
+    ...DEFAULT_SHUTTLE_LAYOUT_PROFILE,
+    ...geometryOverrides,
+    calibrationProfile: DEFAULT_SHUTTLE_LAYOUT_PROFILE.calibrationProfile
+  };
   const calibrationProfile = {
     ...DEFAULT_SHUTTLE_LAYOUT_PROFILE.calibrationProfile,
-    ...overrides.calibrationProfile,
-    dimensions: overrides.calibrationProfile?.dimensions ?? DEFAULT_SHUTTLE_LAYOUT_PROFILE.calibrationProfile.dimensions,
-    notes: overrides.calibrationProfile?.notes ?? DEFAULT_SHUTTLE_LAYOUT_PROFILE.calibrationProfile.notes
+    ...calibrationProfileOverrides,
+    dimensions: calibrationProfileOverrides?.dimensions ?? syncedCalibrationDimensions(
+      geometryProfile,
+      DEFAULT_SHUTTLE_LAYOUT_PROFILE.calibrationProfile.dimensions
+    ),
+    notes: calibrationProfileOverrides?.notes ?? DEFAULT_SHUTTLE_LAYOUT_PROFILE.calibrationProfile.notes
   };
   const profile = {
-    ...DEFAULT_SHUTTLE_LAYOUT_PROFILE,
-    ...overrides,
+    ...geometryProfile,
     calibrationProfile
   };
   if (profile.storageRowBanks !== 2) {
