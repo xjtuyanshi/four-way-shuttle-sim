@@ -1,5 +1,6 @@
 import { ShuttleScenarioSchema, ShuttleSimStateSchema, type ShuttleScenario } from '@four-way-shuttle/schemas';
 
+import goldenStaticSceneContract from '../../../config/shuttle/static-scene-contract.golden.json';
 import {
   ShuttleSimCore,
   calculateTravelTimeSec,
@@ -215,6 +216,7 @@ describe('shuttle phase 0 SimCore', () => {
   it('summarizes the default layout contract used by the Unreal static scaffold', () => {
     const contract = summarizeScenarioStaticSceneContract(createDefaultShuttleScenario());
 
+    expect(contract).toEqual(goldenStaticSceneContract);
     expect(contract).toMatchObject({
       schemaVersion: 'shuttle.simCoreStaticSceneContract.v1',
       scenarioId: 'shuttle-phase0-balanced',

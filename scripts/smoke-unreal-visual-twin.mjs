@@ -1,3 +1,4 @@
+import { deepStrictEqual } from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { accessSync, constants, existsSync, readFileSync, rmSync } from 'node:fs';
 import net from 'node:net';
@@ -18,6 +19,7 @@ const projectDir = path.dirname(projectPath);
 const bridgePluginDir = path.join(projectDir, 'Plugins', 'ShuttlePhase0Bridge');
 const bridgePluginDescriptor = path.join(bridgePluginDir, 'ShuttlePhase0Bridge.uplugin');
 const bridgeBinary = path.join(bridgePluginDir, 'Binaries', 'Mac', 'UnrealEditor-ShuttlePhase0Bridge.dylib');
+const goldenStaticSceneContractPath = path.join(repoRoot, 'config', 'shuttle', 'static-scene-contract.golden.json');
 
 function assertPath(label, targetPath) {
   if (!existsSync(targetPath)) {
@@ -51,6 +53,22 @@ function readSimCoreStaticSceneContract() {
     throw new Error(`Could not read SimCore static scene contract.\nstdout:\n${child.stdout}\nstderr:\n${child.stderr}`);
   }
   return JSON.parse(child.stdout);
+}
+
+function readGoldenStaticSceneContract() {
+  return readJson('Golden SimCore static scene contract', goldenStaticSceneContractPath);
+}
+
+function assertSimCoreMatchesGoldenStaticScene(simCoreContract, goldenContract) {
+  try {
+    deepStrictEqual(simCoreContract, goldenContract);
+  } catch (error) {
+    throw new Error(
+      `SimCore default static scene contract drifted from the checked-in golden fixture ${goldenStaticSceneContractPath}.\n` +
+      `Regenerate deliberately with: pnpm exec tsx scripts/print-default-static-scene-contract.ts > config/shuttle/static-scene-contract.golden.json\n` +
+      `${error instanceof Error ? error.message : String(error)}`
+    );
+  }
 }
 
 function assertExactFieldParity(field, unrealSummary, simCoreContract) {
@@ -441,6 +459,8 @@ async function main() {
     throw new Error(`Unreal static scene smoke summary did not pass: ${JSON.stringify(staticSceneSummary, null, 2)}`);
   }
   const simCoreStaticSceneContract = readSimCoreStaticSceneContract();
+  const goldenStaticSceneContract = readGoldenStaticSceneContract();
+  assertSimCoreMatchesGoldenStaticScene(simCoreStaticSceneContract, goldenStaticSceneContract);
   if (
     simCoreStaticSceneContract.singleLevel !== true ||
     simCoreStaticSceneContract.storageRows !== 16 ||
@@ -454,8 +474,12 @@ async function main() {
   ) {
     throw new Error(`SimCore default scene contract is not the expected single-level multi-bank four-way shuttle layout: ${JSON.stringify(simCoreStaticSceneContract, null, 2)}`);
   }
-  assertStaticSceneParityWithSimCore(staticSceneSummary, simCoreStaticSceneContract);
-  console.log(JSON.stringify({ simCoreStaticSceneContract, unrealStaticSceneSmoke: staticSceneSummary }, null, 2));
+  assertStaticSceneParityWithSimCore(staticSceneSummary, goldenStaticSceneContract);
+  console.log(JSON.stringify({
+    goldenStaticSceneContract: goldenStaticSceneContractPath,
+    simCoreStaticSceneContract,
+    unrealStaticSceneSmoke: staticSceneSummary
+  }, null, 2));
 
   await run(unrealEditor, [
     projectPath,

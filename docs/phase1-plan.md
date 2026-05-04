@@ -52,6 +52,7 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 - Validated and clamped playback speed input, including `SHUTTLE_SPEED`.
 - Built the first Unreal visual twin scene foundation in `AShuttleVisualTwinRuntimeActor`: one single-level 16x24 multi-bank storage field with per-cell four-way rail detail, rack posts, roller-transfer lift pads, dedicated inbound/outbound black-box lift housings, load placeholders from streamed SimCore load snapshots, and smoke-contract counts for those visual details.
 - Exposed the row-contiguous lane-fill storage policy in the shared static-scene contract with `storagePolicy: "rowContiguousLaneFill"`, `inboundStorageFlow: "rightToLeft"`, and `outboundStorageFlow: "leftPick"` so SimCore, dashboard, Unreal smoke, and review notes use the same wording.
+- Added `config/shuttle/static-scene-contract.golden.json` as the default static-scene regression fixture. SimCore and dashboard tests compare the full contract against it, and the Unreal smoke path checks item-level parity against the same fixture.
 - Added targeted congestion regression coverage for a near-full storage grid, four-vehicle mixed lift/FIFO pressure, inbound-only pressure, and outbound-only pressure. These tests assert positive throughput where applicable plus no deadlocks, livelocks, or physical safety failures.
 - Verified the local Unreal path through setup, source bridge smoke, live bridge smoke, staged Mac runtime generation, and browser Pixel Streaming smoke evidence. This proves the local runtime scaffold, not a final signed/notarized production package.
 
@@ -59,7 +60,7 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 
 - Track the current public `main` ChatGPT Pro follow-up and fold in only concrete blockers; the previous verdict was merge now with no must-fix.
 - Replace the assumption-grade `phase0-cad-assumption-v1` layout profile with CAD/vendor/site dimensions before making stronger throughput claims: storage pitch, aisle widths, shuttle footprint, pallet/load envelope, lift pad envelope, roller-transfer envelope, and blocked/structural cells.
-- Keep the configurable layout profile as the calibration boundary while preserving the current deterministic default as a regression fixture.
+- Keep the configurable layout profile as the calibration boundary; when CAD/vendor/site dimensions deliberately change the default scene, regenerate and review the golden static-scene fixture in the same commit.
 - Add true push-lane or multi-axis storage-grid mechanics only after the FIFO lane policy is explicitly modeled against the target physical layout.
 - Replace remaining Unreal placeholder geometry with calibrated meshes/materials once CAD or vendor dimensions are available; keep SimCore authoritative.
 - Run a 30-minute 1080p single-user Pixel Streaming soak only after the calibrated Unreal scene foundation is visually reviewed and the browser/API validation gate is green.

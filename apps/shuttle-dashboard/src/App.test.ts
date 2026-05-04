@@ -2,6 +2,7 @@ import type { KpiSnapshot, ShuttleSimState, VehicleState } from '@four-way-shutt
 import { createDefaultShuttleScenario, summarizeScenarioStaticSceneContract } from '@four-way-shuttle/sim-core';
 import { describe, expect, it } from 'vitest';
 
+import goldenStaticSceneContract from '../../../config/shuttle/static-scene-contract.golden.json';
 import { mergeKpiUpdate, mergeVehicleStateUpdate } from './App.js';
 import { resolveCadDimensionAnnotations, resolveDashboardStaticSceneContract } from './ShuttleScene3D.js';
 
@@ -119,6 +120,7 @@ describe('dashboard static scene contract', () => {
     const cadDimensions = resolveCadDimensionAnnotations(contract);
 
     expect(contract).toEqual(summarizeScenarioStaticSceneContract(createDefaultShuttleScenario()));
+    expect(contract).toEqual(goldenStaticSceneContract);
     expect(contract.schemaVersion).toBe('shuttle.simCoreStaticSceneContract.v1');
     expect(contract.singleLevel).toBe(true);
     expect(contract.storageIslandCount).toBe(8);
