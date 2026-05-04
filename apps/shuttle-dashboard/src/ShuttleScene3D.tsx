@@ -866,7 +866,7 @@ function vehicleUserData(group: THREE.Group): VehicleObjectUserData {
 function applyVehicleState(group: THREE.Group, vehicle: VehicleState, layers: ShuttleSceneLayers, selected: boolean): void {
   const data = vehicleUserData(group);
   data.targetPosition.set(vehicle.x, 0, vehicle.z);
-  data.targetYaw = -vehicle.yaw;
+  data.targetYaw = 0;
   data.loadedMesh.visible = vehicle.loaded;
   data.safetyRing.visible = layers.physics;
   data.ringMaterial.opacity = selected ? 0.46 : 0.22;
@@ -916,7 +916,7 @@ function updateDynamicScene(
     if (!object) {
       object = createVehicleObject(scenario);
       object.position.set(vehicle.x, 0, vehicle.z);
-      object.rotation.y = -vehicle.yaw;
+      object.rotation.y = 0;
       runtime.vehicleObjects.set(vehicle.id, object);
       runtime.vehicleGroup.add(object);
     }

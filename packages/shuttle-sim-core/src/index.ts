@@ -1360,7 +1360,7 @@ export class ShuttleSimCore {
   }
 
   private taskAssignmentBlockReason(task: TaskStateRecord): string | null {
-    return this.liftPortBlockReason(task) ?? this.fifoNetworkBlockReason(task) ?? this.fifoLaneBlockReason(task);
+    return this.liftPortBlockReason(task) ?? this.fifoLaneBlockReason(task) ?? this.fifoNetworkBlockReason(task);
   }
 
   private liftPortBlockReason(task: TaskStateRecord): string | null {
@@ -1844,7 +1844,7 @@ export class ShuttleSimCore {
     vehicle.x = round(from.x + (to.x - from.x) * progress);
     vehicle.y = SHUTTLE_Y_M;
     vehicle.z = round(from.z + (to.z - from.z) * progress);
-    vehicle.yaw = round(Math.atan2(to.z - from.z, to.x - from.x));
+    vehicle.yaw = 0;
 
     if (vehicle.legRemainingM > 0) {
       return;

@@ -3,7 +3,7 @@ import { createDefaultShuttleScenario, summarizeScenarioStaticSceneContract } fr
 import { describe, expect, it } from 'vitest';
 
 import goldenStaticSceneContract from '../../../config/shuttle/static-scene-contract.golden.json';
-import { mergeKpiUpdate, mergeVehicleStateUpdate } from './App.js';
+import { mergeKpiUpdate, mergeVehicleStateUpdate, shouldRestartAfterParamUpdate } from './App.js';
 import { resolveCadDimensionAnnotations, resolveDashboardStaticSceneContract } from './ShuttleScene3D.js';
 
 function vehicle(overrides: Partial<VehicleState> & { id: string }): VehicleState {
@@ -111,6 +111,16 @@ describe('dashboard stream reducers', () => {
     expect(next?.simTimeSec).toBe(22);
     expect(next?.kpis.totalPph).toBe(120);
     expect(next?.kpis.reservationConflictCount).toBe(4);
+  });
+});
+
+describe('dashboard parameter controls', () => {
+  it('restarts live runs for throughput and shuttle-count changes', () => {
+    expect(shouldRestartAfterParamUpdate('/taskGeneration/inboundRatePerHour', 'running')).toBe(true);
+    expect(shouldRestartAfterParamUpdate('/taskGeneration/outboundRatePerHour', 'paused')).toBe(true);
+    expect(shouldRestartAfterParamUpdate('/vehicles/count', 'running')).toBe(true);
+    expect(shouldRestartAfterParamUpdate('/physicsParams/loadedSpeedMps', 'running')).toBe(false);
+    expect(shouldRestartAfterParamUpdate('/physicsParams/loadedSpeedMps', 'completed')).toBe(true);
   });
 });
 

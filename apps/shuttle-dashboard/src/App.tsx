@@ -134,6 +134,14 @@ type SceneLayers = {
 
 const CONTROLLED_PARAMS = [
   {
+    label: 'Shuttle count',
+    path: '/vehicles/count',
+    min: 1,
+    max: 4,
+    step: 1,
+    unit: 'units'
+  },
+  {
     label: 'Loaded speed',
     path: '/physicsParams/loadedSpeedMps',
     min: 0.4,
@@ -161,16 +169,16 @@ const CONTROLLED_PARAMS = [
     label: 'Inbound rate',
     path: '/taskGeneration/inboundRatePerHour',
     min: 0,
-    max: 720,
-    step: 1,
+    max: 7200,
+    step: 60,
     unit: 'PPH'
   },
   {
     label: 'Outbound rate',
     path: '/taskGeneration/outboundRatePerHour',
     min: 0,
-    max: 720,
-    step: 1,
+    max: 7200,
+    step: 60,
     unit: 'PPH'
   }
 ] as const;
@@ -260,6 +268,10 @@ export function mergeKpiUpdate(
     simTimeSec,
     kpis
   };
+}
+
+export function shouldRestartAfterParamUpdate(path: string, status: ShuttleSimState['status'] | null | undefined): boolean {
+  return path === '/vehicles/count' || path.startsWith('/taskGeneration/') || status === 'completed';
 }
 
 function KpiStrip({ kpis }: { kpis: KpiSnapshot | null }) {
@@ -439,7 +451,7 @@ function AuthoritativeMap({ scenario, state }: { scenario: ShuttleScenario | nul
           key={vehicle.id}
           style={{
             ...geometry.project(vehicle),
-            transform: `translate(-50%, -50%) rotate(${vehicle.yaw}rad)`
+            transform: 'translate(-50%, -50%)'
           }}
         >
           {vehicle.id}
@@ -866,6 +878,7 @@ export function App() {
   const [validating, setValidating] = useState(false);
   const [commandStatus, setCommandStatus] = useState<CommandStatus>({ label: 'ready', tone: 'idle' });
   const [playbackSpeed, setPlaybackSpeedState] = useState(1);
+  const [paramDraftValues, setParamDraftValues] = useState<Map<string, number>>(() => new Map());
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
   const [sceneLayers, setSceneLayers] = useState<SceneLayers>({
     traffic: true,
@@ -876,6 +889,7 @@ export function App() {
   const [isPending, startTransition] = useTransition();
   const reconnectAttemptRef = useRef(0);
   const playbackSpeedChangedRef = useRef(false);
+  const paramUpdateTimersRef = useRef<Map<string, number>>(new Map());
 
   const kpis = state?.kpis ?? null;
   const vehicles = state?.vehicles ?? [];
@@ -966,12 +980,29 @@ export function App() {
     };
   }, []);
 
-  const paramValues = useMemo(() => {
+  useEffect(() => {
+    return () => {
+      for (const timer of paramUpdateTimersRef.current.values()) {
+        window.clearTimeout(timer);
+      }
+      paramUpdateTimersRef.current.clear();
+    };
+  }, []);
+
+  const scenarioParamValues = useMemo(() => {
     if (!scenario) return new Map<string, number>();
     return new Map(CONTROLLED_PARAMS.map((param) => [param.path, Number(getPointerValue(scenario, param.path) ?? 0)]));
   }, [scenario]);
 
-  async function postCommand(path: string, body: unknown = {}): Promise<void> {
+  const paramValues = useMemo(() => {
+    const values = new Map(scenarioParamValues);
+    for (const [path, value] of paramDraftValues) {
+      values.set(path, value);
+    }
+    return values;
+  }, [paramDraftValues, scenarioParamValues]);
+
+  async function postCommand(path: string, body: unknown = {}): Promise<boolean> {
     const startedAt = performance.now();
     setCommandStatus({ label: 'sending command...', tone: 'idle' });
     try {
@@ -984,19 +1015,59 @@ export function App() {
       }
       const elapsedMs = Math.round(performance.now() - startedAt);
       setCommandStatus({ label: `ack ${elapsedMs} ms`, tone: 'ok' });
+      return true;
+    } catch (error) {
+      setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' });
+      return false;
+    }
+  }
+
+  async function updateParam(path: string, value: number): Promise<void> {
+    const restartRun = shouldRestartAfterParamUpdate(path, state?.status);
+    const seed = state?.seed;
+    const updated = await postCommand('/api/shuttle/setParam', { path, value });
+    if (!updated) {
+      return;
+    }
+    if (restartRun) {
+      await postCommand('/api/shuttle/reset', { seed });
+      await postCommand('/api/shuttle/resume');
+      setCommandStatus({ label: 'updated + restarted', tone: 'ok' });
+    }
+    try {
+      const nextScenario = await requestJson<ShuttleScenario>('/api/shuttle/scenario');
+      setScenario(nextScenario);
     } catch (error) {
       setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' });
     }
   }
 
-  async function updateParam(path: string, value: number): Promise<void> {
-    setScenario((previous) => {
-      if (!previous) return previous;
-      return structuredClone(previous);
+  function scheduleParamUpdate(path: string, value: number): void {
+    setParamDraftValues((previous) => {
+      const next = new Map(previous);
+      next.set(path, value);
+      return next;
     });
-    await postCommand('/api/shuttle/setParam', { path, value });
-    const nextScenario = await requestJson<ShuttleScenario>('/api/shuttle/scenario');
-    setScenario(nextScenario);
+
+    const existingTimer = paramUpdateTimersRef.current.get(path);
+    if (existingTimer) {
+      window.clearTimeout(existingTimer);
+    }
+
+    const timer = window.setTimeout(() => {
+      paramUpdateTimersRef.current.delete(path);
+      void updateParam(path, value).finally(() => {
+        setParamDraftValues((previous) => {
+          if (previous.get(path) !== value) {
+            return previous;
+          }
+          const next = new Map(previous);
+          next.delete(path);
+          return next;
+        });
+      });
+    }, 300);
+    paramUpdateTimersRef.current.set(path, timer);
   }
 
   async function setPlaybackSpeed(speed: number): Promise<void> {
@@ -1099,7 +1170,7 @@ export function App() {
                   max={param.max}
                   step={param.step}
                   value={value}
-                  onChange={(event) => updateParam(param.path, Number(event.currentTarget.value))}
+                  onChange={(event) => scheduleParamUpdate(param.path, Number(event.currentTarget.value))}
                 />
               </label>
             );

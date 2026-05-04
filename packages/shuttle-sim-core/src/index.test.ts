@@ -1056,6 +1056,41 @@ describe('shuttle phase 0 SimCore', () => {
     ]);
   });
 
+  it('keeps four-way shuttle yaw fixed while translating through right-angle routes', () => {
+    const scenario = testScenario({
+      layout: {
+        units: 'meter',
+        calibrationProfile: null,
+        nodes: [
+          { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'P', type: 'parking', x: -4, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'B', type: 'aisle', x: 4, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'C', type: 'aisle', x: 4, y: 0, z: 4, noStop: false, noParking: true, capacity: 1, allowedDirections: [] }
+        ],
+        edges: [
+          { id: 'A-B', from: 'A', to: 'B', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'A-B', noParking: true },
+          { id: 'B-C', from: 'B', to: 'C', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'B-C', noParking: true }
+        ],
+        zones: []
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['A', 'B', 'C']);
+
+    const observedYaw: Array<number | undefined> = [];
+    for (let index = 0; index < 60; index += 1) {
+      sim.step(0.2);
+      observedYaw.push(sim.getState().vehicles.find((vehicle) => vehicle.id === 'SH-01')?.yaw);
+    }
+
+    expect(observedYaw.every((yaw) => yaw === 0)).toBe(true);
+    expect(sim.getState().vehicles.find((vehicle) => vehicle.id === 'SH-01')).toMatchObject({
+      currentNodeId: 'C',
+      x: 4,
+      z: 4
+    });
+  });
+
   it('blocks opposite-direction same-edge movement with an active edge reservation', () => {
     const scenario = testScenario({
       layout: {
