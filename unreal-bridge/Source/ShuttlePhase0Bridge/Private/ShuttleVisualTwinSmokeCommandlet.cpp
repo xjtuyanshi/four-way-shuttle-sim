@@ -36,6 +36,8 @@ bool StaticSceneContractPass(const FShuttleStaticSceneContractForSmoke& Contract
         Contract.StorageRows == 16 &&
         Contract.StorageColumns == 24 &&
         Contract.StorageCellCount == 384 &&
+        Contract.BlockedCellCount == 0 &&
+        Contract.StructuralCellCount == 0 &&
         Contract.TrackBedCount == 474 &&
         Contract.StorageLaneTrackCount == 400 &&
         Contract.SideAisleTrackCount == 42 &&
@@ -53,6 +55,7 @@ bool StaticSceneContractPass(const FShuttleStaticSceneContractForSmoke& Contract
         Contract.TransferRollerCount == 48 &&
         Contract.LiftBlockCount == 8 &&
         Contract.StorageCells.Num() == 384 &&
+        Contract.BlockedCells.Num() == 0 &&
         Contract.TrackBeds.Num() == 474 &&
         Contract.LiftPads.Num() == 8 &&
         Contract.ParkingPads.Num() == 4 &&
@@ -72,6 +75,25 @@ TSharedRef<FJsonObject> StorageCellToJson(const FShuttleStaticSceneStorageCellFo
     Output->SetNumberField(TEXT("zM"), Cell.ZM);
     Output->SetNumberField(TEXT("lengthXM"), Cell.LengthXM);
     Output->SetNumberField(TEXT("lengthZM"), Cell.LengthZM);
+    return Output;
+}
+
+TSharedRef<FJsonObject> BlockedCellToJson(const FShuttleStaticSceneBlockedCellForSmoke& Cell)
+{
+    TSharedRef<FJsonObject> Output = MakeShared<FJsonObject>();
+    Output->SetStringField(TEXT("id"), Cell.Id);
+    Output->SetStringField(TEXT("role"), Cell.Role);
+    Output->SetNumberField(TEXT("xM"), Cell.XM);
+    Output->SetNumberField(TEXT("yM"), Cell.YM);
+    Output->SetNumberField(TEXT("zM"), Cell.ZM);
+    Output->SetNumberField(TEXT("lengthXM"), Cell.LengthXM);
+    Output->SetNumberField(TEXT("lengthZM"), Cell.LengthZM);
+    Output->SetStringField(TEXT("source"), Cell.Source);
+    Output->SetStringField(TEXT("confidence"), Cell.Confidence);
+    if (!Cell.Note.IsEmpty())
+    {
+        Output->SetStringField(TEXT("note"), Cell.Note);
+    }
     return Output;
 }
 
@@ -124,12 +146,15 @@ TSharedRef<FJsonObject> StaticSceneContractToJson(const FShuttleStaticSceneContr
     Summary->SetStringField(TEXT("schemaVersion"), TEXT("shuttle.unrealStaticScene.v1"));
     Summary->SetBoolField(TEXT("pass"), bPass);
     Summary->SetArrayField(TEXT("storageCells"), ToJsonArray(Contract.StorageCells, StorageCellToJson));
+    Summary->SetArrayField(TEXT("blockedCells"), ToJsonArray(Contract.BlockedCells, BlockedCellToJson));
     Summary->SetArrayField(TEXT("trackBeds"), ToJsonArray(Contract.TrackBeds, TrackBedToJson));
     Summary->SetArrayField(TEXT("liftPads"), ToJsonArray(Contract.LiftPads, PadToJson));
     Summary->SetArrayField(TEXT("parkingPads"), ToJsonArray(Contract.ParkingPads, PadToJson));
     Summary->SetNumberField(TEXT("storageRows"), Contract.StorageRows);
     Summary->SetNumberField(TEXT("storageColumns"), Contract.StorageColumns);
     Summary->SetNumberField(TEXT("storageCellCount"), Contract.StorageCellCount);
+    Summary->SetNumberField(TEXT("blockedCellCount"), Contract.BlockedCellCount);
+    Summary->SetNumberField(TEXT("structuralCellCount"), Contract.StructuralCellCount);
     Summary->SetNumberField(TEXT("trackBedCount"), Contract.TrackBedCount);
     Summary->SetNumberField(TEXT("storageLaneTrackCount"), Contract.StorageLaneTrackCount);
     Summary->SetNumberField(TEXT("sideAisleTrackCount"), Contract.SideAisleTrackCount);

@@ -123,6 +123,19 @@ export const LayoutCalibrationDimensionSchema = z.object({
   note: z.string().optional()
 });
 
+export const LayoutBlockedCellSchema = z.object({
+  id: z.string(),
+  role: z.enum(['blocked', 'structural']),
+  xM: z.number(),
+  yM: z.number().default(0),
+  zM: z.number(),
+  lengthXM: z.number().positive(),
+  lengthZM: z.number().positive(),
+  source: LayoutCalibrationSourceSchema,
+  confidence: LayoutCalibrationConfidenceSchema,
+  note: z.string().optional()
+});
+
 export const LayoutCalibrationProfileSchema = z.object({
   id: z.string(),
   label: z.string(),
@@ -130,6 +143,7 @@ export const LayoutCalibrationProfileSchema = z.object({
   units: z.literal('meter').default('meter'),
   sourceDescription: z.string(),
   dimensions: z.array(LayoutCalibrationDimensionSchema).default([]),
+  blockedCells: z.array(LayoutBlockedCellSchema).default([]),
   notes: z.array(z.string()).default([])
 });
 
@@ -454,6 +468,7 @@ export const ShuttleStreamMessageSchema = z.discriminatedUnion('type', [
 
 export type Coordinate3 = z.infer<typeof Coordinate3Schema>;
 export type LayoutCalibrationProfile = z.infer<typeof LayoutCalibrationProfileSchema>;
+export type LayoutBlockedCell = z.infer<typeof LayoutBlockedCellSchema>;
 export type ShuttleScenario = z.infer<typeof ShuttleScenarioSchema>;
 export type VehicleState = z.infer<typeof VehicleStateSchema>;
 export type TaskStateRecord = z.infer<typeof TaskStateRecordSchema>;

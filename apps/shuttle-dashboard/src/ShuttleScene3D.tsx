@@ -7,6 +7,7 @@ import { summarizeScenarioStaticSceneContract, type ShuttleStaticSceneContract }
 type ShuttleNode = ShuttleScenario['layout']['nodes'][number];
 type ShuttleEdge = ShuttleScenario['layout']['edges'][number];
 type ShuttleStaticSceneStorageCell = ShuttleStaticSceneContract['storageCells'][number];
+type ShuttleStaticSceneBlockedCell = ShuttleStaticSceneContract['blockedCells'][number];
 type ShuttleStaticScenePad = ShuttleStaticSceneContract['liftPads'][number];
 type ShuttleStaticSceneTrackBed = ShuttleStaticSceneContract['trackBeds'][number];
 
@@ -52,6 +53,8 @@ const CAD_STORAGE_FILL = 'rgba(103, 72, 176, 0.2)';
 const CAD_STORAGE_STROKE = 'rgba(176, 111, 255, 0.86)';
 const CAD_AISLE_FILL = 'rgba(231, 190, 44, 0.22)';
 const CAD_AISLE_STROKE = 'rgba(246, 214, 62, 0.92)';
+const CAD_BLOCKED_FILL = 'rgba(101, 118, 111, 0.26)';
+const CAD_BLOCKED_STROKE = 'rgba(151, 183, 167, 0.88)';
 const CAD_DIMENSION_STROKE = 'rgba(222, 231, 236, 0.76)';
 
 function computeBounds(nodes: ShuttleNode[]): {
@@ -318,6 +321,21 @@ function createCadFloorTexture(
     ctx.fillStyle = 'rgba(94, 70, 164, 0.16)';
     ctx.strokeStyle = '#9d6cff';
     ctx.lineWidth = 2;
+    ctx.fillRect(rect.left, rect.top, rect.width, rect.height);
+    ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
+    ctx.beginPath();
+    ctx.moveTo(rect.left, rect.top);
+    ctx.lineTo(rect.left + rect.width, rect.top + rect.height);
+    ctx.moveTo(rect.left + rect.width, rect.top);
+    ctx.lineTo(rect.left, rect.top + rect.height);
+    ctx.stroke();
+  }
+
+  for (const cell of staticScene.blockedCells) {
+    const rect = rectForMeterBox(cell.xM, cell.zM, cell.lengthXM, cell.lengthZM);
+    ctx.fillStyle = CAD_BLOCKED_FILL;
+    ctx.strokeStyle = CAD_BLOCKED_STROKE;
+    ctx.lineWidth = 3;
     ctx.fillRect(rect.left, rect.top, rect.width, rect.height);
     ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
     ctx.beginPath();
@@ -635,6 +653,30 @@ function createStorageTrackCell(cell: ShuttleStaticSceneStorageCell): THREE.Grou
     tie.position.set(x, 0.095, 0);
     tie.receiveShadow = true;
     group.add(tie);
+  }
+
+  return group;
+}
+
+function createBlockedCellMarker(cell: ShuttleStaticSceneBlockedCell): THREE.Group {
+  const group = new THREE.Group();
+  group.position.set(cell.xM, cell.yM, cell.zM);
+
+  const baseMaterial = material(cell.role === 'structural' ? 0x354640 : 0x473f38, 0.8, 0.08);
+  const braceMaterial = material(cell.role === 'structural' ? 0x8fb8a4 : 0xd19d6b, 0.58, 0.12);
+  const base = new THREE.Mesh(new THREE.BoxGeometry(cell.lengthXM * 0.94, 0.026, cell.lengthZM * 0.94), baseMaterial);
+  base.position.y = 0.071;
+  base.receiveShadow = true;
+  group.add(base);
+
+  for (const [startX, startZ, endX, endZ] of [
+    [-cell.lengthXM * 0.42, -cell.lengthZM * 0.42, cell.lengthXM * 0.42, cell.lengthZM * 0.42],
+    [cell.lengthXM * 0.42, -cell.lengthZM * 0.42, -cell.lengthXM * 0.42, cell.lengthZM * 0.42]
+  ] satisfies Array<[number, number, number, number]>) {
+    const brace = createSegment({ x: startX, z: startZ }, { x: endX, z: endZ }, 0.02, braceMaterial, 0.116);
+    if (brace) {
+      group.add(brace);
+    }
   }
 
   return group;
@@ -1010,6 +1052,10 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario): voi
 
   for (const cell of staticScene.storageCells) {
     runtime.staticGroup.add(createStorageTrackCell(cell));
+  }
+
+  for (const cell of staticScene.blockedCells) {
+    runtime.staticGroup.add(createBlockedCellMarker(cell));
   }
 
   for (const node of scenario.layout.nodes) {

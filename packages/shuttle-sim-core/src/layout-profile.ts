@@ -88,6 +88,7 @@ export const DEFAULT_SHUTTLE_LAYOUT_PROFILE: ShuttleLayoutGeometryProfile = {
         confidence: 'low'
       }
     ],
+    blockedCells: [],
     notes: [
       'Single-floor simulation only; lifts are dedicated inbound/outbound black-box ports.',
       'Storage cells are contiguous drivable track positions inside each island, not freestanding boxes.',

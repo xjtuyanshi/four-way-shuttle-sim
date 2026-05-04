@@ -17,12 +17,15 @@ export type ShuttleStaticSceneContract = {
   units: 'meter';
   layoutCalibrationProfile: ShuttleStaticSceneLayoutCalibrationProfile | null;
   storageCells: ShuttleStaticSceneStorageCell[];
+  blockedCells: ShuttleStaticSceneBlockedCell[];
   trackBeds: ShuttleStaticSceneTrackBed[];
   liftPads: ShuttleStaticScenePad[];
   parkingPads: ShuttleStaticScenePad[];
   storageRows: number;
   storageColumns: number;
   storageCellCount: number;
+  blockedCellCount: number;
+  structuralCellCount: number;
   trackBedCount: number;
   storageLaneTrackCount: number;
   sideAisleTrackCount: number;
@@ -56,6 +59,7 @@ export type ShuttleStaticSceneContract = {
 };
 
 export type ShuttleStaticSceneLayoutCalibrationProfile = NonNullable<ShuttleScenario['layout']['calibrationProfile']>;
+export type ShuttleStaticSceneBlockedCell = ShuttleStaticSceneLayoutCalibrationProfile['blockedCells'][number];
 
 export type ShuttleStaticSceneStorageCell = {
   id: string;
@@ -232,6 +236,14 @@ function trackCategoryForEdge(
 
 export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario): ShuttleStaticSceneContract {
   const storageNodes = scenario.layout.nodes.filter((node) => node.type === 'storage');
+  const blockedCells = sortedById((scenario.layout.calibrationProfile?.blockedCells ?? []).map((cell) => ({
+    ...cell,
+    xM: round(cell.xM, 6),
+    yM: round(cell.yM, 6),
+    zM: round(cell.zM, 6),
+    lengthXM: round(cell.lengthXM, 6),
+    lengthZM: round(cell.lengthZM, 6)
+  })));
   const storageXs = sortedUniqueNumbers(storageNodes.map((node) => node.x));
   const storageZs = sortedUniqueNumbers(storageNodes.map((node) => node.z));
   const storagePitchXM = minimumPositivePitch(storageNodes.map((node) => node.x));
@@ -370,12 +382,15 @@ export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario):
     units: scenario.layout.units,
     layoutCalibrationProfile: scenario.layout.calibrationProfile,
     storageCells: sortedById(storageCells),
+    blockedCells,
     trackBeds: sortedById(trackBeds),
     liftPads,
     parkingPads,
     storageRows,
     storageColumns,
     storageCellCount: storageNodes.length,
+    blockedCellCount: blockedCells.length,
+    structuralCellCount: blockedCells.filter((cell) => cell.role === 'structural').length,
     trackBedCount,
     storageLaneTrackCount,
     sideAisleTrackCount,

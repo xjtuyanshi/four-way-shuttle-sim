@@ -134,6 +134,9 @@ describe('dashboard static scene contract', () => {
     expect(contract.layoutCalibrationProfile?.id).toBe('phase0-cad-assumption-v1');
     expect(contract.layoutCalibrationProfile?.status).toBe('assumption');
     expect(contract.storageCells).toHaveLength(384);
+    expect(contract.blockedCells).toEqual([]);
+    expect(contract.blockedCellCount).toBe(0);
+    expect(contract.structuralCellCount).toBe(0);
     expect(contract.storageCells.every((cell) => cell.lengthXM === 1.25 && cell.lengthZM === 1.2)).toBe(true);
     expect(contract.storageRows).toBe(16);
     expect(contract.storageColumns).toBe(24);

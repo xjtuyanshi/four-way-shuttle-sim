@@ -1,6 +1,6 @@
 # Real Layout Calibration Notes
 
-This note captures the user-provided CAD screenshot from `IMG_8078.DNG`. The DNG was converted locally to `output/references/IMG_8078.jpg` for inspection only; the image artifact is intentionally not committed.
+This note captures the user-provided CAD screenshot from `IMG_8078.DNG`. The DNG can be converted locally for inspection only; converted image artifacts are intentionally not committed.
 
 ## Interpreted CAD Semantics
 
@@ -29,6 +29,7 @@ These placeholders are now encoded in the SimCore default layout calibration pro
 - Draw storage as dense purple track-cell grids with no interior gap inside each island.
 - Draw the main corridor as yellow rails/guide lines, with adjacent lanes represented by distinct nodes and edges.
 - Draw lift ports as yellow transfer stations with rollers and posts. Do not draw gray boxes in the middle of the storage area unless they represent a specific blocked/structural CAD cell.
+- Encode confirmed blocked/structural cells as `layoutCalibrationProfile.blockedCells`; these are visual/reference cells only unless later routing work explicitly turns them into graph obstacles.
 - Keep all vehicle motion orthogonal. No diagonal shortcut edges may be introduced to match the picture.
 - Keep FIFO as an inventory policy. Storage cells are positions on the shuttle track grid, while inbound/outbound sequencing remains controlled by SimCore tasks and reservations.
 - Keep visual storage cell footprints equal to the calibrated storage pitch inside each dense island so adjacent cells read as a contiguous grid, not as sparse boxes.

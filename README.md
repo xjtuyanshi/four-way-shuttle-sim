@@ -37,6 +37,8 @@ The default physical layout is generated from the assumption-grade calibration p
 
 The checked-in golden fixture `config/shuttle/static-scene-contract.golden.json` freezes the current default static-scene contract. SimCore, the dashboard, and the Unreal smoke path compare against it so layout, unit, storage-cell, track, lift, and calibration metadata drift is explicit.
 
+CAD-visible blocked or structural cells are represented as non-routable `layoutCalibrationProfile.blockedCells` metadata and mirrored into the static-scene contract as `blockedCells`. The default profile keeps that list empty until exact CAD/site coordinates are available, so the simulator does not invent unusable storage positions.
+
 `pnpm shuttle:validate` runs the Phase 0 acceptance gate without rendering: same-seed event-log hash stability, a small seed sweep, a 600-second long-run sweep, prerequisite inspection, KPI summary, deadlock checks, reservation coverage checks, and physical safety checks for speed, acceleration, finite coordinates, and rectangular vehicle footprint clearance.
 
 Phase 0 enforces edge, node, and zone capacity as `1`, and requires at least one parking node per vehicle so reset can assign one authoritative current-node occupant per shuttle. Multi-capacity reservation accounting is reserved for Phase 1.

@@ -64,6 +64,7 @@
         "confidence": "low"
       }
     ],
+    "blockedCells": [],
     "notes": [
       "Single-floor simulation only; lifts are dedicated inbound/outbound black-box ports.",
       "Storage cells are contiguous drivable track positions inside each island, not freestanding boxes.",
@@ -3913,6 +3914,7 @@
       "lengthZM": 1.2
     }
   ],
+  "blockedCells": [],
   "trackBeds": [
     {
       "id": "inbound-lift-bottom-01-main-north-02",
@@ -9730,6 +9732,8 @@
   "storageRows": 16,
   "storageColumns": 24,
   "storageCellCount": 384,
+  "blockedCellCount": 0,
+  "structuralCellCount": 0,
   "trackBedCount": 474,
   "storageLaneTrackCount": 400,
   "sideAisleTrackCount": 42,

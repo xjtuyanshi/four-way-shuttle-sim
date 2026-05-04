@@ -127,6 +127,8 @@ function assertStaticSceneParityWithSimCore(unrealSummary, simCoreContract) {
     'storageRows',
     'storageColumns',
     'storageCellCount',
+    'blockedCellCount',
+    'structuralCellCount',
     'trackBedCount',
     'storageLaneTrackCount',
     'sideAisleTrackCount',
@@ -169,6 +171,13 @@ function assertStaticSceneParityWithSimCore(unrealSummary, simCoreContract) {
   assertStaticSceneElementArrayParity(
     'storageCells',
     ['id', 'row', 'column'],
+    ['xM', 'yM', 'zM', 'lengthXM', 'lengthZM'],
+    unrealSummary,
+    simCoreContract
+  );
+  assertStaticSceneElementArrayParity(
+    'blockedCells',
+    ['id', 'role', 'source', 'confidence', 'note'],
     ['xM', 'yM', 'zM', 'lengthXM', 'lengthZM'],
     unrealSummary,
     simCoreContract

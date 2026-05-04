@@ -25,6 +25,7 @@ import {
 } from './layout-profile.js';
 export type {
   ShuttleStaticSceneContract,
+  ShuttleStaticSceneBlockedCell,
   ShuttleStaticSceneLayoutCalibrationProfile,
   ShuttleStaticScenePad,
   ShuttleStaticSceneStorageCell,

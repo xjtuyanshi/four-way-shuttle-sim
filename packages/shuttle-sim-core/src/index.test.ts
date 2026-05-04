@@ -142,6 +142,7 @@ describe('shuttle phase 0 SimCore', () => {
       status: 'assumption',
       units: 'meter'
     });
+    expect(parsed.layout.calibrationProfile?.blockedCells).toEqual([]);
     expect(parsed.layout.calibrationProfile?.dimensions.map((dimension) => dimension.key)).toEqual([
       'storageCellPitchX',
       'storageCellPitchZ',
@@ -224,6 +225,8 @@ describe('shuttle phase 0 SimCore', () => {
       storageRows: 16,
       storageColumns: 24,
       storageCellCount: 384,
+      blockedCellCount: 0,
+      structuralCellCount: 0,
       trackBedCount: 474,
       storageLaneTrackCount: 400,
       sideAisleTrackCount: 42,
@@ -257,6 +260,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(contract.inboundLiftXM).toBeCloseTo(25, 6);
     expect(contract.outboundLiftXM).toBeCloseTo(25, 6);
     expect(contract.storageCells).toHaveLength(384);
+    expect(contract.blockedCells).toEqual([]);
     expect(contract.storageIslandCount).toBe(8);
     expect(contract.denseStorageIslands).toBe(true);
     expect(contract.denseStorageBlock).toBe(false);
@@ -318,6 +322,57 @@ describe('shuttle phase 0 SimCore', () => {
     ]);
     expect(contract.liftPads.filter((pad) => pad.category === 'outboundLift')).toHaveLength(4);
     expect(contract.parkingPads.map((pad) => pad.id).sort()).toEqual(['parking-a', 'parking-b', 'parking-c', 'parking-d']);
+  });
+
+  it('carries blocked and structural CAD reference cells into the static scene contract without routing them', () => {
+    const contract = summarizeScenarioStaticSceneContract(createDefaultShuttleScenario({
+      layoutProfile: {
+        calibrationProfile: {
+          id: 'blocked-cell-contract-test-profile',
+          label: 'Blocked cell contract test profile',
+          status: 'partial-cad',
+          sourceDescription: 'Test profile with explicit non-storage CAD reference cells.',
+          blockedCells: [
+            {
+              id: 'cad-structural-gap-01',
+              role: 'structural',
+              xM: 17.25,
+              yM: 0,
+              zM: 0,
+              lengthXM: 1.25,
+              lengthZM: 1.2,
+              source: 'cad',
+              confidence: 'medium',
+              note: 'Reference cell drawn from CAD as non-routable structure.'
+            },
+            {
+              id: 'cad-blocked-gap-01',
+              role: 'blocked',
+              xM: 28.5,
+              yM: 0,
+              zM: 0,
+              lengthXM: 1.25,
+              lengthZM: 1.2,
+              source: 'site',
+              confidence: 'high'
+            }
+          ]
+        }
+      }
+    }));
+
+    expect(contract.blockedCellCount).toBe(2);
+    expect(contract.structuralCellCount).toBe(1);
+    expect(contract.blockedCells.map((cell) => cell.id)).toEqual(['cad-blocked-gap-01', 'cad-structural-gap-01']);
+    expect(contract.blockedCells[0]).toMatchObject({
+      role: 'blocked',
+      xM: 28.5,
+      zM: 0,
+      source: 'site',
+      confidence: 'high'
+    });
+    expect(contract.storageCells.some((cell) => cell.id === 'cad-blocked-gap-01')).toBe(false);
+    expect(contract.trackBeds.some((track) => track.id === 'cad-blocked-gap-01')).toBe(false);
   });
 
   it('keeps layout-profile overrides synchronized with calibration metadata and static-scene footprints', () => {

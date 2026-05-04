@@ -22,6 +22,20 @@ struct FShuttleStaticSceneStorageCellForSmoke
     float LengthZM = 0.0f;
 };
 
+struct FShuttleStaticSceneBlockedCellForSmoke
+{
+    FString Id;
+    FString Role;
+    float XM = 0.0f;
+    float YM = 0.0f;
+    float ZM = 0.0f;
+    float LengthXM = 0.0f;
+    float LengthZM = 0.0f;
+    FString Source;
+    FString Confidence;
+    FString Note;
+};
+
 struct FShuttleStaticSceneTrackBedForSmoke
 {
     FString Id;
@@ -51,12 +65,15 @@ struct FShuttleStaticScenePadForSmoke
 struct FShuttleStaticSceneContractForSmoke
 {
     TArray<FShuttleStaticSceneStorageCellForSmoke> StorageCells;
+    TArray<FShuttleStaticSceneBlockedCellForSmoke> BlockedCells;
     TArray<FShuttleStaticSceneTrackBedForSmoke> TrackBeds;
     TArray<FShuttleStaticScenePadForSmoke> LiftPads;
     TArray<FShuttleStaticScenePadForSmoke> ParkingPads;
     int32 StorageRows = 0;
     int32 StorageColumns = 0;
     int32 StorageCellCount = 0;
+    int32 BlockedCellCount = 0;
+    int32 StructuralCellCount = 0;
     int32 TrackBedCount = 0;
     int32 StorageLaneTrackCount = 0;
     int32 SideAisleTrackCount = 0;
