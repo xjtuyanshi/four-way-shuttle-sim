@@ -4,8 +4,9 @@ Use this packet to review the current public main branch:
 
 - Repository: `https://github.com/xjtuyanshi/four-way-shuttle-sim` (public)
 - Review branch: `main`
-- Review commit: `ff1269d Update Phase 1 roadmap after hardening`
+- Review commit: `f5a8247 Refresh Pro review packet for current main`
 - Immediate prior commits to inspect first:
+  - `ff1269d Update Phase 1 roadmap after hardening`
   - `d1d34e1 Add targeted congestion regression tests`
   - `53c48f8 Expose storage policy in static scene contract`
   - `e0b4d62 Expose IE-focused dashboard diagnostics`
@@ -267,7 +268,7 @@ CompileAllBlueprints reported 0 blueprint errors / 0 blueprint warnings
 
 ## Review Request
 
-Please review the current public `main` head (`ff1269d`) as a multidisciplinary reviewer. Prioritize correctness and engineering realism over style. This is no longer only a software review: also challenge whether the modeled warehouse behavior makes sense as a four-way shuttle / pallet storage system.
+Please review the current public `main` head (`f5a8247`) as a multidisciplinary reviewer. Prioritize correctness and engineering realism over style. This is no longer only a software review: also challenge whether the modeled warehouse behavior makes sense as a four-way shuttle / pallet storage system.
 
 Focus areas:
 
