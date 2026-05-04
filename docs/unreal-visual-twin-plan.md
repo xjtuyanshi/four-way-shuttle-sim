@@ -4,7 +4,7 @@ This plan starts after the merged Phase 0 hardening. It keeps SimCore / WCS-lite
 
 ## Source Of Truth
 
-- SimCore owns task generation, FIFO inventory, routing, reservations, traffic blocking, KPI truth, event logs, and validation.
+- SimCore owns task generation, row-level contiguous lane-fill inventory policy, routing, reservations, traffic blocking, KPI truth, event logs, and validation.
 - The API streams state through `ws://localhost:8791/shuttle-ws`.
 - Unreal subscribes to the stream, interpolates actor transforms, and renders the scene.
 - Unreal may surface visual or collision anomalies later, but it must not mutate dispatch state or create KPI truth.
@@ -39,7 +39,7 @@ Dynamic scene:
 
 1. Run `pnpm unreal:setup` to generate a clean UE 5.7 project under `output/unreal/ShuttleVisualTwin`.
 2. The setup script copies `unreal-bridge` into `Plugins/ShuttlePhase0Bridge`.
-3. The setup script enables the `ShuttlePhase0Bridge` and `PixelStreaming` plugins in the generated `.uproject`.
+3. The setup script enables the `ShuttlePhase0Bridge` and `PixelStreaming2` plugins in the generated `.uproject`, and fails early if the validated UE 5.7 internal capture headers are missing.
 4. Connect `UShuttleStateSubscriberSubsystem` to `ws://localhost:8791/shuttle-ws`.
 5. Spawn or place one `AShuttleVisualTwinActor` per expected vehicle.
 6. Assign each actor's `VehicleId`, then bind `OnVehicleState` to `ApplyAuthoritativeState`.
@@ -77,7 +77,7 @@ Before Pixel Streaming soak:
 - UE source bridge compile smoke.
 - UE headless commandlet smoke.
 - Long-run validation must meet explicit thresholds reported in `validation.longRun.thresholds`, not only positive throughput.
-- Unreal setup/smoke must print machine-readable readiness diagnostics showing the generated project path, engine association, enabled `ShuttlePhase0Bridge` and `PixelStreaming` plugins, copied bridge source files, and compiled bridge binary.
+- Unreal setup/smoke must print machine-readable readiness diagnostics showing the generated project path, engine association, enabled `ShuttlePhase0Bridge` and `PixelStreaming2` plugins, copied bridge source files, the validated internal capture contract for UE 5.7, and the compiled bridge binary.
 - The UE smoke commandlet must instantiate `AShuttleVisualTwinRuntimeActor` headlessly, write a static-scene contract JSON summary, compare it against the SimCore default static-scene contract, verify the default single-level multi-bank storage field, dedicated lift ports, orthogonal-only tracks, and compare item-level storage cell, track-bed, lift-pad, and parking-pad IDs/categories/coordinates/sizes/rows/sides/orientations where applicable. It also exercises the synthetic vehicle binding path: one actor spawned per `VehicleId`, subsequent updates reuse the actor, SimCore-to-Unreal coordinate/yaw conversion holds, and carried-pallet visibility follows `loaded`.
 - The WebSocket smoke must start the API on an isolated local port, connect to `/shuttle-ws`, validate `connectionRecovered`, `simState`, `vehicleState`, and `kpiUpdate`, verify required vehicle pose/load fields, set 4x playback speed, and prove streamed simulation time advances.
 - The UE live bridge smoke must start the local API on an isolated port, create a headless `UGameInstance`, spawn `AShuttleVisualTwinRuntimeActor`, connect it to the live `/shuttle-ws` stream, and prove the bridge saw `connectionRecovered`, `simState`, a root `vehicleState`, and `kpiUpdate`; simulation time advanced; the expected vehicle actor count exists; no duplicate owned actors were spawned; final target pose/load binding is within tolerance; and the commandlet wrote a JSON summary with message counts plus IE-facing KPI fields.

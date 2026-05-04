@@ -11,7 +11,7 @@ This is a source-only Unreal plugin scaffold for Phase 0. It is intentionally th
 
 1. Install Unreal Engine 5.7.4 and full Xcode.
 2. Copy `unreal-bridge` into an Unreal project's `Plugins/ShuttlePhase0Bridge` directory.
-3. Enable the `Pixel Streaming` plugin for runtime streaming. `WebSockets` is linked as an Unreal module by this bridge; it is not enabled as a separate engine plugin in UE 5.7.
+3. Enable the `PixelStreaming2` plugin for runtime streaming. The generated local project and browser smoke path on macOS UE 5.7.4 use `PixelStreaming2` with render-target capture; packaged runtime soak remains out of scope for Phase 0. `WebSockets` is linked as an Unreal module by this bridge; it is not enabled as a separate engine plugin in UE 5.7.
 4. For the default Phase 0 scene, place one `AShuttleVisualTwinRuntimeActor` at world origin.
 5. Set its `VehicleActorClass` only if you want to use a custom shuttle mesh actor; otherwise it spawns `AShuttleVisualTwinActor` with a basic visible shuttle body and carried-pallet placeholder.
 6. The runtime actor auto-connects to `ws://localhost:8791/shuttle-ws`, spawns vehicles by `VehicleId`, and creates a one-level scene with 16x24 multi-bank storage cells, low four-way rail detail in every storage cell, side aisles, a two-lane main aisle, roller transfer detail on dedicated inbound/outbound lift pads, black-box lift housings, and parking pads.

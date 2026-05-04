@@ -1282,6 +1282,9 @@ export class ShuttleSimCore {
       if (firstEmptyIndex < 0) {
         continue;
       }
+      // Phase 0 storage policy is an explicit contiguous lane-fill contract:
+      // each row fills from the outfeed side toward the infeed side, and the
+      // allocator does not compact or skip gaps inside a partially used row.
       const occupiedTowardOutfeed = lane.slice(0, firstEmptyIndex).every((leftSideNode) => occupancy.has(leftSideNode.id));
       const emptyTowardInfeed = lane.slice(firstEmptyIndex + 1).every((rightSideNode) => !occupancy.has(rightSideNode.id));
       if (occupiedTowardOutfeed && emptyTowardInfeed) {

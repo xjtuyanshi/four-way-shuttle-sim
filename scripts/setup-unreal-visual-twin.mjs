@@ -10,6 +10,15 @@ const templateDir = path.join(ueRoot, 'Templates', 'TP_Blank');
 const outputDir = path.resolve(process.argv[2] ?? path.join(repoRoot, 'output', 'unreal', 'ShuttleVisualTwin'));
 const projectName = 'ShuttleVisualTwin';
 const templateName = 'TP_Blank';
+const pixelStreaming2Contract = {
+  supportedEngineAssociation: '5.7',
+  requiredFiles: [
+    path.join(ueRoot, 'Engine', 'Plugins', 'Media', 'PixelStreaming2', 'Source', 'PixelStreaming2', 'Public', 'IPixelStreaming2Module.h'),
+    path.join(ueRoot, 'Engine', 'Plugins', 'Media', 'PixelStreaming2', 'Source', 'PixelStreaming2Core', 'Public', 'IPixelStreaming2Streamer.h'),
+    path.join(ueRoot, 'Engine', 'Plugins', 'Media', 'PixelStreaming2', 'Source', 'PixelStreaming2', 'Internal', 'VideoProducerRenderTarget.h'),
+    path.join(ueRoot, 'Engine', 'Plugins', 'Media', 'PixelStreaming2', 'Source', 'PixelStreaming2', 'Internal', 'VideoProducerMediaCapture.h')
+  ]
+};
 
 async function assertPath(label, targetPath) {
   if (!existsSync(targetPath)) {
@@ -23,6 +32,22 @@ async function assertExecutable(label, targetPath) {
     accessSync(targetPath, constants.X_OK);
   } catch {
     throw new Error(`${label} is not executable: ${targetPath}`);
+  }
+}
+
+async function assertPixelStreaming2InternalContract() {
+  const missingFiles = pixelStreaming2Contract.requiredFiles.filter((targetPath) => !existsSync(targetPath));
+  if (missingFiles.length > 0) {
+    throw new Error(
+      [
+        `UE ${pixelStreaming2Contract.supportedEngineAssociation} PixelStreaming2 internal capture contract is incomplete.`,
+        'The generated visual-twin bootstrap depends on these engine headers/classes:',
+        ...pixelStreaming2Contract.requiredFiles.map((targetPath) => `- ${targetPath}`),
+        'Missing paths:',
+        ...missingFiles.map((targetPath) => `- ${targetPath}`),
+        'Upgrade/downgrade guard: rerun this setup on the validated UE 5.7.4 install, or switch the bootstrap to a public API fallback before regenerating.'
+      ].join('\n')
+    );
   }
 }
 
@@ -413,6 +438,7 @@ async function main() {
   await assertPath('UE 5.7 root', ueRoot);
   await assertPath('UE TP_Blank template', templateDir);
   await assertPath('Shuttle bridge source', path.join(repoRoot, 'unreal-bridge', 'ShuttlePhase0Bridge.uplugin'));
+  await assertPixelStreaming2InternalContract();
 
   await rm(outputDir, { recursive: true, force: true });
   await mkdir(path.dirname(outputDir), { recursive: true });
@@ -438,6 +464,10 @@ async function main() {
     enabledPlugins: projectDescriptor.Plugins
       ?.filter((plugin) => ['ShuttlePhase0Bridge', 'PixelStreaming2'].includes(plugin.Name) && plugin.Enabled)
       .map((plugin) => plugin.Name) ?? [],
+    pixelStreaming2Contract: {
+      supportedEngineAssociation: pixelStreaming2Contract.supportedEngineAssociation,
+      requiredFiles: pixelStreaming2Contract.requiredFiles
+    },
     unrealEditor: path.join(ueRoot, 'Engine', 'Binaries', 'Mac', 'UnrealEditor.app', 'Contents', 'MacOS', 'UnrealEditor')
   };
   await assertExecutable('UE 5.7 editor', summary.unrealEditor);

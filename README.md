@@ -29,7 +29,9 @@ Default local URLs:
 - WebSocket: `ws://localhost:8791/shuttle-ws`
 - Dashboard: `http://localhost:5179`
 
-Unreal Engine 5.7.4 and full Xcode are installed on the local Mac. The source bridge has compile/headless smoke coverage; packaged Pixel Streaming soak is still pending until the real Unreal visual scene exists.
+Unreal Engine 5.7.4 and full Xcode are installed on the local Mac. Local macOS browser smoke has passed with a generated `PixelStreaming2` render-target capture scene plus the source bridge compile/headless smoke path. Packaged runtime soak and release hardening remain out of scope for Phase 0.
+
+Phase 0 storage policy is a conservative row-level contract, not a full industrial throughput proof: inbound placement fills one storage row contiguously from the outfeed side toward the infeed side before opening the next row, outbound drains without hidden compaction, and all reservation capacities remain fixed at `1`.
 
 `pnpm shuttle:validate` runs the Phase 0 acceptance gate without rendering: same-seed event-log hash stability, a small seed sweep, a 600-second long-run sweep, prerequisite inspection, KPI summary, deadlock checks, reservation coverage checks, and physical safety checks for speed, acceleration, finite coordinates, and rectangular vehicle footprint clearance.
 

@@ -431,7 +431,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-02')?.currentNodeId).toBe('main-south-04');
   });
 
-  it('defers outbound work instead of creating phantom pallets when FIFO storage is empty', () => {
+  it('defers outbound work instead of creating phantom pallets when contiguous lane-fill storage is empty', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       durationSec: 10,
       taskGeneration: {
@@ -453,7 +453,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(sim.getEventLog().some((entry) => entry.eventType === 'task-deferred' && entry.reason === 'storage-empty')).toBe(true);
   });
 
-  it('reserves one FIFO storage lane contiguously from outfeed toward infeed before opening the next lane', () => {
+  it('fills one storage row contiguously from outfeed toward infeed before opening the next row', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       durationSec: 120,
       taskGeneration: {
@@ -609,7 +609,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(assignedVehicle?.routeNodeIds).toEqual(expect.arrayContaining(['right-row-06', 'storage-r06-c04', 'storage-r06-c03']));
   });
 
-  it('drains multiple pallets from the same FIFO row without hidden compaction', () => {
+  it('drains multiple pallets from the same storage row without hidden compaction', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       durationSec: 300,
       taskGeneration: {
@@ -680,7 +680,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(sim.getState().loads.filter((load) => load.state === 'delivered').map((load) => load.id).sort()).toEqual(['load-a', 'load-b']);
   });
 
-  it('defers inbound work when FIFO storage cells are stored or already reserved', () => {
+  it('defers inbound work when contiguous lane-fill storage cells are stored or already reserved', () => {
     const scenario = createDefaultShuttleScenario({
       durationSec: 20,
       taskGeneration: {

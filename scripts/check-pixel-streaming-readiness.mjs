@@ -10,6 +10,22 @@ const projectPath = path.resolve(
 );
 const requireInfra = process.argv.includes('--require-infra');
 
+function inspectPixelStreaming2InternalContract() {
+  const requiredFiles = [
+    path.join(ueRoot, 'Engine', 'Plugins', 'Media', 'PixelStreaming2', 'Source', 'PixelStreaming2', 'Public', 'IPixelStreaming2Module.h'),
+    path.join(ueRoot, 'Engine', 'Plugins', 'Media', 'PixelStreaming2', 'Source', 'PixelStreaming2Core', 'Public', 'IPixelStreaming2Streamer.h'),
+    path.join(ueRoot, 'Engine', 'Plugins', 'Media', 'PixelStreaming2', 'Source', 'PixelStreaming2', 'Internal', 'VideoProducerRenderTarget.h'),
+    path.join(ueRoot, 'Engine', 'Plugins', 'Media', 'PixelStreaming2', 'Source', 'PixelStreaming2', 'Internal', 'VideoProducerMediaCapture.h')
+  ];
+  const missingFiles = requiredFiles.filter((candidate) => !existsSync(candidate));
+  return {
+    supportedEngineAssociation: '5.7',
+    requiredFiles,
+    compatible: missingFiles.length === 0,
+    missingFiles
+  };
+}
+
 function isExecutable(targetPath) {
   if (!existsSync(targetPath)) {
     return false;
@@ -68,6 +84,7 @@ const infrastructurePlugin = selectedPlugin.infrastructureInstalled
 const infrastructureCompatible =
   selectedPlugin.infrastructureInstalled ||
   (selectedPlugin.pluginName === 'PixelStreaming2' && infrastructurePlugin.infrastructureInstalled);
+const pixelStreaming2InternalContract = inspectPixelStreaming2InternalContract();
 const unrealEditor = path.join(ueRoot, 'Engine', 'Binaries', 'Mac', 'UnrealEditor.app', 'Contents', 'MacOS', 'UnrealEditor');
 
 const summary = {
@@ -81,20 +98,25 @@ const summary = {
   selectedPixelStreamingPlugin: selectedPlugin.pluginName,
   selectedInfrastructurePlugin: infrastructurePlugin.pluginName,
   signallingWebServerDir: infrastructurePlugin.signallingWebServerDir,
+  pixelStreaming2InternalContract,
   plugins,
-  status: infrastructureCompatible
-    ? selectedPlugin.pluginName === infrastructurePlugin.pluginName
-      ? 'ready'
-      : 'ready-with-shared-pixel-streaming-infrastructure'
-    : 'needs-pixel-streaming-infrastructure',
-  nextCommand: infrastructureCompatible ? null : `"${selectedPlugin.downloader}" -v 5.7`,
-  note: infrastructureCompatible
-    ? 'This check does not download or run Pixel Streaming infrastructure.'
-    : 'This check does not download or run Pixel Streaming infrastructure. Run the nextCommand only after explicit confirmation.'
+  status: !pixelStreaming2InternalContract.compatible
+    ? 'pixelstreaming2-internal-contract-missing'
+    : infrastructureCompatible
+      ? selectedPlugin.pluginName === infrastructurePlugin.pluginName
+        ? 'ready'
+        : 'ready-with-shared-pixel-streaming-infrastructure'
+      : 'needs-pixel-streaming-infrastructure',
+  nextCommand: !pixelStreaming2InternalContract.compatible || infrastructureCompatible ? null : `"${selectedPlugin.downloader}" -v 5.7`,
+  note: !pixelStreaming2InternalContract.compatible
+    ? 'The generated ShuttleVisualTwin bootstrap depends on PixelStreaming2 internal capture headers. Use the validated UE 5.7.4 install or switch the bootstrap to a public API fallback before setup.'
+    : infrastructureCompatible
+      ? 'This check does not download or run Pixel Streaming infrastructure.'
+      : 'This check does not download or run Pixel Streaming infrastructure. Run the nextCommand only after explicit confirmation.'
 };
 
 console.log(JSON.stringify(summary, null, 2));
 
-if (requireInfra && !infrastructureCompatible) {
+if (requireInfra && (!infrastructureCompatible || !pixelStreaming2InternalContract.compatible)) {
   process.exitCode = 1;
 }
