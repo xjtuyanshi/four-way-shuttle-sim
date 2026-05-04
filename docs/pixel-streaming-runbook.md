@@ -10,6 +10,8 @@ This repo keeps SimCore and the dashboard as the authoritative validation layer.
 - The generated project uses a render-target video producer instead of viewport/backbuffer capture. On this Mac, viewport capture connected but streamed black frames; render-target capture streamed the expected warehouse scene in the browser on May 4, 2026.
 - SimCore bridge URL remains `ws://localhost:8791/shuttle-ws` unless overridden on `AShuttleVisualTwinRuntimeActor`.
 - `pnpm unreal:setup` generates a bootstrap game mode for runtime viewing. It spawns the visual twin runtime actor, a top-down orthographic camera, a scene-capture render target, a key light, and binds Pixel Streaming 2 to that render target when the Unreal process is launched with `-PixelStreamingConnectionURL=...`.
+- The locally verified runtime path is `UnrealEditor -game`; a packaged/staged `.app` is a separate packaging gate, not required for the current Pixel Streaming browser smoke.
+- Browser evidence from May 4, 2026 is stored under `output/playwright/`: `pixel-streaming-player.png` and `pixel-streaming-player.webm`. The screenshot was 1200x830 with non-black pixel ratio 0.3692 and bright pixel ratio 0.2257.
 
 ## Readiness Check
 
@@ -60,13 +62,15 @@ pnpm shuttle:ws-smoke
 
 ```bash
 cd "/Users/Shared/Epic Games/UE_5.7/Engine/Plugins/Media/PixelStreaming/Resources/WebServers/SignallingWebServer"
-npm start -- --player_port 8080 --streamer_port 8888 --http_root www --homepage player.html --log_level_console info
+node dist/index.js --serve --player_port 8080 --streamer_port 8888 --http_root www --homepage player.html --log_level_console info
 ```
 
 5. Launch the Unreal visual twin in a non-headless mode with Pixel Streaming enabled:
 
 ```bash
-"/Users/luke/codex projects/DES Sim/four-way-shuttle-sim/output/unreal/ShuttleVisualTwin/Saved/StagedBuilds/Mac/ShuttleVisualTwin.app/Contents/MacOS/ShuttleVisualTwin" \
+"/Users/Shared/Epic Games/UE_5.7/Engine/Binaries/Mac/UnrealEditor.app/Contents/MacOS/UnrealEditor" \
+  "/Users/luke/codex projects/DES Sim/four-way-shuttle-sim/output/unreal/ShuttleVisualTwin/ShuttleVisualTwin.uproject" \
+  -game \
   -ResX=1280 -ResY=720 -Windowed \
   -PixelStreamingConnectionURL=ws://127.0.0.1:8888 \
   -PixelStreamingUseMediaCapture \
@@ -85,7 +89,7 @@ npm start -- --player_port 8080 --streamer_port 8888 --http_root www --homepage 
 
 ## Mac Packaging Gate
 
-A packaged or staged Mac runtime requires Xcode first-launch components to be fully available. On this Mac, Xcode/CoreSimulator is now ready, and `BuildCookRun -cook -stage -skippackage` has produced a runnable staged `.app`.
+A packaged or staged Mac runtime requires Xcode first-launch components to be fully available. On this Mac, Xcode/CoreSimulator is ready, but the current verified Pixel Streaming smoke uses `UnrealEditor -game`. Treat `BuildCookRun -cook -stage -skippackage` and packaged `.app` validation as the next packaging task, not as a prerequisite for browser-stream smoke.
 
 ```bash
 xcodebuild -checkFirstLaunchStatus
