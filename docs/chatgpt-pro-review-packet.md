@@ -143,9 +143,9 @@ Hardening highlights:
 - Enforced capacity `= 1` for Phase 0 instead of partially supporting multi-capacity reservations.
 - Dashboard now merges incremental `vehicleState` and `kpiUpdate` WebSocket messages into the current state snapshot.
 
-## Latest ChatGPT Pro Review Fixes
+## Prior ChatGPT Pro Review Fixes
 
-The latest public-PR ChatGPT Pro verdict was: merge after fixes. This local pass addresses those blockers without adding product features or redesigning architecture.
+The prior public-branch ChatGPT Pro verdict was: merge after fixes. This local pass addresses those blockers without adding product features or redesigning architecture.
 
 - Replaced center-point safety acceptance with oriented rectangular vehicle footprint overlap checks plus `vehicles.safetyRadiusM` clearance. `minVehicleSeparationM` remains a diagnostic only.
 - Added a 600-second long-run seed sweep to `pnpm shuttle:validate` with queue, waiting vehicle, lift-port queue, deadlock, physical safety, and reservation coverage acceptance flags.
@@ -154,7 +154,13 @@ The latest public-PR ChatGPT Pro verdict was: merge after fixes. This local pass
 - Fixed route planning so future queued inbound storage slots reserve logical destinations but do not become physical transit obstacles before a shuttle is assigned or moving.
 - Clamped and validated `SHUTTLE_SPEED` / playback speed input.
 - Relabeled lift-port UI wording as diagnostics; Phase 0 utilization is allocation time, not measured mechanical lift service utilization.
-- Reconciled docs around UE 5.7.4 readiness: source bridge compile/headless smoke has passed; packaged Pixel Streaming soak remains pending until the real UE visual scene exists.
+- Reconciled docs around UE 5.7.4 readiness: source bridge compile/headless smoke, live bridge smoke, staged Mac runtime generation, and local browser Pixel Streaming smokes have passed; the 30-minute soak and release hardening remain Phase 1 work after calibrated scene review.
+
+## Latest Fresh Main Review
+
+The latest ChatGPT Pro review of current public `main` returned: `Merge now`.
+
+No must-fix findings were reported. Non-blocking recommendations were captured as Phase 1 work: targeted pressure tests should eventually aggregate per-tick physical/reservation inspection, throughput should remain labeled as regression-smoke throughput until CAD/vendor calibration exists, validation violation counts are sampled observations rather than unique incident counts, and Pixel Streaming readiness wording should distinguish prerequisites from a 30-minute release soak. The dashboard/API/docs now use explicit prerequisite wording for that last point.
 
 ## Phase 1 Demo Alignment Since Hardening
 

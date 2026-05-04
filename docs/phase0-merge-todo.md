@@ -1,14 +1,14 @@
 # Phase 0 Merge TODO
 
-Scope: continue the `codex/phase1-validation-traffic-demo` branch toward merge without adding product features or redesigning architecture.
+Scope: keep the current public `main` merge-ready without adding product features or redesigning architecture.
 
 ## Current Branch State
 
 - Repository is public: `https://github.com/xjtuyanshi/four-way-shuttle-sim`
-- Review branch: `codex/phase1-validation-traffic-demo`
+- Review branch: `main`
 - Base branch: `main`
-- Latest external review verdict: merge after fixes
-- Unreal Engine 5.7.4 and full Xcode are installed; bridge compile/headless smoke passed
+- Latest external review verdict: `merge now`
+- Unreal Engine 5.7.4 and full Xcode are installed; bridge compile/headless smoke, live bridge smoke, staged Mac runtime generation, and browser Pixel Streaming smokes passed
 
 ## Autonomous Five-Round Pass
 
@@ -36,11 +36,11 @@ Scope: continue the `codex/phase1-validation-traffic-demo` branch toward merge w
 
 ## Latest External Review Result
 
-- The latest ChatGPT Pro review was run against the public UE-ready branch and returned `merge after fixes`.
+- The latest ChatGPT Pro review was run against the current public `main` branch and returned `Merge now`.
 - Local fixes now address the review's must-fix items: rectangular footprint safety validation, long-run queue/lift acceptance, FIFO storage schema contract, queued-slot physical obstacle handling, playback speed validation, UE readiness wording, and lift-port diagnostic wording.
 - Result after local verification: no verified must-fix findings remain locally.
-- Verdict before final merge: ready for pushed re-review.
-- Unreal bridge compile/headless smoke is verified on this machine. Packaged Pixel Streaming soak remains pending until the real visual scene exists.
+- Verdict before final merge: merge-ready for the stated Phase 0 claims.
+- Unreal bridge compile/headless smoke, live bridge smoke, staged Mac runtime generation, and local browser Pixel Streaming smokes are verified on this machine. The 30-minute soak and release hardening remain Phase 1 work after the calibrated visual scene is ready.
 
 ## Merge-Blocking TODO
 
@@ -53,7 +53,7 @@ Scope: continue the `codex/phase1-validation-traffic-demo` branch toward merge w
 - Keep rectangular vehicle footprint clearance as the safety acceptance check; `minVehicleSeparationM` is diagnostic only.
 - Keep the 600-second long-run validation gate green for queue, waiting vehicle, lift-port queue, deadlock, physical safety, and reservation coverage flags.
 - Keep FIFO storage ids on the `storage-rNN-cNN` contract until explicit row/column metadata is added.
-- Keep Unreal and Pixel Streaming runtime validation gated by installed UE/Xcode tools and by whether a real UE scene exists.
+- Keep Unreal and Pixel Streaming runtime validation gated by installed UE/Xcode tools and by whether the calibrated scene is ready for a longer soak.
 - Do not merge if any of `pnpm typecheck`, `pnpm test`, `pnpm build`, or `pnpm shuttle:validate` fails.
 
 ## Ready-For-Review TODO
@@ -70,5 +70,5 @@ Scope: continue the `codex/phase1-validation-traffic-demo` branch toward merge w
 - Positive-control validator fixtures that intentionally trigger each reservation/physical violation code.
 - Additional dashboard stream reducer coverage for out-of-order partial updates, reconnect replacement, and vehicle disappearance semantics.
 - Zero-distance or same-node traffic transition coverage if future route generation can produce current node equal to target node.
-- Real Unreal visual scene assembly and actor binding.
-- Pixel Streaming 30-minute 1080p single-user validation after the real scene exists.
+- Calibrated Unreal visual scene assembly from CAD/vendor/site dimensions.
+- Pixel Streaming 30-minute 1080p single-user soak after the calibrated scene is reviewed.

@@ -93,9 +93,9 @@ Local inspection found:
 - Epic Games Launcher: installed under `/Applications`.
 - Unreal Engine 5.7.4: ready under `/Users/Shared/Epic Games/UE_5.7`.
 - Xcode: ready with full Xcode 26.4.1 toolchain.
-- Pixel Streaming: ready for project-level validation.
+- Pixel Streaming: local browser smoke passed with the generated `PixelStreaming2` render-target scene.
 
-The Unreal bridge has been compiled inside a temporary UE 5.7 project with Pixel Streaming enabled, and a headless editor commandlet smoke completed with zero bridge errors.
+The Unreal bridge has been compiled inside a generated UE 5.7 project with Pixel Streaming enabled. The headless commandlet smoke, live bridge smoke, staged Mac runtime generation, and local browser Pixel Streaming smokes against both `UnrealEditor -game` and the staged app completed with zero bridge errors.
 
 ## Phase 0 Acceptance Mapping
 
@@ -106,16 +106,15 @@ The Unreal bridge has been compiled inside a temporary UE 5.7 project with Pixel
 - Validation gate: implemented for same-seed hash stability, seed sweep health, 600-second long-run queue/lift/deadlock health, reservation coverage, and physical safety checks.
 - Local 3D preview: implemented in the dashboard as a browser-side visual twin driven by the same SimCore state stream that Unreal consumes.
 - WebSocket reconnect: dashboard reconnects and consumes `connectionRecovered`.
-- Unreal visual twin: source scaffold implemented and compile-smoked in UE 5.7.
-- 30-minute Pixel Streaming validation: pending a packaged or Standalone Unreal runtime run.
+- Unreal visual twin: source scaffold implemented, compile-smoked, live-smoked, staged, and browser-smoked in UE 5.7.
+- 30-minute Pixel Streaming soak / signed release hardening: deferred to Phase 1 after the calibrated visual scene is reviewed.
 
-## Next Step After Prerequisites
+## Next Step After Phase 0
 
 The execution checklist is tracked in `docs/unreal-visual-twin-plan.md`.
 
-1. Create the real Unreal visual-twin project and copy `unreal-bridge` into `Plugins/ShuttlePhase0Bridge`.
-2. Build a single-level scene with a 16x24 multi-bank storage field, dedicated inbound/outbound lift ports, and orthogonal track-only shuttle movement.
-3. Enable Pixel Streaming for runtime streaming. `WebSockets` is linked as an Unreal module by the bridge.
-4. Bind placeholder actors to `UShuttleStateSubscriberSubsystem`; each `AShuttleVisualTwinActor` can be preassigned a `VehicleId` and will ignore other vehicle states.
-5. Use the route, blocker, and timing fields on `FShuttleVisualVehicleState` for Blueprint debug overlays.
-6. Run the 30-minute 1080p single-user Pixel Streaming test and record resource metrics after the real UE scene exists.
+1. Extract CAD/vendor/site dimensions for pallet pitch, shuttle envelope, track gauge, lift-port spacing, and aisle clearances.
+2. Convert the default 16x24 multi-bank storage field into a configurable calibrated layout profile.
+3. Replace placeholder visual geometry with calibrated Unreal meshes/materials while keeping SimCore as the source of truth.
+4. Keep Pixel Streaming as the presentation channel and rerun browser smoke after each visual-scene calibration pass.
+5. Run the 30-minute 1080p single-user Pixel Streaming soak only after the calibrated visual scene is ready for review.

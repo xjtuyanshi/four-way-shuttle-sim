@@ -83,7 +83,7 @@ Before Pixel Streaming soak:
 - The WebSocket smoke must start the API on an isolated local port, connect to `/shuttle-ws`, validate `connectionRecovered`, `simState`, `vehicleState`, and `kpiUpdate`, verify required vehicle pose/load fields, set 4x playback speed, and prove streamed simulation time advances.
 - The UE live bridge smoke must start the local API on an isolated port, create a headless `UGameInstance`, spawn `AShuttleVisualTwinRuntimeActor`, connect it to the live `/shuttle-ws` stream, and prove the bridge saw `connectionRecovered`, `simState`, a root `vehicleState`, and `kpiUpdate`; simulation time advanced; the expected vehicle actor count exists; no duplicate owned actors were spawned; final target pose/load binding is within tolerance; and the commandlet wrote a JSON summary with message counts plus IE-facing KPI fields.
 
-After the real UE scene exists:
+After the calibrated UE scene is ready for longer visual review:
 
 - Standalone UE runtime connects to the local API stream.
 - Shuttle actors move only on orthogonal tracks.

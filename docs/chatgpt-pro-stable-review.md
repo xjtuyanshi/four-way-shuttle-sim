@@ -9,28 +9,28 @@ The repository and PR are public, so this is not a GitHub permission issue.
 Verified public URLs:
 
 - Repository: `https://github.com/xjtuyanshi/four-way-shuttle-sim`
-- PR: `https://github.com/xjtuyanshi/four-way-shuttle-sim/pull/2`
-- PR patch: `https://github.com/xjtuyanshi/four-way-shuttle-sim/pull/2.patch`
-- Final handoff raw doc: `https://raw.githubusercontent.com/xjtuyanshi/four-way-shuttle-sim/codex/phase1-validation-traffic-demo/docs/phase0-final-merge-handoff.md`
+- Main branch: `https://github.com/xjtuyanshi/four-way-shuttle-sim/tree/main`
+- Final handoff raw doc: `https://raw.githubusercontent.com/xjtuyanshi/four-way-shuttle-sim/main/docs/phase0-final-merge-handoff.md`
+- Review packet raw doc: `https://raw.githubusercontent.com/xjtuyanshi/four-way-shuttle-sim/main/docs/chatgpt-pro-review-packet.md`
 
-ChatGPT Pro may still fail because its browsing/analysis environment can hit DNS failures, clone restrictions, GitHub API truncation, or context truncation on large diffs. The PR patch is several thousand lines, so the most reliable workflow is to avoid clone-based review.
+ChatGPT Pro may still fail because its browsing/analysis environment can hit DNS failures, clone restrictions, GitHub API truncation, or context truncation on large diffs. The most reliable workflow is to avoid clone-based review and use the raw handoff/review packet.
 
 ## Preferred Prompt
 
 ```text
-Review this public PR for merge blockers only.
+Review the current public main branch for merge blockers only.
 
-Do not clone the repository. If browsing works, read these two URLs only:
+Do not clone the repository. If browsing works, read these two URLs first:
 
 1. Final handoff:
-https://raw.githubusercontent.com/xjtuyanshi/four-way-shuttle-sim/codex/phase1-validation-traffic-demo/docs/phase0-final-merge-handoff.md
+https://raw.githubusercontent.com/xjtuyanshi/four-way-shuttle-sim/main/docs/phase0-final-merge-handoff.md
 
-2. PR patch:
-https://github.com/xjtuyanshi/four-way-shuttle-sim/pull/2.patch
+2. Review packet:
+https://raw.githubusercontent.com/xjtuyanshi/four-way-shuttle-sim/main/docs/chatgpt-pro-review-packet.md
 
-If either URL fails, do not retry with clone. Return the best review from the handoff and the summary below.
+If either URL fails, do not retry with clone. Return the best review from the handoff, review packet, and the summary below.
 
-Scope: merge-hardening only. Do not treat Phase 1 feature work or missing packaged Pixel Streaming soak as a merge blocker.
+Scope: merge-hardening only. Do not treat Phase 1 feature work or the missing 30-minute Pixel Streaming soak as a merge blocker.
 
 Required output:
 1. Must-fix findings before merge, ordered by severity.
@@ -44,8 +44,8 @@ Required output:
 Final merge-blocker review. Do not browse, clone, or use network. Review only the summary below and return concrete findings. If an issue cannot be verified from the summary, mark it non-blocking/unknown.
 
 Repo: https://github.com/xjtuyanshi/four-way-shuttle-sim
-Branch: codex/phase1-validation-traffic-demo
-Head: latest pushed commit on codex/phase1-validation-traffic-demo
+Branch: main
+Head: latest pushed commit on main
 Scope: merge-hardening only. No product features or architecture redesign.
 
 Implemented hardening:
@@ -60,7 +60,7 @@ Implemented hardening:
 - Playback speed input is validated/clamped, including `SHUTTLE_SPEED`.
 
 Verification passed after latest commit:
-pnpm typecheck; pnpm test (38 tests); pnpm build; pnpm shuttle:validate. Validation acceptance.pass=true, sameSeedEventHashStable=true, noDeadlocksInSweep=true, noPhysicalSafetyViolations=true, noReservationCoverageViolations=true, longRunThroughputPositive=true, longRunQueuesBounded=true, noLongRunDeadlocks=true, noLongRunPhysicalSafetyViolations=true, noLongRunReservationCoverageViolations=true, physicalViolationsByCode all zero. Browser smoke: dashboard loads, 3D canvas visible, runtime advances to 00:10:00, vehicle table shows active lifting/returning states, localhost console errors/warnings none, canvas screenshot sample 3392/3393 sampled pixels non-dark with 246 unique colors. Unreal 5.7.4 and full Xcode are ready; bridge compile smoke and headless CompileAllBlueprints commandlet passed in a temporary UE project with Pixel Streaming enabled. CompileAllBlueprints reported 0 blueprint errors / 0 blueprint warnings; UE logged one host Metal SDK warning. Packaged Pixel Streaming soak remains pending until the real UE scene exists.
+pnpm typecheck; pnpm test (46 tests); pnpm build; pnpm shuttle:validate. Validation acceptance.pass=true, sameSeedEventHashStable=true, noDeadlocksInSweep=true, noPhysicalSafetyViolations=true, noReservationCoverageViolations=true, longRunThroughputPositive=true, longRunThroughputFloorMet=true, longRunQueuesBounded=true, noLongRunDeadlocks=true, noLongRunPhysicalSafetyViolations=true, noLongRunReservationCoverageViolations=true, physicalViolationsByCode all zero, longRun.totalPphMean=18, longRun.maxQueuedTasks=2, longRun.maxWaitingVehicles=0, longRun.maxLiftPortQueueLength=1. Browser smoke: dashboard loads, 3D canvas visible, runtime completed to 00:10:00 at 4x, vehicle table shows idle and moving-to-pickup states, Pixel Streaming prerequisite label is explicit, screenshot evidence at `output/playwright/dashboard-readiness-wording-smoke.png`. Unreal 5.7.4 and full Xcode are ready; compile/headless smoke, live bridge smoke, staged Mac runtime generation, and local browser Pixel Streaming smokes against both `UnrealEditor -game` and the staged app passed. The 30-minute soak and release hardening remain Phase 1 work after calibrated scene review.
 
 Return only:
 1. Must-fix findings before merge, with file paths if possible.

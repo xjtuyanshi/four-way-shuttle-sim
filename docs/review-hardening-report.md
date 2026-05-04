@@ -1,12 +1,12 @@
 # Review Hardening Report
 
-Branch: `codex/phase1-validation-traffic-demo`  
+Branch: `main`
 Base commit: `15f185a Add Phase 0 validation gate`  
 Hardening scope: branch commits after the base commit through this report.
 
 ## Verdict Addressed
 
-The external review verdict was: merge after fixes. This report maps those required fixes to the implementation now on the branch.
+An earlier external review verdict was: merge after fixes. This report maps those required fixes to the implementation now on `main`.
 
 ## Required Fix Mapping
 
@@ -142,25 +142,25 @@ Follow-up fixes:
 
 An earlier no-network merge-blocker review against commit `28d6aeb112440998e8d6a603ab35065b73ccde52` returned `merge now`.
 
-The latest public-branch ChatGPT Pro review against the UE-ready branch returned: `merge after fixes`. This local pass addresses the new must-fix findings:
+The earlier public-branch ChatGPT Pro review against the UE-ready branch returned: `merge after fixes`. This local pass addresses those must-fix findings:
 
 - Safety validation now uses oriented rectangular vehicle footprints plus configured clearance, not a center-point disk proxy.
 - `pnpm shuttle:validate` now includes a 600-second long-run sweep with queue, waiting vehicle, lift-port queue, deadlock, physical safety, and reservation coverage acceptance flags.
 - FIFO storage schema now requires `storage-rNN-cNN` cell ids and matching `left-row-NN` / `right-row-NN` side access nodes until explicit row/column metadata exists.
 - Route planning no longer treats future queued inbound slot assignments as physical storage obstacles.
 - Playback speed input is validated/clamped, including `SHUTTLE_SPEED`.
-- UE readiness docs now distinguish source bridge compile/headless smoke from the later packaged Pixel Streaming soak.
+- UE readiness docs now distinguish local compile/headless/live/staged/browser Pixel Streaming smoke coverage from the later 30-minute soak and release hardening.
 - Lift-port wording is documented as diagnostics/allocation time, not true mechanical service utilization.
 
 Non-blocking follow-ups were moved to Phase 1:
 
 - multi-capacity reservation semantics after Phase 0
-- packaged Pixel Streaming runtime soak after the real Unreal scene exists
+- 30-minute Pixel Streaming runtime soak after calibrated scene review
 - same-node/zero-distance traffic-transition coverage if future route generation can produce it
 - more dashboard stream reducer ordering/removal cases
 - positive-control validator fixtures for every violation code
 - CAD/dimension audit for the browser visual layout versus a real vendor drawing
-- packaged Pixel Streaming soak after the real Unreal scene is assembled
+- release-grade Pixel Streaming soak after calibrated scene review
 
 ## Latest Verification
 
@@ -188,10 +188,10 @@ longRunQueuesBounded=true
 noLongRunDeadlocks=true
 noLongRunPhysicalSafetyViolations=true
 noLongRunReservationCoverageViolations=true
-longRun.totalPphMean=90
-longRun.maxQueuedTasks=9
-longRun.maxWaitingVehicles=1
-longRun.maxLiftPortQueueLength=4
+longRun.totalPphMean=18
+longRun.maxQueuedTasks=2
+longRun.maxWaitingVehicles=0
+longRun.maxLiftPortQueueLength=1
 physicalViolationCount=0
 ```
 
@@ -200,9 +200,9 @@ Browser smoke:
 - dashboard loads
 - 3D canvas appears
 - runtime advances
-- vehicle table shows active lifting/returning states
-- localhost console errors/warnings: none observed
-- canvas screenshot sample: 3392/3393 sampled pixels non-dark, 246 unique colors
+- vehicle table shows idle and moving-to-pickup states
+- Pixel Streaming prerequisite label reads as prerequisites, not release-soak readiness
+- latest screenshot evidence: `output/playwright/dashboard-readiness-wording-smoke.png`
 
 Artifacts are intentionally ignored by git:
 
@@ -219,4 +219,4 @@ Artifacts are intentionally ignored by git:
 
 ## Remaining Gate
 
-Unreal Engine 5.7.4 and full Xcode are now installed. The bridge has passed compile/headless smoke in a temporary UE project; packaged Pixel Streaming soak remains gated on assembling the real visual scene.
+Unreal Engine 5.7.4 and full Xcode are now installed. The bridge has passed compile/headless smoke, live bridge smoke, staged Mac runtime generation, and local browser Pixel Streaming smokes. A 30-minute soak and release-grade Pixel Streaming hardening remain gated on calibrated scene review.

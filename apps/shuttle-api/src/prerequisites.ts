@@ -103,7 +103,7 @@ export async function collectPrerequisites(): Promise<ShuttlePrerequisiteReport>
     pixelStreaming: {
       status: hasUnrealEditorExecutable && hasFullXcode ? 'ready' : 'pending-unreal',
       notes: [
-        'Pixel Streaming validation requires a packaged or Standalone Unreal app with the Pixel Streaming plugin enabled.',
+        'Pixel Streaming browser validation requires a UE runtime path such as UnrealEditor -game or a staged app with PixelStreaming2 enabled.',
         'The API/dashboard protocol can be validated independently before Unreal is installed.'
       ]
     }

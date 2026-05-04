@@ -735,7 +735,7 @@ function PrerequisitePanel({ report }: { report: PrerequisiteReport | null }) {
             <strong className={report.xcode.status}>{report.xcode.status}</strong>
           </div>
           <div>
-            <span>Pixel Streaming</span>
+            <span>Pixel Streaming prereqs</span>
             <strong>{report.pixelStreaming.status}</strong>
           </div>
         </div>

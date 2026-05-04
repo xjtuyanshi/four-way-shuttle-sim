@@ -1,15 +1,15 @@
 # Phase 0 Final Merge Handoff
 
-Branch: `codex/phase1-validation-traffic-demo`  
-Head: latest pushed commit on `codex/phase1-validation-traffic-demo`  
+Branch: `main`
+Head: latest pushed commit on `main`
 Repository: `https://github.com/xjtuyanshi/four-way-shuttle-sim`
 
 ## Merge Verdict
 
 - Local verdict after latest fixes: ready for re-review/merge.
-- Latest ChatGPT Pro public-branch verdict: merge after fixes.
+- Latest ChatGPT Pro public-branch verdict: Merge now.
 - Verified must-fix findings remaining locally: none after this pass.
-- Unreal Engine 5.7.4 and full Xcode are now installed; bridge compile/headless smoke passed. Packaged Pixel Streaming soak remains pending.
+- Unreal Engine 5.7.4 and full Xcode are now installed; bridge compile/headless smoke, live bridge smoke, staged Mac runtime generation, and local browser Pixel Streaming smokes passed. The 30-minute soak and release hardening remain Phase 1 work after calibrated scene review.
 
 ## Verification
 
@@ -38,10 +38,10 @@ noLongRunDeadlocks=true
 noLongRunPhysicalSafetyViolations=true
 noLongRunReservationCoverageViolations=true
 physicalViolationsByCode all zero
-longRun.totalPphMean=90
-longRun.maxQueuedTasks=9
-longRun.maxWaitingVehicles=1
-longRun.maxLiftPortQueueLength=4
+longRun.totalPphMean=18
+longRun.maxQueuedTasks=2
+longRun.maxWaitingVehicles=0
+longRun.maxLiftPortQueueLength=1
 ```
 
 Browser smoke:
@@ -50,9 +50,9 @@ Browser smoke:
 dashboard loads
 3D canvas appears
 runtime advances
-vehicle table shows lifting and returning states
-localhost console errors/warnings none observed
-canvas screenshot sample: 3392/3393 sampled pixels non-dark, 246 unique colors
+vehicle table shows idle and moving-to-pickup states
+Pixel Streaming prerequisite label reads as prerequisites, not release-soak readiness
+latest screenshot evidence: output/playwright/dashboard-readiness-wording-smoke.png
 ```
 
 ## Non-Blocking Phase 1 Backlog
@@ -62,5 +62,5 @@ canvas screenshot sample: 3392/3393 sampled pixels non-dark, 246 unique colors
 - Positive-control validator fixtures for every violation code.
 - Additional dashboard stream reducer tests for out-of-order partial updates, reconnect replacement, and vehicle removal semantics.
 - Same-node or zero-distance traffic-transition tests if future route generation can produce them.
-- Real Unreal scene assembly with visual assets and actor binding.
-- Pixel Streaming 30-minute 1080p single-user validation after the real scene exists.
+- Calibrated Unreal scene assembly from CAD/vendor/site dimensions.
+- Pixel Streaming 30-minute 1080p single-user soak after the calibrated scene is reviewed.
