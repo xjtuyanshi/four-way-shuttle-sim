@@ -130,10 +130,9 @@ export function resolveDashboardStaticSceneContract(scenario: ShuttleScenario): 
   return summarizeScenarioStaticSceneContract(scenario);
 }
 
-function getStorageField(staticScene: ShuttleStaticSceneContract): StorageField | null {
-  const cells = staticScene.storageCells;
+function createStorageField(cells: ShuttleStaticSceneStorageCell[]): StorageField {
   if (cells.length === 0) {
-    return null;
+    throw new Error('Cannot create an empty storage field.');
   }
   const minX = Math.min(...cells.map((cell) => cell.xM - cell.lengthXM / 2));
   const maxX = Math.max(...cells.map((cell) => cell.xM + cell.lengthXM / 2));
@@ -150,6 +149,40 @@ function getStorageField(staticScene: ShuttleStaticSceneContract): StorageField 
     columns: [...new Set(cells.map((cell) => cell.xM))].sort((left, right) => left - right),
     rows: [...new Set(cells.map((cell) => cell.zM))].sort((left, right) => left - right)
   };
+}
+
+function bandIndex(value: number, sortedValues: number[], splitThresholdM: number): number {
+  let band = 0;
+  for (let index = 0; index < sortedValues.length; index += 1) {
+    if (index > 0 && sortedValues[index]! - sortedValues[index - 1]! > splitThresholdM) {
+      band += 1;
+    }
+    if (sortedValues[index] === value) {
+      return band;
+    }
+  }
+  return band;
+}
+
+function getStorageFields(staticScene: ShuttleStaticSceneContract): StorageField[] {
+  const cells = staticScene.storageCells;
+  if (cells.length === 0) {
+    return [];
+  }
+  const xs = [...new Set(cells.map((cell) => cell.xM))].sort((left, right) => left - right);
+  const zs = [...new Set(cells.map((cell) => cell.zM))].sort((left, right) => left - right);
+  const splitXM = Math.max(staticScene.storagePitchXM * 1.5, 0.01);
+  const splitZM = Math.max(staticScene.storagePitchZM * 1.5, 0.01);
+  const cellsByField = new Map<string, ShuttleStaticSceneStorageCell[]>();
+  for (const cell of cells) {
+    const key = `${bandIndex(cell.xM, xs, splitXM)}:${bandIndex(cell.zM, zs, splitZM)}`;
+    const fieldCells = cellsByField.get(key) ?? [];
+    fieldCells.push(cell);
+    cellsByField.set(key, fieldCells);
+  }
+  return [...cellsByField.values()]
+    .map((fieldCells) => createStorageField(fieldCells))
+    .sort((left, right) => left.minZ - right.minZ || left.minX - right.minX);
 }
 
 function createCadFloorTexture(
@@ -198,8 +231,7 @@ function createCadFloorTexture(
   }
   ctx.lineCap = 'butt';
 
-  const storageField = getStorageField(staticScene);
-  if (storageField) {
+  for (const storageField of getStorageFields(staticScene)) {
     const left = xToPx(storageField.minX);
     const top = zToPx(storageField.minZ);
     const width = xToPx(storageField.maxX) - left;
@@ -389,17 +421,12 @@ function createPalletLoadObject(widthM: number, depthM: number, crateColor = 0x8
   return group;
 }
 
-function createStorageRackBlock(staticScene: ShuttleStaticSceneContract): THREE.Group | null {
-  const field = getStorageField(staticScene);
-  if (!field) {
-    return null;
-  }
-
+function createStorageRackField(field: StorageField): THREE.Group {
   const group = new THREE.Group();
-  const deckMaterial = material(0x182129, 0.88, 0.05);
-  const railMaterial = material(0x929da5, 0.48, 0.24);
-  const beamMaterial = material(0x35414a, 0.74, 0.16);
-  const markerMaterial = material(0x4b5660, 0.6, 0.22);
+  const deckMaterial = material(0x191d2a, 0.88, 0.05);
+  const railMaterial = material(0x8f8ab1, 0.48, 0.24);
+  const beamMaterial = material(0x3a3f55, 0.74, 0.16);
+  const markerMaterial = material(0x4d5268, 0.6, 0.22);
   const averageCellLengthM = field.cells.reduce((sum, cell) => sum + cell.lengthXM, 0) / field.cells.length;
   const averageCellDepthM = field.cells.reduce((sum, cell) => sum + cell.lengthZM, 0) / field.cells.length;
 
@@ -461,6 +488,19 @@ function createStorageRackBlock(staticScene: ShuttleStaticSceneContract): THREE.
     }
   }
 
+  return group;
+}
+
+function createStorageRackBlock(staticScene: ShuttleStaticSceneContract): THREE.Group | null {
+  const fields = getStorageFields(staticScene);
+  if (fields.length === 0) {
+    return null;
+  }
+
+  const group = new THREE.Group();
+  for (const field of fields) {
+    group.add(createStorageRackField(field));
+  }
   return group;
 }
 

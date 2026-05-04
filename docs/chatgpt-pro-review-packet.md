@@ -4,9 +4,9 @@ Use this packet to review the current branch:
 
 - Repository: `https://github.com/xjtuyanshi/four-way-shuttle-sim` (public)
 - Base branch: `main`
-- Base commit: `15f185a Add Phase 0 validation gate`
-- Review branch: `codex/phase1-validation-traffic-demo`
-- Review branch head: latest pushed commit on `codex/phase1-validation-traffic-demo`
+- Base commit: `af1347b Merge pull request #14 from xjtuyanshi/codex/pixel-streaming-readiness`
+- Review branch: `codex/real-layout-multibank-scene`
+- Review branch head: `cf73bd8 Align phase0 shuttle layout with real multi-bank scene`
 
 If GitHub clone or browsing fails, use `docs/chatgpt-pro-stable-review.md` instead. It contains direct raw/patch URLs and a no-network fallback prompt.
 
@@ -148,13 +148,13 @@ The latest public-PR ChatGPT Pro verdict was: merge after fixes. This local pass
 The browser demo has been adjusted toward the user's four-way shuttle reference:
 
 - Default layout is a single-level orthogonal aisle grid: no diagonal vehicle movement.
-- The middle storage area is a contiguous 6x8 block of adjacent drivable pallet cells.
+- The storage area is now a 16x24 multi-bank field of adjacent drivable pallet cells, split into upper/lower banks and four column islands.
 - FIFO storage behavior is modeled at row level as task policy, not one-way rail physics: lane edges are bidirectional for the four-way shuttle, inbound places from the right-side infeed direction into the deepest reachable empty cell, and outbound drains from the left-side outfeed direction.
 - The simulator does not perform hidden row compaction. Stored pallet `nodeId` changes only through explicit vehicle/lift transfer in this branch; push-lane mechanics are deferred until they can be represented with time, reservations, and events.
 - Stored pallet cells are blocked for route planning unless the occupied cell is the current task endpoint, so the model does not rely on free pass-through under stored pallets.
 - Lift behavior is modeled only as black-box ports, not as multi-level lift physics.
-- Dedicated inbound ports: `inbound-lift-a`, `inbound-lift-b`.
-- Dedicated outbound ports: `outbound-lift-a`, `outbound-lift-b`.
+- Dedicated inbound ports: `inbound-lift-top-01`, `inbound-lift-top-02`, `inbound-lift-bottom-01`, `inbound-lift-bottom-02`.
+- Dedicated outbound ports: `outbound-lift-top-01`, `outbound-lift-top-02`, `outbound-lift-bottom-01`, `outbound-lift-bottom-02`.
 - Dedicated lift ports expose queue length, active task id, waiting task ids, and allocation/utilization diagnostics. In this phase, utilization means the black-box port is allocated by an active task; true lift-mechanism service utilization is a later split metric.
 - The 3D view renders low black-box ports, dense track-cell storage, side aisles, and roller conveyor entry/exit pads.
 - Runtime playback speed supports `1x`, `2x`, `4x`, and `10x`.
@@ -196,14 +196,14 @@ longRunQueuesBounded=true
 noLongRunDeadlocks=true
 noLongRunPhysicalSafetyViolations=true
 noLongRunReservationCoverageViolations=true
-totalPphMean=75
-longRun.totalPphMean=90
-longRun.maxQueuedTasks=9
+totalPphMean=30
+longRun.totalPphMean=24
+longRun.maxQueuedTasks=13
 longRun.maxWaitingVehicles=1
-longRun.maxLiftPortQueueLength=4
+longRun.maxLiftPortQueueLength=3
 maxObservedSpeedMps=2
 maxObservedAccelerationMps2=1
-minVehicleSeparationM=1.2005
+minVehicleSeparationM=1.203
 physicalViolationCount=0
 physicalViolationsByCode all zero
 deadlockCount=0
@@ -214,9 +214,9 @@ Browser smoke also passed:
 ```text
 Dashboard loaded at http://localhost:5179
 3D canvas count: 1
-3D canvas screenshot sample: 3392/3393 sampled pixels non-dark, 246 unique colors
-Runtime advanced to 00:10:00
-Vehicle table showed active lifting/returning states
+Screenshot captured at output/playwright/shuttle-dashboard-smoke.png
+Runtime advanced from 10.0s to 27.5s after UI reset/resume at 10x; later API check reached 100.0s running
+Vehicle table showed active returning/moving-to-pickup states
 Console errors: none observed
 ```
 
@@ -228,7 +228,9 @@ Unreal 5.7.4: ready, UnrealEditor executable found under /Users/Shared/Epic Game
 Xcode: ready, full Xcode 26.4.1 toolchain available
 Pixel Streaming: ready
 Unreal bridge compile smoke: passed
-Unreal headless commandlet smoke: passed, CompileAllBlueprints reported 0 blueprint errors / 0 blueprint warnings; UE logged one host Metal SDK warning
+Unreal static commandlet smoke: passed with 384 storage cells, 474 track beds, 8 lift pads, and denseStorageBlock=false
+Unreal live bridge smoke: passed with vehicleState/kpiUpdate parsing, 2 vehicle actors, no duplicate actors, and max target pose error 0cm
+CompileAllBlueprints reported 0 blueprint errors / 0 blueprint warnings
 ```
 
 ## Review Request
@@ -251,7 +253,7 @@ Focus areas:
 
 2. Mechanical / manufacturing realism
    - Does the single-level four-way shuttle assumption match a pallet-underlift vehicle moving on orthogonal track cells?
-   - Does the center dense storage block look and behave like adjacent pallet locations, not sparse shelves or AMR free-space navigation?
+   - Do the dense storage islands look and behave like adjacent pallet locations, not sparse shelves or AMR free-space navigation?
    - Are inbound/outbound black-box lift ports represented at the right abstraction level?
    - Are the track spacing, vehicle envelope, pallet cell size, and safety separation assumptions plausible enough for a prototype?
    - What mechanical constraints are still missing before this can be called a credible equipment simulation?

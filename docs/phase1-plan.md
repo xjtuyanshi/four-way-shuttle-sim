@@ -27,7 +27,7 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
   - `accelerationLimit`
   - `minSeparation`
   - `invalidCoordinate`
-- Replaced the default demo layout with an orthogonal four-way shuttle grid inspired by the reference video: no diagonal edges, two vertical side aisles, top/bottom cross aisles, center storage cells, right-side infeed, left-side outfeed, and FIFO storage/retrieval policy on bidirectional lane rails.
+- Replaced the default demo layout with an orthogonal four-way shuttle grid inspired by the reference video and customer layout screenshot: no diagonal edges, upper/lower storage banks, four column islands, a two-lane main aisle, distributed dedicated lift ports, and FIFO storage/retrieval policy on storage-lane rails.
 - Added a regression test that fails if the default demo reintroduces diagonal edges, sparse storage cells, generic I/O nodes, or non-bidirectional four-way storage-lane rails.
 - Added authoritative FIFO pallet occupancy in SimCore:
   - outbound tasks are deferred with `storage-empty` instead of creating phantom pallets;
@@ -39,7 +39,7 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 - Added a high-pressure inbound regression test that fills or reserves every FIFO storage cell, then verifies new inbound work is deferred with `storage-full` instead of overbooking the storage grid.
 - Replaced rack-like storage bay visuals with flat track-cell visuals so storage locations read as drivable grid positions, and added runtime playback speed control (`1x`, `2x`, `4x`, `10x`) through the API/dashboard.
 - Added a CAD-style generated floor texture for the 3D view so the visual background comes from meter-based SimCore nodes/edges instead of a decorative scene; references and dimensional assumptions are tracked in `docs/layout-reference.md`.
-- Replaced the sparse 2x3 storage demo with a contiguous 6x8 storage matrix so the center storage field reads as a dense block of adjacent drivable cells.
+- Replaced the sparse 2x3 storage demo with a 16x24 multi-bank storage matrix so each storage island reads as a dense block of adjacent drivable cells.
 - Hardened the browser visual twin toward an engineering rack view: continuous storage rack block, cross-track cell rails, side-aisle rail beds, roller conveyors at inbound/outbound, parking pads, dedicated single-level black-box lift ports for inbound/outbound, and a cleaner CAD floor without oversized explanatory labels.
 - Added lift-port resource diagnostics: dedicated inbound/outbound ports now expose active task, queue length, waiting task ids, and utilization so lift bottlenecks can be reviewed from an IE/operations perspective.
 - Made storage-cell pass-through explicit: occupied storage cells are blocked for routing unless that cell is the current task endpoint.
@@ -50,7 +50,7 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 - Added schema enforcement for the temporary FIFO storage naming contract: `storage-rNN-cNN` cells plus matching `left-row-NN` / `right-row-NN` access nodes.
 - Fixed route planning so future queued inbound slots reserve logical destinations without becoming physical obstacles before work is assigned.
 - Validated and clamped playback speed input, including `SHUTTLE_SPEED`.
-- Built the first Unreal visual twin scene foundation in `AShuttleVisualTwinRuntimeActor`: one single-level 6x8 dense storage block with per-cell four-way rail detail, rack posts, roller-transfer lift pads, dedicated inbound/outbound black-box lift housings, load placeholders from streamed SimCore load snapshots, and smoke-contract counts for those visual details.
+- Built the first Unreal visual twin scene foundation in `AShuttleVisualTwinRuntimeActor`: one single-level 16x24 multi-bank storage field with per-cell four-way rail detail, rack posts, roller-transfer lift pads, dedicated inbound/outbound black-box lift housings, load placeholders from streamed SimCore load snapshots, and smoke-contract counts for those visual details.
 
 ## Next TODO
 

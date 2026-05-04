@@ -14,7 +14,7 @@ This is a source-only Unreal plugin scaffold for Phase 0. It is intentionally th
 3. Enable the `Pixel Streaming` plugin for runtime streaming. `WebSockets` is linked as an Unreal module by this bridge; it is not enabled as a separate engine plugin in UE 5.7.
 4. For the default Phase 0 scene, place one `AShuttleVisualTwinRuntimeActor` at world origin.
 5. Set its `VehicleActorClass` only if you want to use a custom shuttle mesh actor; otherwise it spawns `AShuttleVisualTwinActor` with a basic visible shuttle body and carried-pallet placeholder.
-6. The runtime actor auto-connects to `ws://localhost:8791/shuttle-ws`, spawns vehicles by `VehicleId`, and creates a one-level scene with dense 6x8 storage cells, low four-way rail detail in every storage cell, side aisles, cross aisles, roller transfer detail on dedicated inbound/outbound lift pads, black-box lift housings, and parking pads.
+6. The runtime actor auto-connects to `ws://localhost:8791/shuttle-ws`, spawns vehicles by `VehicleId`, and creates a one-level scene with 16x24 multi-bank storage cells, low four-way rail detail in every storage cell, side aisles, a two-lane main aisle, roller transfer detail on dedicated inbound/outbound lift pads, black-box lift housings, and parking pads.
 7. For manual Blueprint wiring, use `UShuttleStateSubscriberSubsystem::Connect("ws://localhost:8791/shuttle-ws")` and bind `OnVehicleState` to `AShuttleVisualTwinActor::ApplyAuthoritativeState`.
 
 The placeholder actor converts meters from SimCore into centimeters for Unreal. `AShuttleVisualTwinRuntimeActor` passes its world location as `WorldOffsetCm` when spawning shuttle actors, so the generated static scene and vehicles share the same local origin.
@@ -49,7 +49,7 @@ SimCore remains authoritative for event logs, KPIs, task assignment, reservation
 
 `UShuttleVisualTwinSmokeCommandlet` runs in headless Unreal smoke tests. It creates a temporary world, spawns `AShuttleVisualTwinRuntimeActor`, rebuilds the static scene, and verifies the default scaffold counts and item-level topology:
 
-- 48 storage cells
+- 384 storage cells
 - 16 track beds
 - 2 inbound lift pads
 - 2 outbound lift pads

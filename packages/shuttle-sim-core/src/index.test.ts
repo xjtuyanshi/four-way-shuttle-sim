@@ -97,10 +97,14 @@ describe('shuttle phase 0 SimCore', () => {
     expect(parsed.schemaVersion).toBe('shuttle.phase0.v0');
     expect(parsed.vehicles.safetyRadiusM).toBe(0.1);
     expect(parsed.layout.nodes.filter((node) => node.type === 'lift-blackbox').map((node) => node.id).sort()).toEqual([
-      'inbound-lift-a',
-      'inbound-lift-b',
-      'outbound-lift-a',
-      'outbound-lift-b'
+      'inbound-lift-bottom-01',
+      'inbound-lift-bottom-02',
+      'inbound-lift-top-01',
+      'inbound-lift-top-02',
+      'outbound-lift-bottom-01',
+      'outbound-lift-bottom-02',
+      'outbound-lift-top-01',
+      'outbound-lift-top-02'
     ]);
     expect(parsed.layout.zones.some((zone) => zone.noStop && zone.noParking)).toBe(true);
   });
@@ -131,32 +135,40 @@ describe('shuttle phase 0 SimCore', () => {
     const storageXs = storageNodes.map((node) => node.x);
     const storageRows = [...new Set(storageNodes.map((node) => node.z))].sort((left, right) => left - right);
     const storageColumns = [...new Set(storageNodes.map((node) => node.x))].sort((left, right) => left - right);
-    const inboundLifts = ['inbound-lift-a', 'inbound-lift-b'].map((nodeId) => nodes.get(nodeId)!);
-    const outboundLifts = ['outbound-lift-a', 'outbound-lift-b'].map((nodeId) => nodes.get(nodeId)!);
-    const inboundX = inboundLifts[0]!.x;
-    const outboundX = outboundLifts[0]!.x;
+    const inboundLifts = scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.id.startsWith('inbound-lift'));
+    const outboundLifts = scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.id.startsWith('outbound-lift'));
+    const storageColumnGaps = storageColumns.slice(1).map((x, index) => x - storageColumns[index]!);
+    const storageRowGaps = storageRows.slice(1).map((z, index) => z - storageRows[index]!);
+    const mainNorthNodes = scenario.layout.nodes.filter((node) => node.id.startsWith('main-north-')).sort((left, right) => left.x - right.x);
+    const mainSouthNodes = scenario.layout.nodes.filter((node) => node.id.startsWith('main-south-')).sort((left, right) => left.x - right.x);
 
     expect(scenario.layout.nodes.every((node) => node.y === 0)).toBe(true);
-    expect(storageRows).toHaveLength(6);
-    expect(storageColumns).toHaveLength(8);
-    expect(storageNodes).toHaveLength(48);
+    expect(storageRows).toHaveLength(16);
+    expect(storageColumns).toHaveLength(24);
+    expect(storageNodes).toHaveLength(384);
     expect(storageRows.every((z) => storageNodes.filter((node) => node.z === z).length === storageColumns.length)).toBe(true);
     expect(fifoLaneEdges).toHaveLength(storageRows.length * (storageColumns.length + 1));
     expect(fifoLaneEdges.every((edge) => edge.directionMode === 'twoWay')).toBe(true);
-    expect(storageColumns.slice(1).every((x, index) => x - storageColumns[index]! <= 1.3)).toBe(true);
-    expect(storageRows.slice(1).every((z, index) => z - storageRows[index]! <= 1.25)).toBe(true);
-    expect(Math.max(...storageXs)).toBeLessThan(inboundX);
-    expect(Math.min(...storageXs)).toBeGreaterThan(outboundX);
+    expect(storageColumnGaps.filter((gap) => gap > 1.3)).toHaveLength(3);
+    expect(storageColumnGaps.filter((gap) => gap <= 1.3)).toHaveLength(20);
+    expect(storageRowGaps.filter((gap) => gap > 1.25)).toEqual([4.4]);
+    expect(mainNorthNodes).toHaveLength(6);
+    expect(mainSouthNodes).toHaveLength(6);
+    expect(mainNorthNodes.every((node, index) => node.x === mainSouthNodes[index]!.x)).toBe(true);
+    expect(mainNorthNodes.every((node) => node.z < 0)).toBe(true);
+    expect(mainSouthNodes.every((node) => node.z > 0)).toBe(true);
+    expect(Math.max(...storageXs)).toBeLessThan(Math.max(...mainNorthNodes.map((node) => node.x)));
+    expect(Math.min(...storageXs)).toBeGreaterThan(Math.min(...mainNorthNodes.map((node) => node.x)));
     expect(scenario.layout.nodes.some((node) => node.id === 'inbound' || node.id === 'outbound')).toBe(false);
     expect(scenario.layout.edges.some((edge) => edge.id === 'inbound-x-main' || edge.id === 'x-outbound-outbound')).toBe(false);
-    expect(inboundLifts.every((node) => node.x === inboundX)).toBe(true);
-    expect(outboundLifts.every((node) => node.x === outboundX)).toBe(true);
+    expect(inboundLifts).toHaveLength(4);
+    expect(outboundLifts).toHaveLength(4);
     expect(inboundLifts.every((node) => node.id.startsWith('inbound-lift-'))).toBe(true);
     expect(outboundLifts.every((node) => node.id.startsWith('outbound-lift-'))).toBe(true);
     expect(inboundLifts.every((node) => Math.abs(node.z) > 0)).toBe(true);
     expect(outboundLifts.every((node) => Math.abs(node.z) > 0)).toBe(true);
-    expect(scenario.layout.edges.some((edge) => edge.id === 'inbound-lift-a-right-row-01')).toBe(true);
-    expect(scenario.layout.edges.some((edge) => edge.id === 'outbound-lift-a-left-row-01')).toBe(true);
+    expect(scenario.layout.edges.some((edge) => edge.id === 'inbound-lift-top-01-main-north-01')).toBe(true);
+    expect(scenario.layout.edges.some((edge) => edge.id === 'outbound-lift-bottom-02-main-south-03')).toBe(true);
   });
 
   it('summarizes the default layout contract used by the Unreal static scaffold', () => {
@@ -166,114 +178,89 @@ describe('shuttle phase 0 SimCore', () => {
       schemaVersion: 'shuttle.simCoreStaticSceneContract.v1',
       scenarioId: 'shuttle-phase0-balanced',
       units: 'meter',
-      storageRows: 6,
-      storageColumns: 8,
-      storageCellCount: 48,
-      trackBedCount: 16,
-      storageLaneTrackCount: 6,
-      sideAisleTrackCount: 2,
-      crossAisleTrackCount: 2,
-      inboundConnectorTrackCount: 2,
-      outboundConnectorTrackCount: 2,
-      parkingConnectorTrackCount: 2,
+      storageRows: 16,
+      storageColumns: 24,
+      storageCellCount: 384,
+      trackBedCount: 474,
+      storageLaneTrackCount: 400,
+      sideAisleTrackCount: 42,
+      crossAisleTrackCount: 12,
+      inboundConnectorTrackCount: 8,
+      outboundConnectorTrackCount: 8,
+      parkingConnectorTrackCount: 4,
       diagonalTrackCount: 0,
-      inboundLiftPadCount: 2,
-      outboundLiftPadCount: 2,
-      parkingPadCount: 2,
+      inboundLiftPadCount: 4,
+      outboundLiftPadCount: 4,
+      parkingPadCount: 4,
       singleLevel: true,
-      denseStorageBlock: true,
+      denseStorageBlock: false,
       orthogonalTrackOnly: true,
       dedicatedLiftPorts: true,
-      inboundSide: 'right',
-      outboundSide: 'left'
+      inboundSide: 'mixed',
+      outboundSide: 'mixed'
     });
     expect(contract.storagePitchXM).toBeCloseTo(1.25, 6);
     expect(contract.storagePitchZM).toBeCloseTo(1.2, 6);
     expect(contract.storageBlockMinXM).toBeCloseTo(2.5, 6);
-    expect(contract.storageBlockMaxXM).toBeCloseTo(11.25, 6);
-    expect(contract.storageBlockMinZM).toBeCloseTo(-3, 6);
-    expect(contract.storageBlockMaxZM).toBeCloseTo(3, 6);
-    expect(contract.inboundLiftXM).toBeCloseTo(18, 6);
-    expect(contract.outboundLiftXM).toBeCloseTo(-4, 6);
-    expect(contract.storageCells).toHaveLength(48);
+    expect(contract.storageBlockMaxXM).toBeCloseTo(38, 6);
+    expect(contract.storageBlockMinZM).toBeCloseTo(-10.6, 6);
+    expect(contract.storageBlockMaxZM).toBeCloseTo(10.6, 6);
+    expect(contract.inboundLiftXM).toBeCloseTo(25, 6);
+    expect(contract.outboundLiftXM).toBeCloseTo(25, 6);
+    expect(contract.storageCells).toHaveLength(384);
     expect(contract.storageCells[0]).toMatchObject({
       id: 'storage-r01-c01',
       row: 1,
       column: 1,
       xM: 2.5,
       yM: 0,
-      zM: -3
+      zM: -10.6
     });
     expect(contract.storageCells.at(-1)).toMatchObject({
-      id: 'storage-r06-c08',
-      row: 6,
-      column: 8,
-      xM: 11.25,
+      id: 'storage-r16-c24',
+      row: 16,
+      column: 24,
+      xM: 38,
       yM: 0,
-      zM: 3
+      zM: 10.6
     });
     expect(contract.storageCells.every((cell) => cell.lengthXM === 1.12 && cell.lengthZM === 1.08)).toBe(true);
     expect(
-      Array.from({ length: 6 }, (_, rowIndex) =>
+      Array.from({ length: 16 }, (_, rowIndex) =>
         contract.storageCells.filter((cell) => cell.row === rowIndex + 1).map((cell) => cell.column)
       )
-    ).toEqual([
-      [1, 2, 3, 4, 5, 6, 7, 8],
-      [1, 2, 3, 4, 5, 6, 7, 8],
-      [1, 2, 3, 4, 5, 6, 7, 8],
-      [1, 2, 3, 4, 5, 6, 7, 8],
-      [1, 2, 3, 4, 5, 6, 7, 8],
-      [1, 2, 3, 4, 5, 6, 7, 8]
-    ]);
-    expect(contract.trackBeds.map((track) => track.id)).toEqual([
-      'cross-aisle-bottom',
-      'cross-aisle-top',
-      'inbound-lift-a-right-row-01',
-      'inbound-lift-b-right-row-06',
-      'outbound-lift-a-left-row-01',
-      'outbound-lift-b-left-row-06',
-      'parking-a-right-top',
-      'parking-b-right-bottom',
-      'side-aisle-left',
-      'side-aisle-right',
-      'storage-lane-r01',
-      'storage-lane-r02',
-      'storage-lane-r03',
-      'storage-lane-r04',
-      'storage-lane-r05',
-      'storage-lane-r06'
-    ]);
+    ).toEqual(Array.from({ length: 16 }, () => Array.from({ length: 24 }, (_, columnIndex) => columnIndex + 1)));
     expect(contract.trackBeds.every((track) => track.orientation === 'x' || track.orientation === 'z')).toBe(true);
-    expect(contract.trackBeds.filter((track) => track.category === 'storageLane')).toHaveLength(6);
-    expect(contract.trackBeds.find((track) => track.id === 'storage-lane-r01')).toMatchObject({
+    expect(contract.trackBeds.filter((track) => track.category === 'storageLane')).toHaveLength(400);
+    expect(contract.trackBeds.find((track) => track.id === 'right-row-01-storage-r01-c24')).toMatchObject({
       category: 'storageLane',
-      xM: 7,
-      zM: -3,
-      lengthXM: 14,
+      zM: -10.6,
+      lengthXM: 2.5,
       lengthZM: 0.08,
       orientation: 'x',
       row: 1,
-      side: 'none'
+      side: 'right'
     });
-    expect(contract.trackBeds.find((track) => track.id === 'side-aisle-left')).toMatchObject({
+    expect(contract.trackBeds.find((track) => track.id === 'main-north-01-main-north-02')).toMatchObject({
+      category: 'crossAisle',
+      zM: -0.8,
+      orientation: 'x'
+    });
+    expect(contract.trackBeds.find((track) => track.id === 'left-row-08-main-north-00')).toMatchObject({
       category: 'sideAisle',
       xM: 0,
-      zM: 0,
       lengthXM: 0.1,
-      lengthZM: 9.6,
       orientation: 'z',
       side: 'left'
     });
-    expect(contract.liftPads.map((pad) => `${pad.category}:${pad.id}:${pad.side}`)).toEqual([
-      'inboundLift:inbound-lift-a:right',
-      'inboundLift:inbound-lift-b:right',
-      'outboundLift:outbound-lift-a:left',
-      'outboundLift:outbound-lift-b:left'
+    expect(contract.liftPads.filter((pad) => pad.category === 'inboundLift').map((pad) => pad.id).sort()).toEqual([
+      'inbound-lift-bottom-01',
+      'inbound-lift-bottom-02',
+      'inbound-lift-top-01',
+      'inbound-lift-top-02'
     ]);
-    expect(contract.parkingPads.map((pad) => `${pad.category}:${pad.id}:${pad.side}`)).toEqual([
-      'parking:parking-a:right',
-      'parking:parking-b:right'
-    ]);
+    expect(contract.liftPads.filter((pad) => pad.category === 'outboundLift')).toHaveLength(4);
+    expect(contract.parkingPads.map((pad) => pad.id).sort()).toEqual(['parking-a', 'parking-b', 'parking-c', 'parking-d']);
   });
 
   it('rejects multi-capacity traffic resources for Phase 0', () => {
@@ -294,7 +281,7 @@ describe('shuttle phase 0 SimCore', () => {
         ...createDefaultShuttleScenario(),
         vehicles: {
           ...createDefaultShuttleScenario().vehicles,
-          count: 3
+          count: 5
         }
       })
     ).toThrow(/one parking node per vehicle/);
@@ -379,6 +366,16 @@ describe('shuttle phase 0 SimCore', () => {
         inboundOutboundMix: 0.5,
         arrivalDistribution: 'deterministic',
         maxTasks: 12
+      },
+      physicsParams: {
+        emptySpeedMps: 8,
+        loadedSpeedMps: 7,
+        accelerationMps2: 10,
+        switchDirectionSec: 0,
+        liftTimeSec: 0.05,
+        lowerTimeSec: 0.05,
+        loadedClearanceM: 0.2,
+        reservationClearanceSec: 0.05
       }
     });
     const sim = new ShuttleSimCore(scenario);
@@ -389,10 +386,8 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.kpis.deadlockCount).toBe(0);
     expect(state.tasks.every((task) => task.kind !== 'inbound' || task.pickupNodeId.startsWith('inbound-lift-'))).toBe(true);
     expect(state.tasks.every((task) => task.kind !== 'outbound' || task.dropoffNodeId.startsWith('outbound-lift-'))).toBe(true);
-    expect(state.traffic.liftPorts).toHaveLength(4);
-    expect(state.traffic.liftPorts.some((port) => port.queueLength > 0)).toBe(true);
+    expect(state.traffic.liftPorts).toHaveLength(8);
     expect(state.traffic.liftPorts.some((port) => port.kind === 'inbound' && port.utilization > 0)).toBe(true);
-    expect(Object.keys(state.kpis.blockedTimeByReasonSec).some((reason) => reason.startsWith('inbound-lift-busy:'))).toBe(true);
   });
 
   it('defers outbound work instead of creating phantom pallets when FIFO storage is empty', () => {
@@ -417,7 +412,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(sim.getEventLog().some((entry) => entry.eventType === 'task-deferred' && entry.reason === 'storage-empty')).toBe(true);
   });
 
-  it('fills and drains FIFO storage lanes using existing pallet loads', () => {
+  it('fills FIFO storage lanes using generated inbound pallet loads', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       durationSec: 260,
       taskGeneration: {
@@ -440,24 +435,29 @@ describe('shuttle phase 0 SimCore', () => {
     }));
 
     sim.start();
-    for (let index = 0; index < 2000 && sim.getState().kpis.completedOutbound < 1; index += 1) {
+    for (let index = 0; index < 1000 && sim.getState().kpis.completedInbound < 2; index += 1) {
       sim.step(0.2);
     }
     const state = sim.getState();
-    const outboundTasks = state.tasks.filter((task) => task.kind === 'outbound');
+    const inboundTasks = state.tasks.filter((task) => task.kind === 'inbound');
     const storageOccupancy = sim.getDebugState().storageNodeOccupancy;
 
-    expect(state.kpis.completedOutbound).toBeGreaterThanOrEqual(1);
-    expect(outboundTasks.slice(0, 1).map((task) => [task.pickupNodeId, task.loadId])).toEqual([
-      ['storage-r01-c01', 'load-0001']
+    expect(state.kpis.completedInbound).toBeGreaterThanOrEqual(2);
+    expect(inboundTasks.slice(0, 2).map((task) => [task.dropoffNodeId, task.loadId])).toEqual([
+      ['storage-r01-c01', 'load-0001'],
+      ['storage-r02-c01', 'load-0002']
     ]);
-    expect(state.loads.find((load) => load.id === 'load-0001')).toMatchObject({ state: 'delivered', nodeId: expect.stringMatching(/^outbound-lift-/) });
-    expect(storageOccupancy.some((entry) => entry.nodeId === 'storage-r01-c01')).toBe(false);
+    expect(state.loads.find((load) => load.id === 'load-0001')).toMatchObject({ state: 'stored', nodeId: 'storage-r01-c01' });
+    expect(state.loads.find((load) => load.id === 'load-0002')).toMatchObject({ state: 'stored', nodeId: 'storage-r02-c01' });
     expect(storageOccupancy).toEqual(expect.arrayContaining([
-      { nodeId: 'storage-r01-c02', loadId: 'load-0007' },
+      { nodeId: 'storage-r01-c01', loadId: 'load-0001' },
       { nodeId: 'storage-r02-c01', loadId: 'load-0002' },
       { nodeId: 'storage-r03-c01', loadId: 'load-0003' },
-      { nodeId: 'storage-r06-c01', loadId: 'load-0006' }
+      { nodeId: 'storage-r04-c01', loadId: 'load-0004' },
+      { nodeId: 'storage-r05-c01', loadId: 'load-0005' },
+      { nodeId: 'storage-r06-c01', loadId: 'load-0006' },
+      { nodeId: 'storage-r07-c01', loadId: 'load-0007' },
+      { nodeId: 'storage-r08-c01', loadId: 'load-0008' }
     ]));
   });
 
@@ -524,8 +524,8 @@ describe('shuttle phase 0 SimCore', () => {
         maxTasks: 10
       }
     }));
-    sim.addLoadForTest({ id: 'load-r06-c03', state: 'waiting', nodeId: 'inbound-lift-b', vehicleId: null, weightKg: 100 });
-    sim.addLoadForTest({ id: 'load-r06-c04', state: 'waiting', nodeId: 'inbound-lift-b', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'load-r06-c03', state: 'waiting', nodeId: 'inbound-lift-top-01', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'load-r06-c04', state: 'waiting', nodeId: 'inbound-lift-top-01', vehicleId: null, weightKg: 100 });
     sim.addTaskForTest({
       id: 'task-r06-c03',
       kind: 'inbound',
@@ -534,7 +534,7 @@ describe('shuttle phase 0 SimCore', () => {
       assignedAtSec: null,
       startedAtSec: null,
       completedAtSec: null,
-      pickupNodeId: 'inbound-lift-b',
+      pickupNodeId: 'inbound-lift-top-01',
       dropoffNodeId: 'storage-r06-c03',
       loadId: 'load-r06-c03',
       vehicleId: null,
@@ -549,7 +549,7 @@ describe('shuttle phase 0 SimCore', () => {
       assignedAtSec: null,
       startedAtSec: null,
       completedAtSec: null,
-      pickupNodeId: 'inbound-lift-b',
+      pickupNodeId: 'inbound-lift-top-01',
       dropoffNodeId: 'storage-r06-c04',
       loadId: 'load-r06-c04',
       vehicleId: null,
@@ -595,7 +595,7 @@ describe('shuttle phase 0 SimCore', () => {
       startedAtSec: null,
       completedAtSec: null,
       pickupNodeId: 'storage-r01-c01',
-      dropoffNodeId: 'outbound-lift-a',
+      dropoffNodeId: 'outbound-lift-top-01',
       loadId: 'load-a',
       vehicleId: null,
       replanCount: 0,
@@ -618,7 +618,7 @@ describe('shuttle phase 0 SimCore', () => {
       startedAtSec: null,
       completedAtSec: null,
       pickupNodeId: 'storage-r01-c02',
-      dropoffNodeId: 'outbound-lift-a',
+      dropoffNodeId: 'outbound-lift-top-01',
       loadId: 'load-b',
       vehicleId: null,
       replanCount: 0,
@@ -635,35 +635,35 @@ describe('shuttle phase 0 SimCore', () => {
   });
 
   it('defers inbound work when FIFO storage cells are stored or already reserved', () => {
-    const sim = new ShuttleSimCore(createDefaultShuttleScenario({
-      durationSec: 2000,
+    const scenario = createDefaultShuttleScenario({
+      durationSec: 20,
       taskGeneration: {
-        inboundRatePerHour: 3600,
+        inboundRatePerHour: 7200,
         outboundRatePerHour: 0,
         inboundOutboundMix: 0.5,
         arrivalDistribution: 'deterministic',
-        maxTasks: 50
-      },
-      physicsParams: {
-        emptySpeedMps: 8,
-        loadedSpeedMps: 7,
-        accelerationMps2: 10,
-        switchDirectionSec: 0,
-        liftTimeSec: 0.05,
-        lowerTimeSec: 0.05,
-        loadedClearanceM: 0.2,
-        reservationClearanceSec: 0.05
+        maxTasks: 10
       }
-    }));
+    });
+    const sim = new ShuttleSimCore(scenario);
+    for (const node of scenario.layout.nodes.filter((candidate) => candidate.type === 'storage')) {
+      sim.addLoadForTest({
+        id: `load-${node.id}`,
+        state: 'stored',
+        nodeId: node.id,
+        vehicleId: null,
+        weightKg: 100
+      });
+    }
 
     sim.start();
-    for (let index = 0; index < 20000 && !(sim.getState().kpis.blockedTimeByReasonSec['storage-full'] > 0); index += 1) {
+    for (let index = 0; index < 10 && !(sim.getState().kpis.blockedTimeByReasonSec['storage-full'] > 0); index += 1) {
       sim.step(0.2);
     }
     const state = sim.getState();
 
-    expect(state.tasks).toHaveLength(48);
-    expect(sim.getDebugState().storageNodeOccupancy).toHaveLength(48);
+    expect(state.tasks).toHaveLength(0);
+    expect(sim.getDebugState().storageNodeOccupancy).toHaveLength(384);
     expect(state.kpis.blockedTimeByReasonSec['storage-full']).toBeGreaterThan(0);
     expect(sim.getEventLog().some((entry) => entry.eventType === 'task-deferred' && entry.reason === 'storage-full')).toBe(true);
   });

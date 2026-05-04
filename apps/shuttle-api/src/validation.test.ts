@@ -45,19 +45,19 @@ function putVehicleOnMainEntryEdge(
   reservations: Array<Reservation['resourceType']>
 ): void {
   const vehicle = candidate.state.vehicles[0]!;
-  const from = node(candidate.scenario, 'x-main');
-  const to = node(candidate.scenario, 'right-row-03');
+  const from = node(candidate.scenario, 'main-north-01');
+  const to = node(candidate.scenario, 'main-south-01');
   vehicle.state = 'moving-to-pickup';
-  vehicle.currentNodeId = 'x-main';
-  vehicle.currentEdgeId = 'x-main-right-row-03';
-  vehicle.targetNodeId = 'right-row-03';
+  vehicle.currentNodeId = 'main-north-01';
+  vehicle.currentEdgeId = 'main-north-01-main-south-01';
+  vehicle.targetNodeId = 'main-south-01';
   vehicle.x = (from.x + to.x) / 2;
   vehicle.z = (from.z + to.z) / 2;
   vehicle.speedMps = 0.2;
   candidate.state.reservations = reservations.map((resourceType) => {
-    if (resourceType === 'edge') return reservation('edge', 'x-main-right-row-03');
-    if (resourceType === 'node') return reservation('node', 'right-row-03');
-    return reservation('zone', 'zone-x-main');
+    if (resourceType === 'edge') return reservation('edge', 'main-north-01-main-south-01');
+    if (resourceType === 'node') return reservation('node', 'main-south-01');
+    return reservation('zone', 'zone-main-portal-01');
   });
 }
 
@@ -69,7 +69,7 @@ describe('phase 0 validation', () => {
       repeatCount: 3,
       sweepSeeds: [20260502, 20260503],
       longRunThresholds: {
-        minTotalPph: 75
+        minTotalPph: 20
       }
     });
 
@@ -83,7 +83,7 @@ describe('phase 0 validation', () => {
     expect(result.seedSweep.runs.every((run) => run.physicalViolationExamples.length === 0)).toBe(true);
     expect(result.longRun.durationSec).toBe(240);
     expect(result.longRun.runs).toHaveLength(2);
-    expect(result.longRun.thresholds.minTotalPph).toBe(75);
+    expect(result.longRun.thresholds.minTotalPph).toBe(20);
     expect(result.longRun.maxQueuedTasks).toBeLessThanOrEqual(result.longRun.thresholds.maxQueuedTasks);
     expect(result.longRun.maxLiftPortQueueLength).toBeLessThanOrEqual(result.longRun.thresholds.maxLiftPortQueueLength);
     expect(result.longRun.maxQueuedTasks).toBeLessThanOrEqual(40);

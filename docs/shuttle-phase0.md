@@ -114,7 +114,7 @@ The Unreal bridge has been compiled inside a temporary UE 5.7 project with Pixel
 The execution checklist is tracked in `docs/unreal-visual-twin-plan.md`.
 
 1. Create the real Unreal visual-twin project and copy `unreal-bridge` into `Plugins/ShuttlePhase0Bridge`.
-2. Build a single-level scene with a dense 6x8 storage block, right-side inbound lift ports, left-side outbound lift ports, and orthogonal track-only shuttle movement.
+2. Build a single-level scene with a 16x24 multi-bank storage field, dedicated inbound/outbound lift ports, and orthogonal track-only shuttle movement.
 3. Enable Pixel Streaming for runtime streaming. `WebSockets` is linked as an Unreal module by the bridge.
 4. Bind placeholder actors to `UShuttleStateSubscriberSubsystem`; each `AShuttleVisualTwinActor` can be preassigned a `VehicleId` and will ignore other vehicle states.
 5. Use the route, blocker, and timing fields on `FShuttleVisualVehicleState` for Blueprint debug overlays.

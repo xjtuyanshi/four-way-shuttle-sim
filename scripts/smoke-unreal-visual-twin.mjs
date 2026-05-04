@@ -438,11 +438,14 @@ async function main() {
   const simCoreStaticSceneContract = readSimCoreStaticSceneContract();
   if (
     simCoreStaticSceneContract.singleLevel !== true ||
-    simCoreStaticSceneContract.denseStorageBlock !== true ||
+    simCoreStaticSceneContract.storageRows !== 16 ||
+    simCoreStaticSceneContract.storageColumns !== 24 ||
+    simCoreStaticSceneContract.storageCellCount !== 384 ||
+    simCoreStaticSceneContract.denseStorageBlock !== false ||
     simCoreStaticSceneContract.orthogonalTrackOnly !== true ||
     simCoreStaticSceneContract.dedicatedLiftPorts !== true
   ) {
-    throw new Error(`SimCore default scene contract is not a single-level dense four-way shuttle layout: ${JSON.stringify(simCoreStaticSceneContract, null, 2)}`);
+    throw new Error(`SimCore default scene contract is not the expected single-level multi-bank four-way shuttle layout: ${JSON.stringify(simCoreStaticSceneContract, null, 2)}`);
   }
   assertStaticSceneParityWithSimCore(staticSceneSummary, simCoreStaticSceneContract);
   console.log(JSON.stringify({ simCoreStaticSceneContract, unrealStaticSceneSmoke: staticSceneSummary }, null, 2));

@@ -106,6 +106,14 @@ function minimumPositivePitch(values: number[]): number {
   return deltas.length > 0 ? deltas[0]! : 0;
 }
 
+function hasUniformPitch(values: number[], pitch: number): boolean {
+  if (values.length <= 2) {
+    return true;
+  }
+  const sorted = sortedUniqueNumbers(values);
+  return sorted.slice(1).every((value, index) => Math.abs(round(value - sorted[index]!, 6) - pitch) <= 1e-6);
+}
+
 function averageX(nodes: LayoutNode[]): number {
   if (nodes.length === 0) {
     return 0;
@@ -138,6 +146,61 @@ function sideForX(x: number, storageMinX: number, storageMaxX: number): 'left' |
     return 'left';
   }
   return 'mixed';
+}
+
+function rowForNodeId(nodeId: string): number {
+  const storageMatch = /^storage-r(\d+)-c\d+$/.exec(nodeId);
+  if (storageMatch) {
+    return Number(storageMatch[1]);
+  }
+  const sideRowMatch = /^(?:left|right)-row-(\d+)$/.exec(nodeId);
+  return sideRowMatch ? Number(sideRowMatch[1]) : 0;
+}
+
+function sideForTrack(
+  from: LayoutNode,
+  to: LayoutNode,
+  storageMinX: number,
+  storageMaxX: number,
+  storageMinZ: number,
+  storageMaxZ: number
+): ShuttleStaticSceneTrackBed['side'] {
+  const x = (from.x + to.x) / 2;
+  const z = (from.z + to.z) / 2;
+  if (x < storageMinX) {
+    return 'left';
+  }
+  if (x > storageMaxX) {
+    return 'right';
+  }
+  if (z < storageMinZ) {
+    return 'top';
+  }
+  if (z > storageMaxZ) {
+    return 'bottom';
+  }
+  return 'none';
+}
+
+function trackCategoryForEdge(
+  edge: ShuttleScenario['layout']['edges'][number],
+  from: LayoutNode,
+  to: LayoutNode
+): ShuttleStaticSceneTrackCategory {
+  if (from.type === 'parking' || to.type === 'parking') {
+    return 'parkingConnector';
+  }
+  const liftNode = from.type === 'lift-blackbox' ? from : to.type === 'lift-blackbox' ? to : null;
+  if (liftNode?.id.startsWith('inbound-lift')) {
+    return 'inboundConnector';
+  }
+  if (liftNode?.id.startsWith('outbound-lift')) {
+    return 'outboundConnector';
+  }
+  if (edge.conflictGroup?.startsWith('fifo-lane')) {
+    return 'storageLane';
+  }
+  return Math.abs(to.x - from.x) >= Math.abs(to.z - from.z) ? 'crossAisle' : 'sideAisle';
 }
 
 export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario): ShuttleStaticSceneContract {
@@ -190,163 +253,49 @@ export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario):
     const to = nodesById.get(edge.to);
     return Boolean(from && to && Math.abs(from.x - to.x) > 1e-6 && Math.abs(from.z - to.z) > 1e-6);
   }).length;
-  const hasLeftAisle = scenario.layout.nodes.some((node) => node.id.startsWith('left-'));
-  const hasRightAisle = scenario.layout.nodes.some((node) => node.id.startsWith('right-'));
-  const crossAisleTrackCount = scenario.layout.edges.filter((edge) => {
-    const from = nodesById.get(edge.from);
-    const to = nodesById.get(edge.to);
-    if (!from || !to || from.type !== 'aisle' || to.type !== 'aisle') {
-      return false;
-    }
-    return from.z === to.z && ((from.id.startsWith('left-') && to.id.startsWith('right-')) || (from.id.startsWith('right-') && to.id.startsWith('left-')));
-  }).length;
   const inboundLiftNodes = scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.id.startsWith('inbound-lift-'));
   const outboundLiftNodes = scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.id.startsWith('outbound-lift-'));
   const parkingNodes = scenario.layout.nodes.filter((node) => node.type === 'parking');
   const inboundSide = sideForNodes(inboundLiftNodes, storageBlockMinXM, storageBlockMaxXM);
   const outboundSide = sideForNodes(outboundLiftNodes, storageBlockMinXM, storageBlockMaxXM);
-  const storageLaneTrackCount = storageRows;
-  const sideAisleTrackCount = Number(hasLeftAisle) + Number(hasRightAisle);
-  const inboundConnectorTrackCount = inboundLiftNodes.length;
-  const outboundConnectorTrackCount = outboundLiftNodes.length;
-  const parkingConnectorTrackCount = parkingNodes.length;
-  const trackBedCount =
-    storageLaneTrackCount +
-    sideAisleTrackCount +
-    crossAisleTrackCount +
-    inboundConnectorTrackCount +
-    outboundConnectorTrackCount +
-    parkingConnectorTrackCount;
 
-  const addTrackFromNodes = (
-    target: ShuttleStaticSceneTrackBed[],
-    options: {
-      id: string;
-      category: ShuttleStaticSceneTrackCategory;
-      fromNodeId: string;
-      toNodeId: string;
-      widthM: number;
-      row: number;
-      side: ShuttleStaticSceneTrackBed['side'];
-    }
-  ) => {
-    const from = nodesById.get(options.fromNodeId);
-    const to = nodesById.get(options.toNodeId);
+  const trackBeds: ShuttleStaticSceneTrackBed[] = [];
+  for (const edge of scenario.layout.edges) {
+    const from = nodesById.get(edge.from);
+    const to = nodesById.get(edge.to);
     if (!from || !to) {
-      return;
+      continue;
     }
     const deltaX = Math.abs(to.x - from.x);
     const deltaZ = Math.abs(to.z - from.z);
     const orientation = deltaX >= deltaZ ? 'x' : 'z';
-    target.push({
-      id: options.id,
-      category: options.category,
+    const category = trackCategoryForEdge(edge, from, to);
+    const widthM = category === 'storageLane'
+      ? DEFAULT_STORAGE_LANE_TRACK_WIDTH_Z_M
+      : category === 'inboundConnector' || category === 'outboundConnector' || category === 'parkingConnector'
+        ? DEFAULT_CONNECTOR_TRACK_WIDTH_M
+        : DEFAULT_AISLE_TRACK_WIDTH_M;
+    trackBeds.push({
+      id: edge.id,
+      category,
       xM: round((from.x + to.x) / 2, 6),
       yM: round((from.y + to.y) / 2, 6),
       zM: round((from.z + to.z) / 2, 6),
-      lengthXM: round(orientation === 'x' ? deltaX : options.widthM, 6),
-      lengthZM: round(orientation === 'z' ? deltaZ : options.widthM, 6),
+      lengthXM: round(orientation === 'x' ? deltaX : widthM, 6),
+      lengthZM: round(orientation === 'z' ? deltaZ : widthM, 6),
       orientation,
-      row: options.row,
-      side: options.side
+      row: Math.max(rowForNodeId(edge.from), rowForNodeId(edge.to)),
+      side: sideForTrack(from, to, storageBlockMinXM, storageBlockMaxXM, storageBlockMinZM, storageBlockMaxZM)
     });
-  };
+  }
 
-  const trackBeds: ShuttleStaticSceneTrackBed[] = [];
-  for (const row of [...storageRowsById].sort((left, right) => left - right)) {
-    const rowLabel = String(row).padStart(2, '0');
-    addTrackFromNodes(trackBeds, {
-      id: `storage-lane-r${rowLabel}`,
-      category: 'storageLane',
-      fromNodeId: `left-row-${rowLabel}`,
-      toNodeId: `right-row-${rowLabel}`,
-      widthM: DEFAULT_STORAGE_LANE_TRACK_WIDTH_Z_M,
-      row,
-      side: 'none'
-    });
-  }
-  addTrackFromNodes(trackBeds, {
-    id: 'side-aisle-left',
-    category: 'sideAisle',
-    fromNodeId: 'left-top',
-    toNodeId: 'left-bottom',
-    widthM: DEFAULT_AISLE_TRACK_WIDTH_M,
-    row: 0,
-    side: 'left'
-  });
-  addTrackFromNodes(trackBeds, {
-    id: 'side-aisle-right',
-    category: 'sideAisle',
-    fromNodeId: 'right-top',
-    toNodeId: 'right-bottom',
-    widthM: DEFAULT_AISLE_TRACK_WIDTH_M,
-    row: 0,
-    side: 'right'
-  });
-  addTrackFromNodes(trackBeds, {
-    id: 'cross-aisle-top',
-    category: 'crossAisle',
-    fromNodeId: 'left-top',
-    toNodeId: 'right-top',
-    widthM: DEFAULT_AISLE_TRACK_WIDTH_M,
-    row: 0,
-    side: 'top'
-  });
-  addTrackFromNodes(trackBeds, {
-    id: 'cross-aisle-bottom',
-    category: 'crossAisle',
-    fromNodeId: 'left-bottom',
-    toNodeId: 'right-bottom',
-    widthM: DEFAULT_AISLE_TRACK_WIDTH_M,
-    row: 0,
-    side: 'bottom'
-  });
-  for (const node of sortedById(inboundLiftNodes)) {
-    const rowMatch = /-(a|b)$/.exec(node.id);
-    const targetRow = rowMatch?.[1] === 'a' ? 1 : storageRows;
-    const rowLabel = String(targetRow).padStart(2, '0');
-    addTrackFromNodes(trackBeds, {
-      id: `${node.id}-right-row-${rowLabel}`,
-      category: 'inboundConnector',
-      fromNodeId: node.id,
-      toNodeId: `right-row-${rowLabel}`,
-      widthM: DEFAULT_CONNECTOR_TRACK_WIDTH_M,
-      row: targetRow,
-      side: 'right'
-    });
-  }
-  for (const node of sortedById(outboundLiftNodes)) {
-    const rowMatch = /-(a|b)$/.exec(node.id);
-    const targetRow = rowMatch?.[1] === 'a' ? 1 : storageRows;
-    const rowLabel = String(targetRow).padStart(2, '0');
-    addTrackFromNodes(trackBeds, {
-      id: `${node.id}-left-row-${rowLabel}`,
-      category: 'outboundConnector',
-      fromNodeId: node.id,
-      toNodeId: `left-row-${rowLabel}`,
-      widthM: DEFAULT_CONNECTOR_TRACK_WIDTH_M,
-      row: targetRow,
-      side: 'left'
-    });
-  }
-  addTrackFromNodes(trackBeds, {
-    id: 'parking-a-right-top',
-    category: 'parkingConnector',
-    fromNodeId: 'parking-a',
-    toNodeId: 'right-top',
-    widthM: DEFAULT_CONNECTOR_TRACK_WIDTH_M,
-    row: 0,
-    side: 'right'
-  });
-  addTrackFromNodes(trackBeds, {
-    id: 'parking-b-right-bottom',
-    category: 'parkingConnector',
-    fromNodeId: 'parking-b',
-    toNodeId: 'right-bottom',
-    widthM: DEFAULT_CONNECTOR_TRACK_WIDTH_M,
-    row: 0,
-    side: 'right'
-  });
+  const storageLaneTrackCount = trackBeds.filter((track) => track.category === 'storageLane').length;
+  const sideAisleTrackCount = trackBeds.filter((track) => track.category === 'sideAisle').length;
+  const crossAisleTrackCount = trackBeds.filter((track) => track.category === 'crossAisle').length;
+  const inboundConnectorTrackCount = trackBeds.filter((track) => track.category === 'inboundConnector').length;
+  const outboundConnectorTrackCount = trackBeds.filter((track) => track.category === 'outboundConnector').length;
+  const parkingConnectorTrackCount = trackBeds.filter((track) => track.category === 'parkingConnector').length;
+  const trackBedCount = trackBeds.length;
 
   const liftPads: ShuttleStaticScenePad[] = sortedById([
     ...inboundLiftNodes.map((node) => ({
@@ -417,14 +366,13 @@ export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario):
       storageNodes.length === expectedCellCount &&
       storageXs.length === storageColumns &&
       storageZs.length === storageRows &&
-      completeIdGrid,
+      completeIdGrid &&
+      hasUniformPitch(storageNodes.map((node) => node.x), minimumPositivePitch(storageNodes.map((node) => node.x))) &&
+      hasUniformPitch(storageNodes.map((node) => node.z), minimumPositivePitch(storageNodes.map((node) => node.z))),
     orthogonalTrackOnly: diagonalTrackCount === 0,
     dedicatedLiftPorts:
       inboundLiftNodes.length > 0 &&
-      outboundLiftNodes.length > 0 &&
-      inboundSide !== 'mixed' &&
-      outboundSide !== 'mixed' &&
-      inboundSide !== outboundSide,
+      outboundLiftNodes.length > 0,
     inboundSide,
     outboundSide
   };

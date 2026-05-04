@@ -14,23 +14,92 @@ DEFINE_LOG_CATEGORY_STATIC(LogShuttleVisualTwinRuntime, Log, All);
 
 namespace
 {
-constexpr int32 StorageRows = 6;
-constexpr int32 StorageColumns = 8;
+constexpr int32 StorageRowsPerBank = 8;
+constexpr int32 StorageRowBanks = 2;
+constexpr int32 StorageRows = StorageRowsPerBank * StorageRowBanks;
+constexpr int32 StorageColumnsPerBay = 6;
+constexpr int32 StorageColumnBays = 4;
+constexpr int32 StorageColumns = StorageColumnsPerBay * StorageColumnBays;
 constexpr float StoragePitchXM = 1.25f;
 constexpr float StoragePitchZM = 1.2f;
 constexpr float FirstStorageXM = 2.5f;
+constexpr float StorageBayGapXM = 2.25f;
+constexpr float StorageInnerRowZM = 2.2f;
 constexpr float LeftSpineXM = 0.0f;
-constexpr float RightSpineXM = 14.0f;
-constexpr float InboundXM = 18.0f;
-constexpr float OutboundXM = -4.0f;
-constexpr float TopZM = -4.8f;
-constexpr float BottomZM = 4.8f;
-constexpr float ParkingTopZM = -7.2f;
-constexpr float ParkingBottomZM = 7.2f;
+constexpr float SideClearanceXM = 2.5f;
+constexpr float MainLaneNorthZM = -0.8f;
+constexpr float MainLaneSouthZM = 0.8f;
+constexpr float LiftStandoffZM = 1.8f;
+constexpr float ParkingStandoffXM = 2.4f;
 
 float RowZ(const int32 RowIndex)
 {
-    return (static_cast<float>(RowIndex) - (static_cast<float>(StorageRows - 1) / 2.0f)) * StoragePitchZM;
+    if (RowIndex < StorageRowsPerBank)
+    {
+        return -(StorageInnerRowZM + static_cast<float>(StorageRowsPerBank - RowIndex - 1) * StoragePitchZM);
+    }
+    return StorageInnerRowZM + static_cast<float>(RowIndex - StorageRowsPerBank) * StoragePitchZM;
+}
+
+float ColumnX(const int32 ColumnIndex)
+{
+    return FirstStorageXM +
+        static_cast<float>(ColumnIndex) * StoragePitchXM +
+        static_cast<float>(ColumnIndex / StorageColumnsPerBay) * StorageBayGapXM;
+}
+
+float RightSpineX()
+{
+    return ColumnX(StorageColumns - 1) + SideClearanceXM;
+}
+
+float TopZ()
+{
+    return RowZ(0) - StoragePitchZM * 1.5f;
+}
+
+float BottomZ()
+{
+    return RowZ(StorageRows - 1) + StoragePitchZM * 1.5f;
+}
+
+float TopLiftZ()
+{
+    return TopZ() - LiftStandoffZM;
+}
+
+float BottomLiftZ()
+{
+    return BottomZ() + LiftStandoffZM;
+}
+
+float LiftPortalX(const int32 PortalIndex)
+{
+    if (PortalIndex < StorageColumnBays - 1)
+    {
+        const int32 LeftColumnIndex = (PortalIndex + 1) * StorageColumnsPerBay - 1;
+        const int32 RightColumnIndex = LeftColumnIndex + 1;
+        return (ColumnX(LeftColumnIndex) + ColumnX(RightColumnIndex)) * 0.5f;
+    }
+    return (ColumnX(StorageColumns - 1) + RightSpineX()) * 0.5f;
+}
+
+float MainX(const int32 MainIndex)
+{
+    if (MainIndex == 0)
+    {
+        return LeftSpineXM;
+    }
+    if (MainIndex == StorageColumnBays + 1)
+    {
+        return RightSpineX();
+    }
+    return LiftPortalX(MainIndex - 1);
+}
+
+FString MainLaneNodeId(const TCHAR* Lane, const int32 Index)
+{
+    return FString::Printf(TEXT("main-%s-%02d"), Lane, Index);
 }
 }
 
@@ -137,19 +206,121 @@ void AShuttleVisualTwinRuntimeActor::RebuildStaticScene()
     StaticSceneContract.StoragePitchXM = StoragePitchXM;
     StaticSceneContract.StoragePitchZM = StoragePitchZM;
     StaticSceneContract.StorageBlockMinXM = FirstStorageXM;
-    StaticSceneContract.StorageBlockMaxXM = FirstStorageXM + static_cast<float>(StorageColumns - 1) * StoragePitchXM;
+    StaticSceneContract.StorageBlockMaxXM = ColumnX(StorageColumns - 1);
     StaticSceneContract.StorageBlockMinZM = RowZ(0);
     StaticSceneContract.StorageBlockMaxZM = RowZ(StorageRows - 1);
-    StaticSceneContract.InboundLiftXM = InboundXM;
-    StaticSceneContract.OutboundLiftXM = OutboundXM;
+    StaticSceneContract.InboundLiftXM = (LiftPortalX(0) + LiftPortalX(1) + LiftPortalX(2) + LiftPortalX(3)) * 0.25f;
+    StaticSceneContract.OutboundLiftXM = StaticSceneContract.InboundLiftXM;
     StaticSceneContract.bSingleLevel = true;
 
+    constexpr int32 MainNodeCount = StorageColumnBays + 2;
+    const int32 LastMainIndex = MainNodeCount - 1;
+    const float RightSpineXM = RightSpineX();
+    const float StorageMaxXM = ColumnX(StorageColumns - 1);
+    const float StorageMinZM = RowZ(0);
+    const float StorageMaxZM = RowZ(StorageRows - 1);
+    const auto TrackSide = [&](const float FromX, const float FromZ, const float ToX, const float ToZ) -> const TCHAR*
+    {
+        const float X = (FromX + ToX) * 0.5f;
+        const float Z = (FromZ + ToZ) * 0.5f;
+        if (X < FirstStorageXM)
+        {
+            return TEXT("left");
+        }
+        if (X > StorageMaxXM)
+        {
+            return TEXT("right");
+        }
+        if (Z < StorageMinZM)
+        {
+            return TEXT("top");
+        }
+        if (Z > StorageMaxZM)
+        {
+            return TEXT("bottom");
+        }
+        return TEXT("none");
+    };
+    const auto PadSide = [&](const float X) -> const TCHAR*
+    {
+        if (X < FirstStorageXM)
+        {
+            return TEXT("left");
+        }
+        if (X > StorageMaxXM)
+        {
+            return TEXT("right");
+        }
+        return TEXT("mixed");
+    };
+    const auto TrackCounterForCategory = [](const FString& Category) -> int32 FShuttleStaticSceneContractForSmoke::*
+    {
+        if (Category == TEXT("storageLane"))
+        {
+            return &FShuttleStaticSceneContractForSmoke::StorageLaneTrackCount;
+        }
+        if (Category == TEXT("sideAisle"))
+        {
+            return &FShuttleStaticSceneContractForSmoke::SideAisleTrackCount;
+        }
+        if (Category == TEXT("crossAisle"))
+        {
+            return &FShuttleStaticSceneContractForSmoke::CrossAisleTrackCount;
+        }
+        if (Category == TEXT("inboundConnector"))
+        {
+            return &FShuttleStaticSceneContractForSmoke::InboundConnectorTrackCount;
+        }
+        if (Category == TEXT("outboundConnector"))
+        {
+            return &FShuttleStaticSceneContractForSmoke::OutboundConnectorTrackCount;
+        }
+        return &FShuttleStaticSceneContractForSmoke::ParkingConnectorTrackCount;
+    };
+    const auto AddTrack = [&](
+        const FString& Id,
+        const FString& Category,
+        const float FromX,
+        const float FromZ,
+        const float ToX,
+        const float ToZ,
+        const int32 Row
+    )
+    {
+        const float DeltaX = FMath::Abs(ToX - FromX);
+        const float DeltaZ = FMath::Abs(ToZ - FromZ);
+        const bool bOrientationX = DeltaX >= DeltaZ;
+        const float WidthM =
+            Category == TEXT("storageLane")
+                ? 0.08f
+                : (Category == TEXT("inboundConnector") || Category == TEXT("outboundConnector") || Category == TEXT("parkingConnector"))
+                    ? 0.12f
+                    : 0.10f;
+        AddTrackBedMeters(
+            Id,
+            Category,
+            bOrientationX ? TEXT("x") : TEXT("z"),
+            Row,
+            TrackSide(FromX, FromZ, ToX, ToZ),
+            (FromX + ToX) * 0.5f,
+            (FromZ + ToZ) * 0.5f,
+            bOrientationX ? DeltaX : WidthM,
+            bOrientationX ? WidthM : DeltaZ,
+            0.055f,
+            TrackCounterForCategory(Category)
+        );
+    };
+
+    const float FloorMinX = LeftSpineXM - ParkingStandoffXM;
+    const float FloorMaxX = RightSpineXM + ParkingStandoffXM;
+    const float FloorMinZ = TopLiftZ();
+    const float FloorMaxZ = BottomLiftZ();
     AddInstanceMeters(
         FloorPlates,
-        (InboundXM + OutboundXM) * 0.5f,
-        (ParkingTopZM + ParkingBottomZM) * 0.5f,
-        InboundXM - OutboundXM + 2.4f,
-        ParkingBottomZM - ParkingTopZM + 1.8f,
+        (FloorMinX + FloorMaxX) * 0.5f,
+        (FloorMinZ + FloorMaxZ) * 0.5f,
+        FloorMaxX - FloorMinX,
+        FloorMaxZ - FloorMinZ,
         0.025f
     );
     StaticSceneContract.FloorPlateCount += 1;
@@ -157,23 +328,9 @@ void AShuttleVisualTwinRuntimeActor::RebuildStaticScene()
     for (int32 Row = 0; Row < StorageRows; Row += 1)
     {
         const float Z = RowZ(Row);
-        AddTrackBedMeters(
-            FString::Printf(TEXT("storage-lane-r%02d"), Row + 1),
-            TEXT("storageLane"),
-            TEXT("x"),
-            Row + 1,
-            TEXT("none"),
-            (LeftSpineXM + RightSpineXM) * 0.5f,
-            Z,
-            RightSpineXM - LeftSpineXM,
-            0.08f,
-            0.05f,
-            &FShuttleStaticSceneContractForSmoke::StorageLaneTrackCount
-        );
-
         for (int32 Column = 0; Column < StorageColumns; Column += 1)
         {
-            const float X = FirstStorageXM + static_cast<float>(Column) * StoragePitchXM;
+            const float X = ColumnX(Column);
             AddStorageCellMeters(
                 FString::Printf(TEXT("storage-r%02d-c%02d"), Row + 1, Column + 1),
                 Row + 1,
@@ -188,25 +345,168 @@ void AShuttleVisualTwinRuntimeActor::RebuildStaticScene()
     }
     AddRackPostsForStorageGrid();
 
-    AddTrackBedMeters(TEXT("side-aisle-left"), TEXT("sideAisle"), TEXT("z"), 0, TEXT("left"), LeftSpineXM, (TopZM + BottomZM) * 0.5f, 0.10f, BottomZM - TopZM, 0.055f, &FShuttleStaticSceneContractForSmoke::SideAisleTrackCount);
-    AddTrackBedMeters(TEXT("side-aisle-right"), TEXT("sideAisle"), TEXT("z"), 0, TEXT("right"), RightSpineXM, (TopZM + BottomZM) * 0.5f, 0.10f, BottomZM - TopZM, 0.055f, &FShuttleStaticSceneContractForSmoke::SideAisleTrackCount);
-    AddTrackBedMeters(TEXT("cross-aisle-top"), TEXT("crossAisle"), TEXT("x"), 0, TEXT("top"), (LeftSpineXM + RightSpineXM) * 0.5f, TopZM, RightSpineXM - LeftSpineXM, 0.10f, 0.055f, &FShuttleStaticSceneContractForSmoke::CrossAisleTrackCount);
-    AddTrackBedMeters(TEXT("cross-aisle-bottom"), TEXT("crossAisle"), TEXT("x"), 0, TEXT("bottom"), (LeftSpineXM + RightSpineXM) * 0.5f, BottomZM, RightSpineXM - LeftSpineXM, 0.10f, 0.055f, &FShuttleStaticSceneContractForSmoke::CrossAisleTrackCount);
+    AddTrack(TEXT("left-top-right-top"), TEXT("crossAisle"), LeftSpineXM, TopZ(), RightSpineXM, TopZ(), 0);
+    AddTrack(TEXT("left-bottom-right-bottom"), TEXT("crossAisle"), LeftSpineXM, BottomZ(), RightSpineXM, BottomZ(), 0);
 
-    AddTrackBedMeters(TEXT("inbound-lift-a-right-row-01"), TEXT("inboundConnector"), TEXT("x"), 1, TEXT("right"), (RightSpineXM + InboundXM) * 0.5f, RowZ(0), InboundXM - RightSpineXM, 0.12f, 0.055f, &FShuttleStaticSceneContractForSmoke::InboundConnectorTrackCount);
-    AddTrackBedMeters(FString::Printf(TEXT("inbound-lift-b-right-row-%02d"), StorageRows), TEXT("inboundConnector"), TEXT("x"), StorageRows, TEXT("right"), (RightSpineXM + InboundXM) * 0.5f, RowZ(StorageRows - 1), InboundXM - RightSpineXM, 0.12f, 0.055f, &FShuttleStaticSceneContractForSmoke::InboundConnectorTrackCount);
-    AddTrackBedMeters(TEXT("outbound-lift-a-left-row-01"), TEXT("outboundConnector"), TEXT("x"), 1, TEXT("left"), (OutboundXM + LeftSpineXM) * 0.5f, RowZ(0), LeftSpineXM - OutboundXM, 0.12f, 0.055f, &FShuttleStaticSceneContractForSmoke::OutboundConnectorTrackCount);
-    AddTrackBedMeters(FString::Printf(TEXT("outbound-lift-b-left-row-%02d"), StorageRows), TEXT("outboundConnector"), TEXT("x"), StorageRows, TEXT("left"), (OutboundXM + LeftSpineXM) * 0.5f, RowZ(StorageRows - 1), LeftSpineXM - OutboundXM, 0.12f, 0.055f, &FShuttleStaticSceneContractForSmoke::OutboundConnectorTrackCount);
+    for (int32 Index = 1; Index < MainNodeCount; Index += 1)
+    {
+        AddTrack(
+            FString::Printf(TEXT("%s-%s"), *MainLaneNodeId(TEXT("north"), Index - 1), *MainLaneNodeId(TEXT("north"), Index)),
+            TEXT("crossAisle"),
+            MainX(Index - 1),
+            MainLaneNorthZM,
+            MainX(Index),
+            MainLaneNorthZM,
+            0
+        );
+        AddTrack(
+            FString::Printf(TEXT("%s-%s"), *MainLaneNodeId(TEXT("south"), Index - 1), *MainLaneNodeId(TEXT("south"), Index)),
+            TEXT("crossAisle"),
+            MainX(Index - 1),
+            MainLaneSouthZM,
+            MainX(Index),
+            MainLaneSouthZM,
+            0
+        );
+    }
+    for (int32 Index = 1; Index < LastMainIndex; Index += 1)
+    {
+        AddTrack(
+            FString::Printf(TEXT("%s-%s"), *MainLaneNodeId(TEXT("north"), Index), *MainLaneNodeId(TEXT("south"), Index)),
+            TEXT("sideAisle"),
+            MainX(Index),
+            MainLaneNorthZM,
+            MainX(Index),
+            MainLaneSouthZM,
+            0
+        );
+    }
 
-    AddTrackBedMeters(TEXT("parking-a-right-top"), TEXT("parkingConnector"), TEXT("z"), 0, TEXT("right"), RightSpineXM, (ParkingTopZM + TopZM) * 0.5f, 0.12f, TopZM - ParkingTopZM, 0.055f, &FShuttleStaticSceneContractForSmoke::ParkingConnectorTrackCount);
-    AddTrackBedMeters(TEXT("parking-b-right-bottom"), TEXT("parkingConnector"), TEXT("z"), 0, TEXT("right"), RightSpineXM, (BottomZM + ParkingBottomZM) * 0.5f, 0.12f, ParkingBottomZM - BottomZM, 0.055f, &FShuttleStaticSceneContractForSmoke::ParkingConnectorTrackCount);
+    const float RightParkingX = RightSpineXM + ParkingStandoffXM;
+    const float LeftParkingX = LeftSpineXM - ParkingStandoffXM;
+    AddTrack(TEXT("parking-a-main-north-right"), TEXT("parkingConnector"), RightParkingX, MainLaneNorthZM, RightSpineXM, MainLaneNorthZM, 0);
+    AddTrack(TEXT("parking-b-main-south-right"), TEXT("parkingConnector"), RightParkingX, MainLaneSouthZM, RightSpineXM, MainLaneSouthZM, 0);
+    AddTrack(TEXT("parking-c-main-north-left"), TEXT("parkingConnector"), LeftParkingX, MainLaneNorthZM, LeftSpineXM, MainLaneNorthZM, 0);
+    AddTrack(TEXT("parking-d-main-south-left"), TEXT("parkingConnector"), LeftParkingX, MainLaneSouthZM, LeftSpineXM, MainLaneSouthZM, 0);
 
-    AddInboundLiftPadMeters(TEXT("inbound-lift-a"), TEXT("right"), InboundXM, RowZ(0), 1.5f, 1.15f, 0.08f);
-    AddInboundLiftPadMeters(TEXT("inbound-lift-b"), TEXT("right"), InboundXM, RowZ(StorageRows - 1), 1.5f, 1.15f, 0.08f);
-    AddOutboundLiftPadMeters(TEXT("outbound-lift-a"), TEXT("left"), OutboundXM, RowZ(0), 1.5f, 1.15f, 0.08f);
-    AddOutboundLiftPadMeters(TEXT("outbound-lift-b"), TEXT("left"), OutboundXM, RowZ(StorageRows - 1), 1.5f, 1.15f, 0.08f);
-    AddParkingPadMeters(TEXT("parking-a"), TEXT("right"), RightSpineXM, ParkingTopZM, 1.5f, 1.15f, 0.08f);
-    AddParkingPadMeters(TEXT("parking-b"), TEXT("right"), RightSpineXM, ParkingBottomZM, 1.5f, 1.15f, 0.08f);
+    struct FLiftPortDef
+    {
+        const TCHAR* Id;
+        const TCHAR* Category;
+        int32 PortalIndex;
+        int32 MainIndex;
+        float Z;
+    };
+    const FLiftPortDef LiftPorts[] = {
+        { TEXT("inbound-lift-top-01"), TEXT("inboundConnector"), 0, 1, TopLiftZ() },
+        { TEXT("outbound-lift-top-01"), TEXT("outboundConnector"), 1, 2, TopLiftZ() },
+        { TEXT("inbound-lift-top-02"), TEXT("inboundConnector"), 2, 3, TopLiftZ() },
+        { TEXT("outbound-lift-top-02"), TEXT("outboundConnector"), 3, 4, TopLiftZ() },
+        { TEXT("outbound-lift-bottom-01"), TEXT("outboundConnector"), 0, 1, BottomLiftZ() },
+        { TEXT("inbound-lift-bottom-01"), TEXT("inboundConnector"), 1, 2, BottomLiftZ() },
+        { TEXT("outbound-lift-bottom-02"), TEXT("outboundConnector"), 2, 3, BottomLiftZ() },
+        { TEXT("inbound-lift-bottom-02"), TEXT("inboundConnector"), 3, 4, BottomLiftZ() }
+    };
+    for (const FLiftPortDef& LiftPort : LiftPorts)
+    {
+        const float LiftX = LiftPortalX(LiftPort.PortalIndex);
+        const FString NorthTargetNodeId = MainLaneNodeId(TEXT("north"), LiftPort.MainIndex);
+        AddTrack(FString::Printf(TEXT("%s-%s"), LiftPort.Id, *NorthTargetNodeId), LiftPort.Category, LiftX, LiftPort.Z, MainX(LiftPort.MainIndex), MainLaneNorthZM, 0);
+        const FString SouthTargetNodeId = MainLaneNodeId(TEXT("south"), LiftPort.MainIndex);
+        AddTrack(FString::Printf(TEXT("%s-%s"), LiftPort.Id, *SouthTargetNodeId), LiftPort.Category, LiftX, LiftPort.Z, MainX(LiftPort.MainIndex), MainLaneSouthZM, 0);
+    }
+
+    struct FTrackPoint
+    {
+        FString Id;
+        float X;
+        float Z;
+        int32 Row;
+    };
+    TArray<FTrackPoint> LeftSpinePoints;
+    TArray<FTrackPoint> RightSpinePoints;
+    LeftSpinePoints.Add({ TEXT("left-top"), LeftSpineXM, TopZ(), 0 });
+    RightSpinePoints.Add({ TEXT("right-top"), RightSpineXM, TopZ(), 0 });
+    for (int32 Row = 0; Row < StorageRowsPerBank; Row += 1)
+    {
+        LeftSpinePoints.Add({ FString::Printf(TEXT("left-row-%02d"), Row + 1), LeftSpineXM, RowZ(Row), Row + 1 });
+        RightSpinePoints.Add({ FString::Printf(TEXT("right-row-%02d"), Row + 1), RightSpineXM, RowZ(Row), Row + 1 });
+    }
+    LeftSpinePoints.Add({ MainLaneNodeId(TEXT("north"), 0), LeftSpineXM, MainLaneNorthZM, 0 });
+    LeftSpinePoints.Add({ MainLaneNodeId(TEXT("south"), 0), LeftSpineXM, MainLaneSouthZM, 0 });
+    RightSpinePoints.Add({ MainLaneNodeId(TEXT("north"), LastMainIndex), RightSpineXM, MainLaneNorthZM, 0 });
+    RightSpinePoints.Add({ MainLaneNodeId(TEXT("south"), LastMainIndex), RightSpineXM, MainLaneSouthZM, 0 });
+    for (int32 Row = StorageRowsPerBank; Row < StorageRows; Row += 1)
+    {
+        LeftSpinePoints.Add({ FString::Printf(TEXT("left-row-%02d"), Row + 1), LeftSpineXM, RowZ(Row), Row + 1 });
+        RightSpinePoints.Add({ FString::Printf(TEXT("right-row-%02d"), Row + 1), RightSpineXM, RowZ(Row), Row + 1 });
+    }
+    LeftSpinePoints.Add({ TEXT("left-bottom"), LeftSpineXM, BottomZ(), 0 });
+    RightSpinePoints.Add({ TEXT("right-bottom"), RightSpineXM, BottomZ(), 0 });
+
+    for (int32 Index = 1; Index < LeftSpinePoints.Num(); Index += 1)
+    {
+        const FTrackPoint& From = LeftSpinePoints[Index - 1];
+        const FTrackPoint& To = LeftSpinePoints[Index];
+        AddTrack(FString::Printf(TEXT("%s-%s"), *From.Id, *To.Id), TEXT("sideAisle"), From.X, From.Z, To.X, To.Z, FMath::Max(From.Row, To.Row));
+    }
+    for (int32 Index = 1; Index < RightSpinePoints.Num(); Index += 1)
+    {
+        const FTrackPoint& From = RightSpinePoints[Index - 1];
+        const FTrackPoint& To = RightSpinePoints[Index];
+        AddTrack(FString::Printf(TEXT("%s-%s"), *From.Id, *To.Id), TEXT("sideAisle"), From.X, From.Z, To.X, To.Z, FMath::Max(From.Row, To.Row));
+    }
+
+    for (int32 Row = 0; Row < StorageRows; Row += 1)
+    {
+        const float Z = RowZ(Row);
+        const FString RowLabel = FString::Printf(TEXT("%02d"), Row + 1);
+        const FString RightRowId = FString::Printf(TEXT("right-row-%s"), *RowLabel);
+        const FString LeftRowId = FString::Printf(TEXT("left-row-%s"), *RowLabel);
+        AddTrack(
+            FString::Printf(TEXT("%s-storage-r%s-c%02d"), *RightRowId, *RowLabel, StorageColumns),
+            TEXT("storageLane"),
+            RightSpineXM,
+            Z,
+            ColumnX(StorageColumns - 1),
+            Z,
+            Row + 1
+        );
+        for (int32 Column = StorageColumns - 1; Column > 0; Column -= 1)
+        {
+            AddTrack(
+                FString::Printf(TEXT("storage-r%s-c%02d-storage-r%s-c%02d"), *RowLabel, Column + 1, *RowLabel, Column),
+                TEXT("storageLane"),
+                ColumnX(Column),
+                Z,
+                ColumnX(Column - 1),
+                Z,
+                Row + 1
+            );
+        }
+        AddTrack(
+            FString::Printf(TEXT("storage-r%s-c01-%s"), *RowLabel, *LeftRowId),
+            TEXT("storageLane"),
+            ColumnX(0),
+            Z,
+            LeftSpineXM,
+            Z,
+            Row + 1
+        );
+    }
+
+    AddInboundLiftPadMeters(TEXT("inbound-lift-top-01"), PadSide(LiftPortalX(0)), LiftPortalX(0), TopLiftZ(), 1.5f, 1.15f, 0.08f);
+    AddInboundLiftPadMeters(TEXT("inbound-lift-top-02"), PadSide(LiftPortalX(2)), LiftPortalX(2), TopLiftZ(), 1.5f, 1.15f, 0.08f);
+    AddInboundLiftPadMeters(TEXT("inbound-lift-bottom-01"), PadSide(LiftPortalX(1)), LiftPortalX(1), BottomLiftZ(), 1.5f, 1.15f, 0.08f);
+    AddInboundLiftPadMeters(TEXT("inbound-lift-bottom-02"), PadSide(LiftPortalX(3)), LiftPortalX(3), BottomLiftZ(), 1.5f, 1.15f, 0.08f);
+    AddOutboundLiftPadMeters(TEXT("outbound-lift-top-01"), PadSide(LiftPortalX(1)), LiftPortalX(1), TopLiftZ(), 1.5f, 1.15f, 0.08f);
+    AddOutboundLiftPadMeters(TEXT("outbound-lift-top-02"), PadSide(LiftPortalX(3)), LiftPortalX(3), TopLiftZ(), 1.5f, 1.15f, 0.08f);
+    AddOutboundLiftPadMeters(TEXT("outbound-lift-bottom-01"), PadSide(LiftPortalX(0)), LiftPortalX(0), BottomLiftZ(), 1.5f, 1.15f, 0.08f);
+    AddOutboundLiftPadMeters(TEXT("outbound-lift-bottom-02"), PadSide(LiftPortalX(2)), LiftPortalX(2), BottomLiftZ(), 1.5f, 1.15f, 0.08f);
+    AddParkingPadMeters(TEXT("parking-a"), TEXT("right"), RightParkingX, MainLaneNorthZM, 1.5f, 1.15f, 0.08f);
+    AddParkingPadMeters(TEXT("parking-b"), TEXT("right"), RightParkingX, MainLaneSouthZM, 1.5f, 1.15f, 0.08f);
+    AddParkingPadMeters(TEXT("parking-c"), TEXT("left"), LeftParkingX, MainLaneNorthZM, 1.5f, 1.15f, 0.08f);
+    AddParkingPadMeters(TEXT("parking-d"), TEXT("left"), LeftParkingX, MainLaneSouthZM, 1.5f, 1.15f, 0.08f);
     FinalizeStaticSceneContract();
     RebuildLoadPalletInstances();
 }
@@ -629,18 +929,28 @@ void AShuttleVisualTwinRuntimeActor::AddRackPostsForStorageGrid()
         return;
     }
 
-    const float MinX = FirstStorageXM - StoragePitchXM * 0.5f;
-    const float MaxX = FirstStorageXM + static_cast<float>(StorageColumns - 1) * StoragePitchXM + StoragePitchXM * 0.5f;
-    const float MinZ = RowZ(0) - StoragePitchZM * 0.5f;
-    const float MaxZ = RowZ(StorageRows - 1) + StoragePitchZM * 0.5f;
-    for (int32 Column = 0; Column <= StorageColumns; Column += 1)
+    for (int32 Bank = 0; Bank < StorageRowBanks; Bank += 1)
     {
-        const float X = MinX + static_cast<float>(Column) * ((MaxX - MinX) / static_cast<float>(StorageColumns));
-        for (int32 Row = 0; Row <= StorageRows; Row += 1)
+        const int32 FirstRow = Bank * StorageRowsPerBank;
+        const int32 LastRow = FirstRow + StorageRowsPerBank - 1;
+        const float MinZ = RowZ(FirstRow) - StoragePitchZM * 0.5f;
+        const float MaxZ = RowZ(LastRow) + StoragePitchZM * 0.5f;
+        for (int32 Bay = 0; Bay < StorageColumnBays; Bay += 1)
         {
-            const float Z = MinZ + static_cast<float>(Row) * ((MaxZ - MinZ) / static_cast<float>(StorageRows));
-            AddInstanceMeters(RackPosts, X, Z, 0.045f, 0.045f, 0.24f);
-            StaticSceneContract.RackPostCount += 1;
+            const int32 FirstColumn = Bay * StorageColumnsPerBay;
+            const int32 LastColumn = FirstColumn + StorageColumnsPerBay - 1;
+            const float MinX = ColumnX(FirstColumn) - StoragePitchXM * 0.5f;
+            const float MaxX = ColumnX(LastColumn) + StoragePitchXM * 0.5f;
+            for (int32 Column = 0; Column <= StorageColumnsPerBay; Column += 1)
+            {
+                const float X = MinX + static_cast<float>(Column) * ((MaxX - MinX) / static_cast<float>(StorageColumnsPerBay));
+                for (int32 Row = 0; Row <= StorageRowsPerBank; Row += 1)
+                {
+                    const float Z = MinZ + static_cast<float>(Row) * ((MaxZ - MinZ) / static_cast<float>(StorageRowsPerBank));
+                    AddInstanceMeters(RackPosts, X, Z, 0.045f, 0.045f, 0.24f);
+                    StaticSceneContract.RackPostCount += 1;
+                }
+            }
         }
     }
 }
@@ -669,7 +979,7 @@ void AShuttleVisualTwinRuntimeActor::AddLiftBlockMeters(float SimX, float SimZ, 
         return;
     }
 
-    const float SideDirection = SimX > RightSpineXM ? 1.0f : -1.0f;
+    const float SideDirection = SimX > ColumnX(StorageColumns - 1) ? 1.0f : (SimX < FirstStorageXM ? -1.0f : (SimZ >= 0.0f ? 1.0f : -1.0f));
     AddInstanceMeters(LiftBlocks, SimX + SideDirection * SizeXM * 0.55f, SimZ, SizeXM * 0.28f, SizeZM * 0.78f, 0.62f);
     StaticSceneContract.LiftBlockCount += 1;
 }
@@ -715,13 +1025,7 @@ void AShuttleVisualTwinRuntimeActor::RebuildLoadPalletInstances()
 void AShuttleVisualTwinRuntimeActor::FinalizeStaticSceneContract()
 {
     const int32 ExpectedStorageCells = StaticSceneContract.StorageRows * StaticSceneContract.StorageColumns;
-    StaticSceneContract.bDenseStorageBlock =
-        StaticSceneContract.StorageRows == StorageRows &&
-        StaticSceneContract.StorageColumns == StorageColumns &&
-        StaticSceneContract.StorageCellCount == ExpectedStorageCells &&
-        StaticSceneContract.StorageCells.Num() == ExpectedStorageCells &&
-        StaticSceneContract.StoragePitchXM > 0.0f &&
-        StaticSceneContract.StoragePitchZM > 0.0f;
+    StaticSceneContract.bDenseStorageBlock = false;
 
     StaticSceneContract.bOrthogonalTrackOnly =
         StaticSceneContract.DiagonalTrackCount == 0 &&
@@ -735,19 +1039,17 @@ void AShuttleVisualTwinRuntimeActor::FinalizeStaticSceneContract()
             StaticSceneContract.ParkingConnectorTrackCount;
 
     StaticSceneContract.bDedicatedLiftPorts =
-        StaticSceneContract.InboundLiftPadCount == 2 &&
-        StaticSceneContract.OutboundLiftPadCount == 2 &&
-        StaticSceneContract.LiftPads.Num() == 4 &&
-        StaticSceneContract.ParkingPads.Num() == StaticSceneContract.ParkingPadCount &&
-        StaticSceneContract.InboundLiftXM > StaticSceneContract.StorageBlockMaxXM &&
-        StaticSceneContract.OutboundLiftXM < StaticSceneContract.StorageBlockMinXM;
+        StaticSceneContract.InboundLiftPadCount == 4 &&
+        StaticSceneContract.OutboundLiftPadCount == 4 &&
+        StaticSceneContract.LiftPads.Num() == 8 &&
+        StaticSceneContract.ParkingPads.Num() == StaticSceneContract.ParkingPadCount;
 
     StaticSceneContract.bHasStorageRailGrid =
         StaticSceneContract.StorageRailSegmentCount == ExpectedStorageCells * 4 &&
         StaticSceneContract.StorageRailSegmentCount == (StorageRails ? StorageRails->GetInstanceCount() : 0);
 
     StaticSceneContract.bHasTransferRollers =
-        StaticSceneContract.TransferRollerCount == 24 &&
+        StaticSceneContract.TransferRollerCount == 48 &&
         StaticSceneContract.TransferRollerCount == (TransferRollers ? TransferRollers->GetInstanceCount() : 0);
 
     StaticSceneContract.bHasLiftBlackBoxes =

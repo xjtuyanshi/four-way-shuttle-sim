@@ -120,18 +120,15 @@ describe('dashboard static scene contract', () => {
     expect(contract).toEqual(summarizeScenarioStaticSceneContract(createDefaultShuttleScenario()));
     expect(contract.schemaVersion).toBe('shuttle.simCoreStaticSceneContract.v1');
     expect(contract.singleLevel).toBe(true);
-    expect(contract.denseStorageBlock).toBe(true);
+    expect(contract.denseStorageBlock).toBe(false);
     expect(contract.orthogonalTrackOnly).toBe(true);
     expect(contract.dedicatedLiftPorts).toBe(true);
-    expect(contract.storageCells).toHaveLength(48);
-    expect(contract.storageRows).toBe(6);
-    expect(contract.storageColumns).toBe(8);
-    expect(contract.liftPads.map((pad) => `${pad.category}:${pad.side}`)).toEqual([
-      'inboundLift:right',
-      'inboundLift:right',
-      'outboundLift:left',
-      'outboundLift:left'
-    ]);
+    expect(contract.storageCells).toHaveLength(384);
+    expect(contract.storageRows).toBe(16);
+    expect(contract.storageColumns).toBe(24);
+    expect(contract.liftPads.filter((pad) => pad.category === 'inboundLift')).toHaveLength(4);
+    expect(contract.liftPads.filter((pad) => pad.category === 'outboundLift')).toHaveLength(4);
+    expect(contract.liftPads.some((pad) => pad.side === 'mixed')).toBe(true);
     expect(contract.trackBeds.some((track) => track.category === 'storageLane')).toBe(true);
     expect(contract.diagonalTrackCount).toBe(0);
   });

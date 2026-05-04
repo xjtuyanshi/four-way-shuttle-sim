@@ -253,55 +253,106 @@ type LayoutNode = ShuttleScenario['layout']['nodes'][number];
 type LayoutEdge = ShuttleScenario['layout']['edges'][number];
 type LayoutZone = ShuttleScenario['layout']['zones'][number];
 
-const DEFAULT_STORAGE_ROWS = 6;
-const DEFAULT_STORAGE_COLUMNS = 8;
+const DEFAULT_STORAGE_ROWS_PER_BANK = 8;
+const DEFAULT_STORAGE_ROW_BANKS = 2;
+const DEFAULT_STORAGE_ROWS = DEFAULT_STORAGE_ROWS_PER_BANK * DEFAULT_STORAGE_ROW_BANKS;
+const DEFAULT_STORAGE_COLUMNS_PER_BAY = 6;
+const DEFAULT_STORAGE_COLUMN_BAYS = 4;
+const DEFAULT_STORAGE_COLUMNS = DEFAULT_STORAGE_COLUMNS_PER_BAY * DEFAULT_STORAGE_COLUMN_BAYS;
 const DEFAULT_STORAGE_CELL_PITCH_X_M = 1.25;
 const DEFAULT_STORAGE_CELL_PITCH_Z_M = 1.2;
 const DEFAULT_LEFT_SPINE_X_M = 0;
-const DEFAULT_RIGHT_SPINE_X_M = 14;
-const DEFAULT_INBOUND_X_M = 18;
-const DEFAULT_OUTBOUND_X_M = -4;
 const DEFAULT_FIRST_STORAGE_X_M = 2.5;
-const DEFAULT_TOP_Z_M = -4.8;
-const DEFAULT_BOTTOM_Z_M = 4.8;
-const DEFAULT_PARKING_TOP_Z_M = -7.2;
-const DEFAULT_PARKING_BOTTOM_Z_M = 7.2;
+const DEFAULT_STORAGE_BAY_GAP_X_M = 2.25;
+const DEFAULT_STORAGE_INNER_ROW_Z_M = 2.2;
+const DEFAULT_SIDE_CLEARANCE_X_M = 2.5;
+const DEFAULT_MAIN_LANE_NORTH_Z_M = -0.8;
+const DEFAULT_MAIN_LANE_SOUTH_Z_M = 0.8;
+const DEFAULT_LIFT_STANDOFF_Z_M = 1.8;
+const DEFAULT_PARKING_STANDOFF_X_M = 2.4;
 
 function storageNodeId(rowIndex: number, columnIndex: number): string {
   return `storage-r${String(rowIndex + 1).padStart(2, '0')}-c${String(columnIndex + 1).padStart(2, '0')}`;
 }
 
+function defaultStorageRowZs(): number[] {
+  const topRows = Array.from({ length: DEFAULT_STORAGE_ROWS_PER_BANK }, (_, rowIndex) =>
+    round(-(DEFAULT_STORAGE_INNER_ROW_Z_M + (DEFAULT_STORAGE_ROWS_PER_BANK - rowIndex - 1) * DEFAULT_STORAGE_CELL_PITCH_Z_M), 3)
+  );
+  const bottomRows = Array.from({ length: DEFAULT_STORAGE_ROWS_PER_BANK }, (_, rowIndex) =>
+    round(DEFAULT_STORAGE_INNER_ROW_Z_M + rowIndex * DEFAULT_STORAGE_CELL_PITCH_Z_M, 3)
+  );
+  return [...topRows, ...bottomRows];
+}
+
+function defaultStorageColumnXs(): number[] {
+  return Array.from({ length: DEFAULT_STORAGE_COLUMNS }, (_, columnIndex) =>
+    round(
+      DEFAULT_FIRST_STORAGE_X_M +
+        columnIndex * DEFAULT_STORAGE_CELL_PITCH_X_M +
+        Math.floor(columnIndex / DEFAULT_STORAGE_COLUMNS_PER_BAY) * DEFAULT_STORAGE_BAY_GAP_X_M,
+      3
+    )
+  );
+}
+
+function defaultLiftPortalXs(columnXs: number[], rightSpineX: number): number[] {
+  const portalXs: number[] = [];
+  for (let bayIndex = 0; bayIndex < DEFAULT_STORAGE_COLUMN_BAYS - 1; bayIndex += 1) {
+    const leftColumnIndex = (bayIndex + 1) * DEFAULT_STORAGE_COLUMNS_PER_BAY - 1;
+    const rightColumnIndex = leftColumnIndex + 1;
+    portalXs.push(round((columnXs[leftColumnIndex]! + columnXs[rightColumnIndex]!) / 2, 3));
+  }
+  portalXs.push(round((columnXs[columnXs.length - 1]! + rightSpineX) / 2, 3));
+  return portalXs;
+}
+
+function mainLaneNodeId(lane: 'north' | 'south', index: number): string {
+  return `main-${lane}-${String(index).padStart(2, '0')}`;
+}
+
 function createDefaultLayout(): ShuttleScenario['layout'] {
   const leftSpineX = DEFAULT_LEFT_SPINE_X_M;
-  const rightSpineX = DEFAULT_RIGHT_SPINE_X_M;
-  const inboundX = DEFAULT_INBOUND_X_M;
-  const outboundX = DEFAULT_OUTBOUND_X_M;
-  const firstStorageX = DEFAULT_FIRST_STORAGE_X_M;
-  const topZ = DEFAULT_TOP_Z_M;
-  const bottomZ = DEFAULT_BOTTOM_Z_M;
-  const parkingTopZ = DEFAULT_PARKING_TOP_Z_M;
-  const parkingBottomZ = DEFAULT_PARKING_BOTTOM_Z_M;
-  const rowZs = Array.from({ length: DEFAULT_STORAGE_ROWS }, (_, rowIndex) =>
-    round((rowIndex - (DEFAULT_STORAGE_ROWS - 1) / 2) * DEFAULT_STORAGE_CELL_PITCH_Z_M, 3)
-  );
-  const columnXs = Array.from({ length: DEFAULT_STORAGE_COLUMNS }, (_, columnIndex) =>
-    round(firstStorageX + columnIndex * DEFAULT_STORAGE_CELL_PITCH_X_M, 3)
-  );
+  const rowZs = defaultStorageRowZs();
+  const columnXs = defaultStorageColumnXs();
+  const rightSpineX = round(columnXs[columnXs.length - 1]! + DEFAULT_SIDE_CLEARANCE_X_M, 3);
+  const topZ = round(rowZs[0]! - DEFAULT_STORAGE_CELL_PITCH_Z_M * 1.5, 3);
+  const bottomZ = round(rowZs[rowZs.length - 1]! + DEFAULT_STORAGE_CELL_PITCH_Z_M * 1.5, 3);
+  const topLiftZ = round(topZ - DEFAULT_LIFT_STANDOFF_Z_M, 3);
+  const bottomLiftZ = round(bottomZ + DEFAULT_LIFT_STANDOFF_Z_M, 3);
+  const liftPortalXs = defaultLiftPortalXs(columnXs, rightSpineX);
+  const mainXs = [leftSpineX, ...liftPortalXs, rightSpineX];
 
   const nodes: LayoutNode[] = [
-    { id: 'outbound-lift-a', type: 'lift-blackbox', x: outboundX, y: 0, z: rowZs[0]!, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-    { id: 'outbound-lift-b', type: 'lift-blackbox', x: outboundX, y: 0, z: rowZs[rowZs.length - 1]!, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-    { id: 'x-outbound', type: 'intersection', x: leftSpineX, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'left-top', type: 'aisle', x: leftSpineX, y: 0, z: topZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'left-bottom', type: 'aisle', x: leftSpineX, y: 0, z: bottomZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'right-top', type: 'aisle', x: rightSpineX, y: 0, z: topZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'right-bottom', type: 'aisle', x: rightSpineX, y: 0, z: bottomZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-    { id: 'x-main', type: 'intersection', x: rightSpineX, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-    { id: 'inbound-lift-a', type: 'lift-blackbox', x: inboundX, y: 0, z: rowZs[0]!, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-    { id: 'inbound-lift-b', type: 'lift-blackbox', x: inboundX, y: 0, z: rowZs[rowZs.length - 1]!, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-    { id: 'parking-a', type: 'parking', x: rightSpineX, y: 0, z: parkingTopZ, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
-    { id: 'parking-b', type: 'parking', x: rightSpineX, y: 0, z: parkingBottomZ, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
+    { id: 'parking-a', type: 'parking', x: round(rightSpineX + DEFAULT_PARKING_STANDOFF_X_M, 3), y: 0, z: DEFAULT_MAIN_LANE_NORTH_Z_M, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+    { id: 'parking-b', type: 'parking', x: round(rightSpineX + DEFAULT_PARKING_STANDOFF_X_M, 3), y: 0, z: DEFAULT_MAIN_LANE_SOUTH_Z_M, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+    { id: 'parking-c', type: 'parking', x: round(leftSpineX - DEFAULT_PARKING_STANDOFF_X_M, 3), y: 0, z: DEFAULT_MAIN_LANE_NORTH_Z_M, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+    { id: 'parking-d', type: 'parking', x: round(leftSpineX - DEFAULT_PARKING_STANDOFF_X_M, 3), y: 0, z: DEFAULT_MAIN_LANE_SOUTH_Z_M, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
   ];
+
+  mainXs.forEach((x, index) => {
+    nodes.push(
+      { id: mainLaneNodeId('north', index), type: 'intersection', x, y: 0, z: DEFAULT_MAIN_LANE_NORTH_Z_M, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+      { id: mainLaneNodeId('south', index), type: 'intersection', x, y: 0, z: DEFAULT_MAIN_LANE_SOUTH_Z_M, noStop: true, noParking: true, capacity: 1, allowedDirections: [] }
+    );
+  });
+
+  [
+    { id: 'inbound-lift-top-01', x: liftPortalXs[0]!, z: topLiftZ },
+    { id: 'outbound-lift-top-01', x: liftPortalXs[1]!, z: topLiftZ },
+    { id: 'inbound-lift-top-02', x: liftPortalXs[2]!, z: topLiftZ },
+    { id: 'outbound-lift-top-02', x: liftPortalXs[3]!, z: topLiftZ },
+    { id: 'outbound-lift-bottom-01', x: liftPortalXs[0]!, z: bottomLiftZ },
+    { id: 'inbound-lift-bottom-01', x: liftPortalXs[1]!, z: bottomLiftZ },
+    { id: 'outbound-lift-bottom-02', x: liftPortalXs[2]!, z: bottomLiftZ },
+    { id: 'inbound-lift-bottom-02', x: liftPortalXs[3]!, z: bottomLiftZ }
+  ].forEach((lift) => {
+    nodes.push({ id: lift.id, type: 'lift-blackbox', x: lift.x, y: 0, z: lift.z, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
+  });
 
   for (let rowIndex = 0; rowIndex < rowZs.length; rowIndex += 1) {
     const z = rowZs[rowIndex]!;
@@ -325,42 +376,104 @@ function createDefaultLayout(): ShuttleScenario['layout'] {
     }
   }
 
-  const edges: LayoutEdge[] = [
-    { id: 'inbound-lift-a-right-row-01', from: 'inbound-lift-a', to: 'right-row-01', lengthM: Math.abs(inboundX - rightSpineX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'inbound-lift-a-dock', noParking: true },
-    { id: `inbound-lift-b-right-row-${String(DEFAULT_STORAGE_ROWS).padStart(2, '0')}`, from: 'inbound-lift-b', to: `right-row-${String(DEFAULT_STORAGE_ROWS).padStart(2, '0')}`, lengthM: Math.abs(inboundX - rightSpineX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'inbound-lift-b-dock', noParking: true },
-    { id: 'outbound-lift-a-left-row-01', from: 'outbound-lift-a', to: 'left-row-01', lengthM: Math.abs(leftSpineX - outboundX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'outbound-lift-a-dock', noParking: true },
-    { id: `outbound-lift-b-left-row-${String(DEFAULT_STORAGE_ROWS).padStart(2, '0')}`, from: 'outbound-lift-b', to: `left-row-${String(DEFAULT_STORAGE_ROWS).padStart(2, '0')}`, lengthM: Math.abs(leftSpineX - outboundX), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'outbound-lift-b-dock', noParking: true },
-    { id: 'parking-a-right-top', from: 'parking-a', to: 'right-top', lengthM: Math.abs(parkingTopZ - topZ), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'parking-approach', noParking: true },
-    { id: 'parking-b-right-bottom', from: 'parking-b', to: 'right-bottom', lengthM: Math.abs(parkingBottomZ - bottomZ), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'parking-approach', noParking: true },
-    { id: 'left-top-right-top', from: 'left-top', to: 'right-top', lengthM: rightSpineX - leftSpineX, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'north-cross-aisle', noParking: true },
-    { id: 'left-bottom-right-bottom', from: 'left-bottom', to: 'right-bottom', lengthM: rightSpineX - leftSpineX, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'south-cross-aisle', noParking: true }
-  ];
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  const edges: LayoutEdge[] = [];
+  const addEdge = (id: string, from: string, to: string, conflictGroup: string, directionMode: 'oneWay' | 'twoWay' = 'twoWay') => {
+    const fromNode = nodesById.get(from);
+    const toNode = nodesById.get(to);
+    if (!fromNode || !toNode) {
+      throw new Error(`Default layout edge ${id} references an unknown node.`);
+    }
+    edges.push({
+      id,
+      from,
+      to,
+      lengthM: round(Math.abs(toNode.x - fromNode.x) + Math.abs(toNode.z - fromNode.z), 3),
+      directionMode,
+      reservationType: 'edge',
+      conflictGroup,
+      noParking: true
+    });
+  };
 
-  const leftSpineNodeIds = ['left-top', ...rowZs.map((_, rowIndex) => `left-row-${String(rowIndex + 1).padStart(2, '0')}`), 'left-bottom'];
-  const rightSpineNodeIds = ['right-top', ...rowZs.map((_, rowIndex) => `right-row-${String(rowIndex + 1).padStart(2, '0')}`), 'right-bottom'];
+  addEdge('left-top-right-top', 'left-top', 'right-top', 'north-cross-aisle');
+  addEdge('left-bottom-right-bottom', 'left-bottom', 'right-bottom', 'south-cross-aisle');
+
+  for (let index = 1; index < mainXs.length; index += 1) {
+    addEdge(
+      `${mainLaneNodeId('north', index - 1)}-${mainLaneNodeId('north', index)}`,
+      mainLaneNodeId('north', index),
+      mainLaneNodeId('north', index - 1),
+      `main-lane-north-${String(index).padStart(2, '0')}`,
+      'oneWay'
+    );
+    addEdge(
+      `${mainLaneNodeId('south', index - 1)}-${mainLaneNodeId('south', index)}`,
+      mainLaneNodeId('south', index - 1),
+      mainLaneNodeId('south', index),
+      `main-lane-south-${String(index).padStart(2, '0')}`,
+      'oneWay'
+    );
+  }
+  for (let index = 1; index < mainXs.length - 1; index += 1) {
+    addEdge(
+      `${mainLaneNodeId('north', index)}-${mainLaneNodeId('south', index)}`,
+      mainLaneNodeId('north', index),
+      mainLaneNodeId('south', index),
+      `main-lane-transfer-${String(index).padStart(2, '0')}`
+    );
+  }
+
+  const lastMainIndex = mainXs.length - 1;
+  addEdge('parking-a-main-north-right', 'parking-a', mainLaneNodeId('north', lastMainIndex), 'parking-approach-right-north');
+  addEdge('parking-b-main-south-right', 'parking-b', mainLaneNodeId('south', lastMainIndex), 'parking-approach-right-south');
+  addEdge('parking-c-main-north-left', 'parking-c', mainLaneNodeId('north', 0), 'parking-approach-left-north');
+  addEdge('parking-d-main-south-left', 'parking-d', mainLaneNodeId('south', 0), 'parking-approach-left-south');
+
+  [
+    { id: 'inbound-lift-top-01', targets: [mainLaneNodeId('north', 1), mainLaneNodeId('south', 1)] },
+    { id: 'outbound-lift-top-01', targets: [mainLaneNodeId('north', 2), mainLaneNodeId('south', 2)] },
+    { id: 'inbound-lift-top-02', targets: [mainLaneNodeId('north', 3), mainLaneNodeId('south', 3)] },
+    { id: 'outbound-lift-top-02', targets: [mainLaneNodeId('north', 4), mainLaneNodeId('south', 4)] },
+    { id: 'outbound-lift-bottom-01', targets: [mainLaneNodeId('north', 1), mainLaneNodeId('south', 1)] },
+    { id: 'inbound-lift-bottom-01', targets: [mainLaneNodeId('north', 2), mainLaneNodeId('south', 2)] },
+    { id: 'outbound-lift-bottom-02', targets: [mainLaneNodeId('north', 3), mainLaneNodeId('south', 3)] },
+    { id: 'inbound-lift-bottom-02', targets: [mainLaneNodeId('north', 4), mainLaneNodeId('south', 4)] }
+  ].forEach((connector) => {
+    for (const target of connector.targets) {
+      addEdge(`${connector.id}-${target}`, connector.id, target, `${connector.id}-dock`);
+    }
+  });
+
+  const topRowNodeIds = rowZs.map((z, rowIndex) => ({ z, left: `left-row-${String(rowIndex + 1).padStart(2, '0')}`, right: `right-row-${String(rowIndex + 1).padStart(2, '0')}` }))
+    .filter((row) => row.z < DEFAULT_MAIN_LANE_NORTH_Z_M);
+  const bottomRowNodeIds = rowZs.map((z, rowIndex) => ({ z, left: `left-row-${String(rowIndex + 1).padStart(2, '0')}`, right: `right-row-${String(rowIndex + 1).padStart(2, '0')}` }))
+    .filter((row) => row.z > DEFAULT_MAIN_LANE_SOUTH_Z_M);
+  const leftSpineNodeIds = [
+    'left-top',
+    ...topRowNodeIds.map((row) => row.left),
+    mainLaneNodeId('north', 0),
+    mainLaneNodeId('south', 0),
+    ...bottomRowNodeIds.map((row) => row.left),
+    'left-bottom'
+  ];
+  const rightSpineNodeIds = [
+    'right-top',
+    ...topRowNodeIds.map((row) => row.right),
+    mainLaneNodeId('north', lastMainIndex),
+    mainLaneNodeId('south', lastMainIndex),
+    ...bottomRowNodeIds.map((row) => row.right),
+    'right-bottom'
+  ];
   for (let index = 1; index < leftSpineNodeIds.length; index += 1) {
     const from = leftSpineNodeIds[index - 1]!;
     const to = leftSpineNodeIds[index]!;
-    const fromNode = nodes.find((node) => node.id === from)!;
-    const toNode = nodes.find((node) => node.id === to)!;
-    edges.push({ id: `${from}-${to}`, from, to, lengthM: round(Math.abs(toNode.z - fromNode.z), 3), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'left-upright', noParking: true });
+    addEdge(`${from}-${to}`, from, to, `left-upright-${String(index).padStart(2, '0')}`);
   }
   for (let index = 1; index < rightSpineNodeIds.length; index += 1) {
     const from = rightSpineNodeIds[index - 1]!;
     const to = rightSpineNodeIds[index]!;
-    const fromNode = nodes.find((node) => node.id === from)!;
-    const toNode = nodes.find((node) => node.id === to)!;
-    edges.push({ id: `${from}-${to}`, from, to, lengthM: round(Math.abs(toNode.z - fromNode.z), 3), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'right-upright', noParking: true });
-  }
-
-  const upperMiddleRow = Math.floor((DEFAULT_STORAGE_ROWS - 1) / 2);
-  const lowerMiddleRow = upperMiddleRow + 1;
-  for (const rowIndex of [upperMiddleRow, lowerMiddleRow]) {
-    const rowLabel = String(rowIndex + 1).padStart(2, '0');
-    edges.push(
-      { id: `x-main-right-row-${rowLabel}`, from: 'x-main', to: `right-row-${rowLabel}`, lengthM: Math.abs(rowZs[rowIndex]!), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'right-upright', noParking: true },
-      { id: `x-outbound-left-row-${rowLabel}`, from: 'x-outbound', to: `left-row-${rowLabel}`, lengthM: Math.abs(rowZs[rowIndex]!), directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'left-upright', noParking: true }
-    );
+    addEdge(`${from}-${to}`, from, to, `right-upright-${String(index).padStart(2, '0')}`);
   }
 
   for (let rowIndex = 0; rowIndex < rowZs.length; rowIndex += 1) {
@@ -385,7 +498,7 @@ function createDefaultLayout(): ShuttleScenario['layout'] {
         id: `${from}-${to}`,
         from,
         to,
-        lengthM: DEFAULT_STORAGE_CELL_PITCH_X_M,
+        lengthM: round(columnXs[columnIndex]! - columnXs[columnIndex - 1]!, 3),
         directionMode: 'twoWay',
         reservationType: 'edge',
         conflictGroup: `fifo-lane-${rowLabel}`,
@@ -406,26 +519,16 @@ function createDefaultLayout(): ShuttleScenario['layout'] {
   }
 
   const zones: LayoutZone[] = [
-    {
-      id: 'zone-x-main',
-      type: 'intersection',
-      nodeIds: ['x-main'],
-      edgeIds: [`x-main-right-row-${String(upperMiddleRow + 1).padStart(2, '0')}`, `x-main-right-row-${String(lowerMiddleRow + 1).padStart(2, '0')}`],
+    ...mainXs.map((_, index) => ({
+      id: `zone-main-portal-${String(index).padStart(2, '0')}`,
+      type: 'intersection' as const,
+      nodeIds: [mainLaneNodeId('north', index), mainLaneNodeId('south', index)],
+      edgeIds: [`${mainLaneNodeId('north', index)}-${mainLaneNodeId('south', index)}`],
       noStop: true,
       noParking: true,
       capacity: 1,
-      conflictGroup: 'intersection-x-main'
-    },
-    {
-      id: 'zone-x-outbound',
-      type: 'intersection',
-      nodeIds: ['x-outbound'],
-      edgeIds: [`x-outbound-left-row-${String(upperMiddleRow + 1).padStart(2, '0')}`, `x-outbound-left-row-${String(lowerMiddleRow + 1).padStart(2, '0')}`],
-      noStop: true,
-      noParking: true,
-      capacity: 1,
-      conflictGroup: 'intersection-x-outbound'
-    }
+      conflictGroup: `intersection-main-portal-${String(index).padStart(2, '0')}`
+    }))
   ];
 
   return { units: 'meter', nodes, edges, zones };
@@ -527,9 +630,11 @@ class TrafficReservationController {
     }
 
     const endTimeSec = options.startTimeSec + options.travelSec + this.scenario.trafficPolicy.minimumClearanceSec;
+    const currentNodeZones = this.scenario.layout.zones.filter((candidate) => candidate.nodeIds.includes(options.fromNodeId));
     const targetNodeZones = this.scenario.layout.zones.filter((candidate) => candidate.nodeIds.includes(options.toNodeId));
     const matchingZones = [
       ...this.scenario.layout.zones.filter((candidate) => candidate.edgeIds.includes(edge.id)),
+      ...currentNodeZones,
       ...targetNodeZones
     ].filter((zone, index, zones) => zones.findIndex((candidate) => candidate.id === zone.id) === index);
     const candidates: Reservation[] = [
@@ -1061,12 +1166,26 @@ export class ShuttleSimCore {
     const liftNodes = this.scenario.layout.nodes
       .filter((node) => node.type === 'lift-blackbox' && node.id.startsWith(`${kind}-lift`))
       .sort((left, right) => {
+        const leftPlannedLoad = this.liftPortPlannedLoad(kind, left.id);
+        const rightPlannedLoad = this.liftPortPlannedLoad(kind, right.id);
+        if (leftPlannedLoad !== rightPlannedLoad) {
+          return leftPlannedLoad - rightPlannedLoad;
+        }
         const leftDistance = relatedNode ? Math.abs(left.z - relatedNode.z) + Math.abs(left.x - relatedNode.x) : 0;
         const rightDistance = relatedNode ? Math.abs(right.z - relatedNode.z) + Math.abs(right.x - relatedNode.x) : 0;
         return leftDistance - rightDistance || left.id.localeCompare(right.id);
       });
     const candidates = liftNodes.length > 0 ? liftNodes.map((node) => node.id) : [fallbackNodeId];
     return candidates[0]!;
+  }
+
+  private liftPortPlannedLoad(kind: 'inbound' | 'outbound', liftNodeId: string): number {
+    return this.tasks.filter((task) =>
+      task.kind === kind &&
+      task.state !== 'completed' &&
+      task.state !== 'failed' &&
+      this.taskLiftPortNodeId(task) === liftNodeId
+    ).length;
   }
 
   private taskLiftPortNodeId(task: TaskStateRecord): string | null {

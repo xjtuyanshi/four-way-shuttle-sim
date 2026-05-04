@@ -25,32 +25,32 @@ bool StaticSceneContractPass(const FShuttleStaticSceneContractForSmoke& Contract
 {
     return
         Contract.bSingleLevel &&
-        Contract.bDenseStorageBlock &&
+        !Contract.bDenseStorageBlock &&
         Contract.bOrthogonalTrackOnly &&
         Contract.bDedicatedLiftPorts &&
-        Contract.StorageRows == 6 &&
-        Contract.StorageColumns == 8 &&
-        Contract.StorageCellCount == 48 &&
-        Contract.TrackBedCount == 16 &&
-        Contract.StorageLaneTrackCount == 6 &&
-        Contract.SideAisleTrackCount == 2 &&
-        Contract.CrossAisleTrackCount == 2 &&
-        Contract.InboundConnectorTrackCount == 2 &&
-        Contract.OutboundConnectorTrackCount == 2 &&
-        Contract.ParkingConnectorTrackCount == 2 &&
+        Contract.StorageRows == 16 &&
+        Contract.StorageColumns == 24 &&
+        Contract.StorageCellCount == 384 &&
+        Contract.TrackBedCount == 474 &&
+        Contract.StorageLaneTrackCount == 400 &&
+        Contract.SideAisleTrackCount == 42 &&
+        Contract.CrossAisleTrackCount == 12 &&
+        Contract.InboundConnectorTrackCount == 8 &&
+        Contract.OutboundConnectorTrackCount == 8 &&
+        Contract.ParkingConnectorTrackCount == 4 &&
         Contract.DiagonalTrackCount == 0 &&
-        Contract.InboundLiftPadCount == 2 &&
-        Contract.OutboundLiftPadCount == 2 &&
-        Contract.ParkingPadCount == 2 &&
+        Contract.InboundLiftPadCount == 4 &&
+        Contract.OutboundLiftPadCount == 4 &&
+        Contract.ParkingPadCount == 4 &&
         Contract.FloorPlateCount == 1 &&
-        Contract.StorageRailSegmentCount == 192 &&
-        Contract.RackPostCount == 63 &&
-        Contract.TransferRollerCount == 24 &&
-        Contract.LiftBlockCount == 4 &&
-        Contract.StorageCells.Num() == 48 &&
-        Contract.TrackBeds.Num() == 16 &&
-        Contract.LiftPads.Num() == 4 &&
-        Contract.ParkingPads.Num() == 2 &&
+        Contract.StorageRailSegmentCount == 1536 &&
+        Contract.RackPostCount == 504 &&
+        Contract.TransferRollerCount == 48 &&
+        Contract.LiftBlockCount == 8 &&
+        Contract.StorageCells.Num() == 384 &&
+        Contract.TrackBeds.Num() == 474 &&
+        Contract.LiftPads.Num() == 8 &&
+        Contract.ParkingPads.Num() == 4 &&
         Contract.bHasStorageRailGrid &&
         Contract.bHasTransferRollers &&
         Contract.bHasLiftBlackBoxes;
@@ -156,8 +156,14 @@ TSharedRef<FJsonObject> StaticSceneContractToJson(const FShuttleStaticSceneContr
     Summary->SetBoolField(TEXT("hasStorageRailGrid"), Contract.bHasStorageRailGrid);
     Summary->SetBoolField(TEXT("hasTransferRollers"), Contract.bHasTransferRollers);
     Summary->SetBoolField(TEXT("hasLiftBlackBoxes"), Contract.bHasLiftBlackBoxes);
-    Summary->SetStringField(TEXT("inboundSide"), Contract.InboundLiftXM > Contract.StorageBlockMaxXM ? TEXT("right") : TEXT("unknown"));
-    Summary->SetStringField(TEXT("outboundSide"), Contract.OutboundLiftXM < Contract.StorageBlockMinXM ? TEXT("left") : TEXT("unknown"));
+    Summary->SetStringField(
+        TEXT("inboundSide"),
+        Contract.InboundLiftXM > Contract.StorageBlockMaxXM ? TEXT("right") : Contract.InboundLiftXM < Contract.StorageBlockMinXM ? TEXT("left") : TEXT("mixed")
+    );
+    Summary->SetStringField(
+        TEXT("outboundSide"),
+        Contract.OutboundLiftXM > Contract.StorageBlockMaxXM ? TEXT("right") : Contract.OutboundLiftXM < Contract.StorageBlockMinXM ? TEXT("left") : TEXT("mixed")
+    );
     return Summary;
 }
 
@@ -389,14 +395,14 @@ int32 UShuttleVisualTwinSmokeCommandlet::Main(const FString& Params)
         FShuttleVisualLoadState WaitingLoad;
         WaitingLoad.Id = TEXT("load-waiting");
         WaitingLoad.State = EShuttleVisualLoadStatus::Waiting;
-        WaitingLoad.NodeId = TEXT("inbound-lift-a");
+        WaitingLoad.NodeId = TEXT("inbound-lift-top-01");
         WaitingLoad.WeightKg = 1000.0f;
         SyntheticLoadStates.Add(WaitingLoad);
 
         FShuttleVisualLoadState DeliveredLoad;
         DeliveredLoad.Id = TEXT("load-delivered");
         DeliveredLoad.State = EShuttleVisualLoadStatus::Delivered;
-        DeliveredLoad.NodeId = TEXT("outbound-lift-b");
+        DeliveredLoad.NodeId = TEXT("outbound-lift-bottom-02");
         DeliveredLoad.WeightKg = 1000.0f;
         SyntheticLoadStates.Add(DeliveredLoad);
 
@@ -419,7 +425,7 @@ int32 UShuttleVisualTwinSmokeCommandlet::Main(const FString& Params)
         LifecycleLoad.WeightKg = 1000.0f;
 
         LifecycleLoad.State = EShuttleVisualLoadStatus::Waiting;
-        LifecycleLoad.NodeId = TEXT("inbound-lift-a");
+        LifecycleLoad.NodeId = TEXT("inbound-lift-top-01");
         LifecycleLoad.VehicleId.Reset();
         LifecycleLoadStates = {LifecycleLoad};
         RuntimeActor->ApplyLoadStates(LifecycleLoadStates);
@@ -458,7 +464,7 @@ int32 UShuttleVisualTwinSmokeCommandlet::Main(const FString& Params)
         LoadedVehicleState.bLoaded = false;
         RuntimeActor->ApplyVehicleState(LoadedVehicleState);
         LifecycleLoad.State = EShuttleVisualLoadStatus::Delivered;
-        LifecycleLoad.NodeId = TEXT("outbound-lift-b");
+        LifecycleLoad.NodeId = TEXT("outbound-lift-bottom-02");
         LifecycleLoad.VehicleId.Reset();
         LifecycleLoadStates = {LifecycleLoad};
         RuntimeActor->ApplyLoadStates(LifecycleLoadStates);

@@ -59,7 +59,7 @@ pnpm shuttle:ws-smoke
 6. Open the Pixel Streaming viewer in the browser and verify:
 
 - stream connects;
-- camera shows the single-level dense 6x8 shuttle scene;
+- camera shows the single-level multi-bank shuttle scene;
 - vehicles update from the SimCore WebSocket;
 - carried/stored load placeholders do not duplicate;
 - playback speed remains controlled by the dashboard/API, not Unreal;
