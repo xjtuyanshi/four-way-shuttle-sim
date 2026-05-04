@@ -1,6 +1,7 @@
 import type { ShuttleScenario } from '@four-way-shuttle/schemas';
 
 type LayoutNode = ShuttleScenario['layout']['nodes'][number];
+type LiftKind = NonNullable<LayoutNode['liftKind']>;
 
 const DEFAULT_STORAGE_CELL_VISUAL_SIZE_X_M = 1.12;
 const DEFAULT_STORAGE_CELL_VISUAL_SIZE_Z_M = 1.08;
@@ -170,6 +171,13 @@ function rowForNodeId(nodeId: string): number {
   return sideRowMatch ? Number(sideRowMatch[1]) : 0;
 }
 
+function liftKindForNode(node: LayoutNode): LiftKind | null {
+  if (node.type !== 'lift-blackbox') {
+    return null;
+  }
+  return node.liftKind ?? null;
+}
+
 function sideForTrack(
   from: LayoutNode,
   to: LayoutNode,
@@ -204,10 +212,10 @@ function trackCategoryForEdge(
     return 'parkingConnector';
   }
   const liftNode = from.type === 'lift-blackbox' ? from : to.type === 'lift-blackbox' ? to : null;
-  if (liftNode?.id.startsWith('inbound-lift')) {
+  if (liftNode && liftKindForNode(liftNode) === 'inbound') {
     return 'inboundConnector';
   }
-  if (liftNode?.id.startsWith('outbound-lift')) {
+  if (liftNode && liftKindForNode(liftNode) === 'outbound') {
     return 'outboundConnector';
   }
   if (edge.conflictGroup?.startsWith('fifo-lane')) {
@@ -271,8 +279,8 @@ export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario):
     const to = nodesById.get(edge.to);
     return Boolean(from && to && Math.abs(from.x - to.x) > 1e-6 && Math.abs(from.z - to.z) > 1e-6);
   }).length;
-  const inboundLiftNodes = scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.id.startsWith('inbound-lift-'));
-  const outboundLiftNodes = scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.id.startsWith('outbound-lift-'));
+  const inboundLiftNodes = scenario.layout.nodes.filter((node) => liftKindForNode(node) === 'inbound');
+  const outboundLiftNodes = scenario.layout.nodes.filter((node) => liftKindForNode(node) === 'outbound');
   const parkingNodes = scenario.layout.nodes.filter((node) => node.type === 'parking');
   const inboundSide = sideForNodes(inboundLiftNodes, storageBlockMinXM, storageBlockMaxXM);
   const outboundSide = sideForNodes(outboundLiftNodes, storageBlockMinXM, storageBlockMaxXM);

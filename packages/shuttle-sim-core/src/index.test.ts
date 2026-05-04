@@ -106,6 +106,8 @@ describe('shuttle phase 0 SimCore', () => {
       'outbound-lift-top-01',
       'outbound-lift-top-02'
     ]);
+    expect(parsed.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound')).toHaveLength(4);
+    expect(parsed.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'outbound')).toHaveLength(4);
     expect(parsed.layout.zones.some((zone) => zone.noStop && zone.noParking)).toBe(true);
   });
 
@@ -135,8 +137,8 @@ describe('shuttle phase 0 SimCore', () => {
     const storageXs = storageNodes.map((node) => node.x);
     const storageRows = [...new Set(storageNodes.map((node) => node.z))].sort((left, right) => left - right);
     const storageColumns = [...new Set(storageNodes.map((node) => node.x))].sort((left, right) => left - right);
-    const inboundLifts = scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.id.startsWith('inbound-lift'));
-    const outboundLifts = scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.id.startsWith('outbound-lift'));
+    const inboundLifts = scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound');
+    const outboundLifts = scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'outbound');
     const storageColumnGaps = storageColumns.slice(1).map((x, index) => x - storageColumns[index]!);
     const storageRowGaps = storageRows.slice(1).map((z, index) => z - storageRows[index]!);
     const mainNorthNodes = scenario.layout.nodes.filter((node) => node.id.startsWith('main-north-')).sort((left, right) => left.x - right.x);
@@ -163,8 +165,6 @@ describe('shuttle phase 0 SimCore', () => {
     expect(scenario.layout.edges.some((edge) => edge.id === 'inbound-x-main' || edge.id === 'x-outbound-outbound')).toBe(false);
     expect(inboundLifts).toHaveLength(4);
     expect(outboundLifts).toHaveLength(4);
-    expect(inboundLifts.every((node) => node.id.startsWith('inbound-lift-'))).toBe(true);
-    expect(outboundLifts.every((node) => node.id.startsWith('outbound-lift-'))).toBe(true);
     expect(inboundLifts.every((node) => Math.abs(node.z) > 0)).toBe(true);
     expect(outboundLifts.every((node) => Math.abs(node.z) > 0)).toBe(true);
     expect(scenario.layout.edges.some((edge) => edge.id === 'inbound-lift-top-01-main-north-01')).toBe(true);
@@ -321,6 +321,21 @@ describe('shuttle phase 0 SimCore', () => {
     ).toThrow(/storage-rNN-cNN/);
   });
 
+  it('rejects lift-blackbox nodes without explicit liftKind metadata', () => {
+    const scenario = createDefaultShuttleScenario();
+    expect(() =>
+      ShuttleScenarioSchema.parse({
+        ...scenario,
+        layout: {
+          ...scenario.layout,
+          nodes: scenario.layout.nodes.map((node) =>
+            node.id === 'inbound-lift-top-01' ? { ...node, liftKind: undefined } : node
+          )
+        }
+      })
+    ).toThrow(/lift-blackbox nodes must declare liftKind/);
+  });
+
   it('rejects storage rows without left and right side access nodes', () => {
     const scenario = createDefaultShuttleScenario();
     expect(() =>
@@ -389,8 +404,9 @@ describe('shuttle phase 0 SimCore', () => {
 
     expect(state.kpis.completedInbound).toBeGreaterThan(0);
     expect(state.kpis.deadlockCount).toBe(0);
-    expect(state.tasks.every((task) => task.kind !== 'inbound' || task.pickupNodeId.startsWith('inbound-lift-'))).toBe(true);
-    expect(state.tasks.every((task) => task.kind !== 'outbound' || task.dropoffNodeId.startsWith('outbound-lift-'))).toBe(true);
+    const liftKindByNodeId = new Map(scenario.layout.nodes.map((node) => [node.id, node.liftKind ?? null]));
+    expect(state.tasks.every((task) => task.kind !== 'inbound' || liftKindByNodeId.get(task.pickupNodeId) === 'inbound')).toBe(true);
+    expect(state.tasks.every((task) => task.kind !== 'outbound' || liftKindByNodeId.get(task.dropoffNodeId) === 'outbound')).toBe(true);
     expect(state.traffic.liftPorts).toHaveLength(8);
     expect(state.traffic.liftPorts.some((port) => port.kind === 'inbound' && port.utilization > 0)).toBe(true);
   });
@@ -514,7 +530,7 @@ describe('shuttle phase 0 SimCore', () => {
         nodes: [
           { id: 'parking-a', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
           { id: 'parking-b', type: 'parking', x: 0, y: 0, z: 4, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
-          { id: 'inbound-lift-test', type: 'lift-blackbox', x: 1, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'inbound-lift-test', type: 'lift-blackbox', liftKind: 'inbound', x: 1, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
           { id: 'left-row-01', type: 'aisle', x: 1, y: 0, z: -1, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
           { id: 'storage-r01-c01', type: 'storage', x: 2, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
           { id: 'storage-r01-c02', type: 'storage', x: 3, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },

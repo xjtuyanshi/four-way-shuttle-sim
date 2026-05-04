@@ -153,8 +153,7 @@ The browser demo has been adjusted toward the user's four-way shuttle reference:
 - The simulator does not perform hidden row compaction. Stored pallet `nodeId` changes only through explicit vehicle/lift transfer in this branch; push-lane mechanics are deferred until they can be represented with time, reservations, and events.
 - Stored pallet cells are blocked for route planning unless the occupied cell is the current task endpoint, so the model does not rely on free pass-through under stored pallets.
 - Lift behavior is modeled only as black-box ports, not as multi-level lift physics.
-- Dedicated inbound ports: `inbound-lift-top-01`, `inbound-lift-top-02`, `inbound-lift-bottom-01`, `inbound-lift-bottom-02`.
-- Dedicated outbound ports: `outbound-lift-top-01`, `outbound-lift-top-02`, `outbound-lift-bottom-01`, `outbound-lift-bottom-02`.
+- Dedicated lift semantics come from `lift-blackbox.liftKind`, not from ID prefixes. Current inbound instances are `inbound-lift-top-01`, `inbound-lift-top-02`, `inbound-lift-bottom-01`, and `inbound-lift-bottom-02`; current outbound instances are `outbound-lift-top-01`, `outbound-lift-top-02`, `outbound-lift-bottom-01`, and `outbound-lift-bottom-02`.
 - Dedicated lift ports expose queue length, active task id, waiting task ids, and allocation/utilization diagnostics. In this phase, utilization means the black-box port is allocated by an active task; true lift-mechanism service utilization is a later split metric.
 - The 3D view renders low black-box ports, dense track-cell storage, side aisles, and roller conveyor entry/exit pads.
 - Runtime playback speed supports `1x`, `2x`, `4x`, and `10x`.

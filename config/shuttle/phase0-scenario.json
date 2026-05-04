@@ -247,6 +247,7 @@
       {
         "id": "inbound-lift-top-01",
         "type": "lift-blackbox",
+        "liftKind": "inbound",
         "x": 10.5,
         "y": 0,
         "z": -14.2,
@@ -258,6 +259,7 @@
       {
         "id": "outbound-lift-top-01",
         "type": "lift-blackbox",
+        "liftKind": "outbound",
         "x": 20.25,
         "y": 0,
         "z": -14.2,
@@ -269,6 +271,7 @@
       {
         "id": "inbound-lift-top-02",
         "type": "lift-blackbox",
+        "liftKind": "inbound",
         "x": 30,
         "y": 0,
         "z": -14.2,
@@ -280,6 +283,7 @@
       {
         "id": "outbound-lift-top-02",
         "type": "lift-blackbox",
+        "liftKind": "outbound",
         "x": 39.25,
         "y": 0,
         "z": -14.2,
@@ -291,6 +295,7 @@
       {
         "id": "outbound-lift-bottom-01",
         "type": "lift-blackbox",
+        "liftKind": "outbound",
         "x": 10.5,
         "y": 0,
         "z": 14.2,
@@ -302,6 +307,7 @@
       {
         "id": "inbound-lift-bottom-01",
         "type": "lift-blackbox",
+        "liftKind": "inbound",
         "x": 20.25,
         "y": 0,
         "z": 14.2,
@@ -313,6 +319,7 @@
       {
         "id": "outbound-lift-bottom-02",
         "type": "lift-blackbox",
+        "liftKind": "outbound",
         "x": 30,
         "y": 0,
         "z": 14.2,
@@ -324,6 +331,7 @@
       {
         "id": "inbound-lift-bottom-02",
         "type": "lift-blackbox",
+        "liftKind": "inbound",
         "x": 39.25,
         "y": 0,
         "z": 14.2,

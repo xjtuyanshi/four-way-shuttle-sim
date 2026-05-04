@@ -20,6 +20,7 @@ export const ShuttleNodeTypeSchema = z.enum([
 export const ShuttleNodeSchema = z.object({
   id: z.string(),
   type: ShuttleNodeTypeSchema,
+  liftKind: z.enum(['inbound', 'outbound']).optional(),
   x: z.number(),
   y: z.number().default(0),
   z: z.number(),
@@ -193,6 +194,20 @@ export const ShuttleScenarioSchema = z.object({
     });
   }
   for (const node of scenario.layout.nodes) {
+    if (node.type === 'lift-blackbox' && !node.liftKind) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['layout', 'nodes', node.id, 'liftKind'],
+        message: 'Phase 0 lift-blackbox nodes must declare liftKind=inbound or liftKind=outbound.'
+      });
+    }
+    if (node.type !== 'lift-blackbox' && node.liftKind) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['layout', 'nodes', node.id, 'liftKind'],
+        message: 'liftKind is only valid on lift-blackbox nodes.'
+      });
+    }
     if (node.capacity !== 1) {
       context.addIssue({
         code: z.ZodIssueCode.custom,

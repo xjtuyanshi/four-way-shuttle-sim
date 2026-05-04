@@ -180,6 +180,13 @@ function nodePosition(scenario: ShuttleScenario, nodeId: string): { x: number; y
   return { x: node.x, y: node.y, z: node.z };
 }
 
+function liftKindForNode(node: LayoutNode): LiftKind | null {
+  if (node.type !== 'lift-blackbox') {
+    return null;
+  }
+  return node.liftKind ?? null;
+}
+
 function buildEdgeKey(from: string, to: string): string {
   return `${from}->${to}`;
 }
@@ -250,6 +257,7 @@ export function motionProfileAt(
 }
 
 type LayoutNode = ShuttleScenario['layout']['nodes'][number];
+type LiftKind = NonNullable<LayoutNode['liftKind']>;
 type LayoutEdge = ShuttleScenario['layout']['edges'][number];
 type LayoutZone = ShuttleScenario['layout']['zones'][number];
 
@@ -342,16 +350,16 @@ function createDefaultLayout(): ShuttleScenario['layout'] {
   });
 
   [
-    { id: 'inbound-lift-top-01', x: liftPortalXs[0]!, z: topLiftZ },
-    { id: 'outbound-lift-top-01', x: liftPortalXs[1]!, z: topLiftZ },
-    { id: 'inbound-lift-top-02', x: liftPortalXs[2]!, z: topLiftZ },
-    { id: 'outbound-lift-top-02', x: liftPortalXs[3]!, z: topLiftZ },
-    { id: 'outbound-lift-bottom-01', x: liftPortalXs[0]!, z: bottomLiftZ },
-    { id: 'inbound-lift-bottom-01', x: liftPortalXs[1]!, z: bottomLiftZ },
-    { id: 'outbound-lift-bottom-02', x: liftPortalXs[2]!, z: bottomLiftZ },
-    { id: 'inbound-lift-bottom-02', x: liftPortalXs[3]!, z: bottomLiftZ }
+    { id: 'inbound-lift-top-01', liftKind: 'inbound' as const, x: liftPortalXs[0]!, z: topLiftZ },
+    { id: 'outbound-lift-top-01', liftKind: 'outbound' as const, x: liftPortalXs[1]!, z: topLiftZ },
+    { id: 'inbound-lift-top-02', liftKind: 'inbound' as const, x: liftPortalXs[2]!, z: topLiftZ },
+    { id: 'outbound-lift-top-02', liftKind: 'outbound' as const, x: liftPortalXs[3]!, z: topLiftZ },
+    { id: 'outbound-lift-bottom-01', liftKind: 'outbound' as const, x: liftPortalXs[0]!, z: bottomLiftZ },
+    { id: 'inbound-lift-bottom-01', liftKind: 'inbound' as const, x: liftPortalXs[1]!, z: bottomLiftZ },
+    { id: 'outbound-lift-bottom-02', liftKind: 'outbound' as const, x: liftPortalXs[2]!, z: bottomLiftZ },
+    { id: 'inbound-lift-bottom-02', liftKind: 'inbound' as const, x: liftPortalXs[3]!, z: bottomLiftZ }
   ].forEach((lift) => {
-    nodes.push({ id: lift.id, type: 'lift-blackbox', x: lift.x, y: 0, z: lift.z, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
+    nodes.push({ id: lift.id, type: 'lift-blackbox', liftKind: lift.liftKind, x: lift.x, y: 0, z: lift.z, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
   });
 
   for (let rowIndex = 0; rowIndex < rowZs.length; rowIndex += 1) {
@@ -1164,7 +1172,7 @@ export class ShuttleSimCore {
     const fallbackNodeId = this.scenario.layout.nodes.find((node) => node.type === kind)?.id ?? relatedNodeId;
     const relatedNode = this.scenario.layout.nodes.find((node) => node.id === relatedNodeId);
     const liftNodes = this.scenario.layout.nodes
-      .filter((node) => node.type === 'lift-blackbox' && node.id.startsWith(`${kind}-lift`))
+      .filter((node) => liftKindForNode(node) === kind)
       .sort((left, right) => {
         const leftPlannedLoad = this.liftPortPlannedLoad(kind, left.id);
         const rightPlannedLoad = this.liftPortPlannedLoad(kind, right.id);
@@ -1189,13 +1197,13 @@ export class ShuttleSimCore {
   }
 
   private taskLiftPortNodeId(task: TaskStateRecord): string | null {
-    if (task.kind === 'inbound' && task.pickupNodeId.startsWith('inbound-lift')) {
-      return task.pickupNodeId;
-    }
-    if (task.kind === 'outbound' && task.dropoffNodeId.startsWith('outbound-lift')) {
-      return task.dropoffNodeId;
-    }
-    return null;
+    const candidateNodeId = task.kind === 'inbound' ? task.pickupNodeId : task.dropoffNodeId;
+    return this.liftPortKindForNodeId(candidateNodeId) === task.kind ? candidateNodeId : null;
+  }
+
+  private liftPortKindForNodeId(nodeId: string): LiftKind | null {
+    const node = this.scenario.layout.nodes.find((candidate) => candidate.id === nodeId);
+    return node ? liftKindForNode(node) : null;
   }
 
   private isLiftPortBusyForAssignment(kind: 'inbound' | 'outbound', liftNodeId: string): boolean {
@@ -1356,13 +1364,8 @@ export class ShuttleSimCore {
   }
 
   private liftPortBlockReason(task: TaskStateRecord): string | null {
-    if (task.kind === 'inbound' && task.pickupNodeId.startsWith('inbound-lift')) {
-      return this.isLiftPortBusyForAssignment('inbound', task.pickupNodeId) ? `inbound-lift-busy:${task.pickupNodeId}` : null;
-    }
-    if (task.kind === 'outbound' && task.dropoffNodeId.startsWith('outbound-lift')) {
-      return this.isLiftPortBusyForAssignment('outbound', task.dropoffNodeId) ? `outbound-lift-busy:${task.dropoffNodeId}` : null;
-    }
-    return null;
+    const liftNodeId = this.taskLiftPortNodeId(task);
+    return liftNodeId && this.isLiftPortBusyForAssignment(task.kind, liftNodeId) ? `${task.kind}-lift-busy:${liftNodeId}` : null;
   }
 
   private fifoLaneBlockReason(task: TaskStateRecord): string | null {
@@ -1947,8 +1950,8 @@ export class ShuttleSimCore {
 
   private liftPortNodes(): Array<{ nodeId: string; kind: 'inbound' | 'outbound' }> {
     return this.scenario.layout.nodes
-      .filter((node) => node.type === 'lift-blackbox' && (node.id.startsWith('inbound-lift') || node.id.startsWith('outbound-lift')))
-      .map((node) => ({ nodeId: node.id, kind: node.id.startsWith('inbound-lift') ? 'inbound' as const : 'outbound' as const }))
+      .map((node) => ({ nodeId: node.id, kind: liftKindForNode(node) }))
+      .filter((port): port is { nodeId: string; kind: LiftKind } => port.kind !== null)
       .sort((left, right) => left.nodeId.localeCompare(right.nodeId));
   }
 
