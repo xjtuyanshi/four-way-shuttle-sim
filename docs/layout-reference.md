@@ -21,6 +21,7 @@ The user-provided CAD screenshot calibration notes are tracked in `docs/real-lay
 - Phase 0 now uses a multi-bank storage field: 16 rows x 24 columns = 384 logical storage cells.
 - Storage rows are split into upper and lower banks around the main aisle. Storage columns are split into four 6-column islands with vertical corridor gaps, so the scene reads as multiple dense storage islands instead of a single toy-like rectangle.
 - The current visual cell footprint is 1.25 m x 1.20 m so cells touch within each storage island instead of appearing as sparse isolated bays.
+- The current default calibration profile is `phase0-cad-assumption-v1`. It is intentionally marked as assumption-grade and exposed through `scenario.layout.calibrationProfile` plus the static-scene contract so CAD/vendor/site dimensions can replace placeholder values without changing SimCore authority.
 - The current shuttle safety check uses the configured 1.09 m x 1.03 m vehicle footprint plus 0.10 m clearance as a software validation envelope. This is a placeholder until real shuttle/pallet envelope and track-gauge clearance data are available.
 - Inbound and outbound are dedicated lift-port roles, not just left/right sides. The default scene has four inbound lift black boxes and four outbound lift black boxes distributed along upper and lower transfer corridors.
 - Lift ports should render as transfer/lift equipment with yellow guide rails, rollers, and posts. They should not look like gray storage boxes placed in the middle of the field.

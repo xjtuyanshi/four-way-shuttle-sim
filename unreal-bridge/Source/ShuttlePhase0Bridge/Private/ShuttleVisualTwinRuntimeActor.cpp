@@ -341,8 +341,8 @@ void AShuttleVisualTwinRuntimeActor::RebuildStaticScene()
                 Column + 1,
                 X,
                 Z,
-                1.12f,
-                1.08f,
+                StoragePitchXM,
+                StoragePitchZM,
                 0.04f
             );
         }

@@ -22,6 +22,8 @@ Current Phase 0 constants remain placeholders:
 - Main two-lane corridor centers: +/-800 mm from the level centerline.
 - Visual shuttle envelope: 1090 mm x 1030 mm plus software clearance.
 
+These placeholders are now encoded in the SimCore default layout calibration profile `phase0-cad-assumption-v1`, exposed through `scenario.layout.calibrationProfile` and the shared static-scene contract. Treat every dimension in that profile as `source: assumed` / `confidence: low` until replaced by CAD/vendor/site measurements.
+
 ## Implementation Rules From This Reference
 
 - Draw storage as dense purple track-cell grids with no interior gap inside each island.
@@ -29,6 +31,7 @@ Current Phase 0 constants remain placeholders:
 - Draw lift ports as yellow transfer stations with rollers and posts. Do not draw gray boxes in the middle of the storage area unless they represent a specific blocked/structural CAD cell.
 - Keep all vehicle motion orthogonal. No diagonal shortcut edges may be introduced to match the picture.
 - Keep FIFO as an inventory policy. Storage cells are positions on the shuttle track grid, while inbound/outbound sequencing remains controlled by SimCore tasks and reservations.
+- Keep visual storage cell footprints equal to the calibrated storage pitch inside each dense island so adjacent cells read as a contiguous grid, not as sparse boxes.
 
 ## Next Data Needed
 

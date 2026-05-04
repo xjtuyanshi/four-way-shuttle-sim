@@ -128,7 +128,10 @@ describe('dashboard static scene contract', () => {
     expect(contract.storagePolicy).toBe('rowContiguousLaneFill');
     expect(contract.inboundStorageFlow).toBe('rightToLeft');
     expect(contract.outboundStorageFlow).toBe('leftPick');
+    expect(contract.layoutCalibrationProfile?.id).toBe('phase0-cad-assumption-v1');
+    expect(contract.layoutCalibrationProfile?.status).toBe('assumption');
     expect(contract.storageCells).toHaveLength(384);
+    expect(contract.storageCells.every((cell) => cell.lengthXM === 1.25 && cell.lengthZM === 1.2)).toBe(true);
     expect(contract.storageRows).toBe(16);
     expect(contract.storageColumns).toBe(24);
     expect(contract.liftPads.filter((pad) => pad.category === 'inboundLift')).toHaveLength(4);

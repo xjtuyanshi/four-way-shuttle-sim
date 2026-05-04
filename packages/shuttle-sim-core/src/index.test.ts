@@ -35,6 +35,7 @@ function testScenario(overrides: Partial<ShuttleScenario>): ShuttleScenario {
     },
     layout: {
       units: 'meter',
+      calibrationProfile: null,
       nodes: [
         { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
         { id: 'B', type: 'parking', x: 4, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
@@ -135,6 +136,20 @@ describe('shuttle phase 0 SimCore', () => {
     expect(parsed.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound')).toHaveLength(4);
     expect(parsed.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'outbound')).toHaveLength(4);
     expect(parsed.layout.zones.some((zone) => zone.noStop && zone.noParking)).toBe(true);
+    expect(parsed.layout.calibrationProfile).toMatchObject({
+      id: 'phase0-cad-assumption-v1',
+      status: 'assumption',
+      units: 'meter'
+    });
+    expect(parsed.layout.calibrationProfile?.dimensions.map((dimension) => dimension.key)).toEqual([
+      'storageCellPitchX',
+      'storageCellPitchZ',
+      'storageBayGapX',
+      'mainLaneCenterSpacingZ',
+      'innerStorageBankGapZ',
+      'liftStandoffZ',
+      'sideClearanceX'
+    ]);
   });
 
   it('parses legacy state diagnostics without lift-port allocation details', () => {
@@ -225,7 +240,11 @@ describe('shuttle phase 0 SimCore', () => {
       orthogonalTrackOnly: true,
       dedicatedLiftPorts: true,
       inboundSide: 'mixed',
-      outboundSide: 'mixed'
+      outboundSide: 'mixed',
+      layoutCalibrationProfile: {
+        id: 'phase0-cad-assumption-v1',
+        status: 'assumption'
+      }
     });
     expect(contract.storagePitchXM).toBeCloseTo(1.25, 6);
     expect(contract.storagePitchZM).toBeCloseTo(1.2, 6);
@@ -255,7 +274,12 @@ describe('shuttle phase 0 SimCore', () => {
       yM: 0,
       zM: 10.6
     });
-    expect(contract.storageCells.every((cell) => cell.lengthXM === 1.12 && cell.lengthZM === 1.08)).toBe(true);
+    expect(contract.storageCells.every((cell) => cell.lengthXM === 1.25 && cell.lengthZM === 1.2)).toBe(true);
+    expect(contract.layoutCalibrationProfile?.dimensions.find((dimension) => dimension.key === 'storageCellPitchX')).toMatchObject({
+      valueM: 1.25,
+      source: 'assumed',
+      confidence: 'low'
+    });
     expect(
       Array.from({ length: 16 }, (_, rowIndex) =>
         contract.storageCells.filter((cell) => cell.row === rowIndex + 1).map((cell) => cell.column)
@@ -553,6 +577,7 @@ describe('shuttle phase 0 SimCore', () => {
     const scenario = testScenario({
       layout: {
         units: 'meter',
+        calibrationProfile: null,
         nodes: [
           { id: 'parking-a', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
           { id: 'parking-b', type: 'parking', x: 0, y: 0, z: 4, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
@@ -933,6 +958,7 @@ describe('shuttle phase 0 SimCore', () => {
     const scenario = testScenario({
       layout: {
         units: 'meter',
+        calibrationProfile: null,
         nodes: [
           { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
           { id: 'B', type: 'aisle', x: 4, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
@@ -966,6 +992,7 @@ describe('shuttle phase 0 SimCore', () => {
     const scenario = testScenario({
       layout: {
         units: 'meter',
+        calibrationProfile: null,
         nodes: [
           { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
           { id: 'B', type: 'parking', x: 0, y: 0, z: 4, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
@@ -1013,6 +1040,7 @@ describe('shuttle phase 0 SimCore', () => {
     const scenario = testScenario({
       layout: {
         units: 'meter',
+        calibrationProfile: null,
         nodes: [
           { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
           { id: 'B', type: 'parking', x: 0, y: 0, z: 4, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
@@ -1040,6 +1068,7 @@ describe('shuttle phase 0 SimCore', () => {
     const scenario = testScenario({
       layout: {
         units: 'meter',
+        calibrationProfile: null,
         nodes: [
           { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
           { id: 'B', type: 'aisle', x: 4, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
@@ -1108,6 +1137,7 @@ describe('shuttle phase 0 SimCore', () => {
       },
       layout: {
         units: 'meter',
+        calibrationProfile: null,
         nodes: [
           { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
           { id: 'B', type: 'aisle', x: 4, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },

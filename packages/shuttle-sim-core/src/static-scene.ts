@@ -3,8 +3,8 @@ import type { ShuttleScenario } from '@four-way-shuttle/schemas';
 type LayoutNode = ShuttleScenario['layout']['nodes'][number];
 type LiftKind = NonNullable<LayoutNode['liftKind']>;
 
-const DEFAULT_STORAGE_CELL_VISUAL_SIZE_X_M = 1.12;
-const DEFAULT_STORAGE_CELL_VISUAL_SIZE_Z_M = 1.08;
+const DEFAULT_STORAGE_CELL_VISUAL_SIZE_X_M = 1.25;
+const DEFAULT_STORAGE_CELL_VISUAL_SIZE_Z_M = 1.2;
 const DEFAULT_STORAGE_LANE_TRACK_WIDTH_Z_M = 0.08;
 const DEFAULT_AISLE_TRACK_WIDTH_M = 0.1;
 const DEFAULT_CONNECTOR_TRACK_WIDTH_M = 0.12;
@@ -15,6 +15,7 @@ export type ShuttleStaticSceneContract = {
   schemaVersion: 'shuttle.simCoreStaticSceneContract.v1';
   scenarioId: string;
   units: 'meter';
+  layoutCalibrationProfile: ShuttleStaticSceneLayoutCalibrationProfile | null;
   storageCells: ShuttleStaticSceneStorageCell[];
   trackBeds: ShuttleStaticSceneTrackBed[];
   liftPads: ShuttleStaticScenePad[];
@@ -53,6 +54,8 @@ export type ShuttleStaticSceneContract = {
   inboundStorageFlow: 'rightToLeft';
   outboundStorageFlow: 'leftPick';
 };
+
+export type ShuttleStaticSceneLayoutCalibrationProfile = NonNullable<ShuttleScenario['layout']['calibrationProfile']>;
 
 export type ShuttleStaticSceneStorageCell = {
   id: string;
@@ -229,6 +232,12 @@ function trackCategoryForEdge(
 
 export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario): ShuttleStaticSceneContract {
   const storageNodes = scenario.layout.nodes.filter((node) => node.type === 'storage');
+  const storageXs = sortedUniqueNumbers(storageNodes.map((node) => node.x));
+  const storageZs = sortedUniqueNumbers(storageNodes.map((node) => node.z));
+  const storagePitchXM = minimumPositivePitch(storageNodes.map((node) => node.x));
+  const storagePitchZM = minimumPositivePitch(storageNodes.map((node) => node.z));
+  const storageCellVisualSizeXM = storagePitchXM > 0 ? storagePitchXM : DEFAULT_STORAGE_CELL_VISUAL_SIZE_X_M;
+  const storageCellVisualSizeZM = storagePitchZM > 0 ? storagePitchZM : DEFAULT_STORAGE_CELL_VISUAL_SIZE_Z_M;
   const storageCells: ShuttleStaticSceneStorageCell[] = [];
   const storageCellIds = new Set<string>();
   const storageRowsById = new Set<number>();
@@ -248,17 +257,13 @@ export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario):
       xM: round(node.x, 6),
       yM: round(node.y, 6),
       zM: round(node.z, 6),
-      lengthXM: DEFAULT_STORAGE_CELL_VISUAL_SIZE_X_M,
-      lengthZM: DEFAULT_STORAGE_CELL_VISUAL_SIZE_Z_M
+      lengthXM: storageCellVisualSizeXM,
+      lengthZM: storageCellVisualSizeZM
     });
   }
 
-  const storageXs = sortedUniqueNumbers(storageNodes.map((node) => node.x));
-  const storageZs = sortedUniqueNumbers(storageNodes.map((node) => node.z));
   const storageRows = storageRowsById.size;
   const storageColumns = storageColumnsById.size;
-  const storagePitchXM = minimumPositivePitch(storageNodes.map((node) => node.x));
-  const storagePitchZM = minimumPositivePitch(storageNodes.map((node) => node.z));
   const storageColumnIslandCount = splitBandCount(storageXs, storagePitchXM);
   const storageRowBankCount = splitBandCount(storageZs, storagePitchZM);
   const storageIslandCount = storageColumnIslandCount * storageRowBankCount;
@@ -363,6 +368,7 @@ export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario):
     schemaVersion: 'shuttle.simCoreStaticSceneContract.v1',
     scenarioId: scenario.id,
     units: scenario.layout.units,
+    layoutCalibrationProfile: scenario.layout.calibrationProfile,
     storageCells: sortedById(storageCells),
     trackBeds: sortedById(trackBeds),
     liftPads,

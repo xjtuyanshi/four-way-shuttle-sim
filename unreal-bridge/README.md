@@ -50,15 +50,15 @@ SimCore remains authoritative for event logs, KPIs, task assignment, reservation
 `UShuttleVisualTwinSmokeCommandlet` runs in headless Unreal smoke tests. It creates a temporary world, spawns `AShuttleVisualTwinRuntimeActor`, rebuilds the static scene, and verifies the default scaffold counts and item-level topology:
 
 - 384 storage cells
-- 16 track beds
-- 2 inbound lift pads
-- 2 outbound lift pads
-- 2 parking pads
-- visual detail counts: 1 floor plate, 192 storage rail segments, 63 rack posts, 24 transfer rollers, and 4 black-box lift housings
+- 474 track beds
+- 4 inbound lift pads
+- 4 outbound lift pads
+- 4 parking pads
+- visual detail counts: 1 floor plate, 1536 storage rail segments, 504 rack posts, 48 transfer rollers, and 8 black-box lift housings
 - stable IDs, categories, coordinates, orientations, and sizes for every storage cell, track bed, lift pad, and parking pad
 
 It also applies synthetic vehicle and load states through the runtime actor, verifies that exactly one visible default vehicle actor is spawned and reused, checks SimCore-to-Unreal position/yaw conversion, checks that the carried-pallet placeholder follows the streamed `loaded` flag, checks that stored/waiting/delivered loads render as static pallet placeholders while carried loads do not duplicate, and exercises a waiting -> stored -> carried -> delivered lifecycle for one pallet placeholder. The smoke script writes JSON static-scene and live-bridge summaries under `/tmp` during each run for visual-review evidence. This proves the default actor binding path in headless UE. It does not prove packaged runtime or Pixel Streaming soak readiness.
 
 ## Placeholder Dimensions
 
-The generated geometry uses deterministic placeholder dimensions so smoke tests can compare Unreal and SimCore contracts. These values are not a mechanical release. Before using the visual twin for equipment or layout approval, replace or calibrate them with CAD/vendor inputs for pallet length/width/height, shuttle footprint and lift envelope, storage pitch, rail gauge, transfer-roller spacing, rack upright/baseplate envelope, and lift/conveyor pad envelope.
+The generated geometry uses deterministic placeholder dimensions from SimCore's `phase0-cad-assumption-v1` layout calibration profile so smoke tests can compare Unreal and SimCore contracts. These values are not a mechanical release. Before using the visual twin for equipment or layout approval, replace or calibrate them with CAD/vendor inputs for pallet length/width/height, shuttle footprint and lift envelope, storage pitch, rail gauge, transfer-roller spacing, rack upright/baseplate envelope, and lift/conveyor pad envelope.

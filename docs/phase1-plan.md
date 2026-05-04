@@ -57,9 +57,9 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 
 ## Next TODO
 
-- Send the current public `main` to ChatGPT Pro for another review after action-time confirmation, explicitly asking it to review engineering, mechanical-manufacturing, and IE realism in addition to software correctness.
-- Extract calibrated dimensions from the real layout reference before making stronger throughput claims: storage pitch, aisle widths, shuttle footprint, pallet/load envelope, lift pad envelope, roller-transfer envelope, and blocked/structural cells.
-- Add a configurable layout profile for those calibrated dimensions while keeping the current deterministic default as a regression fixture.
+- Track the current public `main` ChatGPT Pro follow-up and fold in only concrete blockers; the previous verdict was merge now with no must-fix.
+- Replace the assumption-grade `phase0-cad-assumption-v1` layout profile with CAD/vendor/site dimensions before making stronger throughput claims: storage pitch, aisle widths, shuttle footprint, pallet/load envelope, lift pad envelope, roller-transfer envelope, and blocked/structural cells.
+- Keep the configurable layout profile as the calibration boundary while preserving the current deterministic default as a regression fixture.
 - Add true push-lane or multi-axis storage-grid mechanics only after the FIFO lane policy is explicitly modeled against the target physical layout.
 - Replace remaining Unreal placeholder geometry with calibrated meshes/materials once CAD or vendor dimensions are available; keep SimCore authoritative.
 - Run a 30-minute 1080p single-user Pixel Streaming soak only after the calibrated Unreal scene foundation is visually reviewed and the browser/API validation gate is green.

@@ -17,13 +17,24 @@ import {
 } from '@four-way-shuttle/schemas';
 
 import { summarizeScenarioStaticSceneContract as summarizeStaticSceneContract, type ShuttleStaticSceneContract } from './static-scene.js';
+import {
+  DEFAULT_SHUTTLE_LAYOUT_PROFILE,
+  createShuttleLayoutProfile,
+  type ShuttleLayoutGeometryProfile
+} from './layout-profile.js';
 export type {
   ShuttleStaticSceneContract,
+  ShuttleStaticSceneLayoutCalibrationProfile,
   ShuttleStaticScenePad,
   ShuttleStaticSceneStorageCell,
   ShuttleStaticSceneTrackBed,
   ShuttleStaticSceneTrackCategory
 } from './static-scene.js';
+export {
+  DEFAULT_SHUTTLE_LAYOUT_PROFILE,
+  createShuttleLayoutProfile,
+  type ShuttleLayoutGeometryProfile
+} from './layout-profile.js';
 
 type RuntimeStatus = ShuttleSimState['status'];
 
@@ -44,6 +55,7 @@ type ShuttleScenarioOverrides = Partial<Omit<
   ShuttleScenario,
   'vehicles' | 'layout' | 'taskGeneration' | 'physicsParams' | 'routingPolicy' | 'trafficPolicy'
 >> & {
+  layoutProfile?: Partial<ShuttleLayoutGeometryProfile>;
   vehicles?: Partial<ShuttleScenario['vehicles']>;
   layout?: Partial<ShuttleScenario['layout']>;
   taskGeneration?: Partial<ShuttleScenario['taskGeneration']>;
@@ -261,53 +273,36 @@ type LiftKind = NonNullable<LayoutNode['liftKind']>;
 type LayoutEdge = ShuttleScenario['layout']['edges'][number];
 type LayoutZone = ShuttleScenario['layout']['zones'][number];
 
-const DEFAULT_STORAGE_ROWS_PER_BANK = 8;
-const DEFAULT_STORAGE_ROW_BANKS = 2;
-const DEFAULT_STORAGE_ROWS = DEFAULT_STORAGE_ROWS_PER_BANK * DEFAULT_STORAGE_ROW_BANKS;
-const DEFAULT_STORAGE_COLUMNS_PER_BAY = 6;
-const DEFAULT_STORAGE_COLUMN_BAYS = 4;
-const DEFAULT_STORAGE_COLUMNS = DEFAULT_STORAGE_COLUMNS_PER_BAY * DEFAULT_STORAGE_COLUMN_BAYS;
-const DEFAULT_STORAGE_CELL_PITCH_X_M = 1.25;
-const DEFAULT_STORAGE_CELL_PITCH_Z_M = 1.2;
-const DEFAULT_LEFT_SPINE_X_M = 0;
-const DEFAULT_FIRST_STORAGE_X_M = 2.5;
-const DEFAULT_STORAGE_BAY_GAP_X_M = 2.25;
-const DEFAULT_STORAGE_INNER_ROW_Z_M = 2.2;
-const DEFAULT_SIDE_CLEARANCE_X_M = 2.5;
-const DEFAULT_MAIN_LANE_NORTH_Z_M = -0.8;
-const DEFAULT_MAIN_LANE_SOUTH_Z_M = 0.8;
-const DEFAULT_LIFT_STANDOFF_Z_M = 1.8;
-const DEFAULT_PARKING_STANDOFF_X_M = 2.4;
-
 function storageNodeId(rowIndex: number, columnIndex: number): string {
   return `storage-r${String(rowIndex + 1).padStart(2, '0')}-c${String(columnIndex + 1).padStart(2, '0')}`;
 }
 
-function defaultStorageRowZs(): number[] {
-  const topRows = Array.from({ length: DEFAULT_STORAGE_ROWS_PER_BANK }, (_, rowIndex) =>
-    round(-(DEFAULT_STORAGE_INNER_ROW_Z_M + (DEFAULT_STORAGE_ROWS_PER_BANK - rowIndex - 1) * DEFAULT_STORAGE_CELL_PITCH_Z_M), 3)
+function defaultStorageRowZs(profile: ShuttleLayoutGeometryProfile): number[] {
+  const topRows = Array.from({ length: profile.storageRowsPerBank }, (_, rowIndex) =>
+    round(-(profile.storageInnerRowZM + (profile.storageRowsPerBank - rowIndex - 1) * profile.storageCellPitchZM), 3)
   );
-  const bottomRows = Array.from({ length: DEFAULT_STORAGE_ROWS_PER_BANK }, (_, rowIndex) =>
-    round(DEFAULT_STORAGE_INNER_ROW_Z_M + rowIndex * DEFAULT_STORAGE_CELL_PITCH_Z_M, 3)
+  const bottomRows = Array.from({ length: profile.storageRowsPerBank }, (_, rowIndex) =>
+    round(profile.storageInnerRowZM + rowIndex * profile.storageCellPitchZM, 3)
   );
   return [...topRows, ...bottomRows];
 }
 
-function defaultStorageColumnXs(): number[] {
-  return Array.from({ length: DEFAULT_STORAGE_COLUMNS }, (_, columnIndex) =>
+function defaultStorageColumnXs(profile: ShuttleLayoutGeometryProfile): number[] {
+  const storageColumns = profile.storageColumnsPerBay * profile.storageColumnBays;
+  return Array.from({ length: storageColumns }, (_, columnIndex) =>
     round(
-      DEFAULT_FIRST_STORAGE_X_M +
-        columnIndex * DEFAULT_STORAGE_CELL_PITCH_X_M +
-        Math.floor(columnIndex / DEFAULT_STORAGE_COLUMNS_PER_BAY) * DEFAULT_STORAGE_BAY_GAP_X_M,
+      profile.firstStorageXM +
+        columnIndex * profile.storageCellPitchXM +
+        Math.floor(columnIndex / profile.storageColumnsPerBay) * profile.storageBayGapXM,
       3
     )
   );
 }
 
-function defaultLiftPortalXs(columnXs: number[], rightSpineX: number): number[] {
+function defaultLiftPortalXs(columnXs: number[], rightSpineX: number, profile: ShuttleLayoutGeometryProfile): number[] {
   const portalXs: number[] = [];
-  for (let bayIndex = 0; bayIndex < DEFAULT_STORAGE_COLUMN_BAYS - 1; bayIndex += 1) {
-    const leftColumnIndex = (bayIndex + 1) * DEFAULT_STORAGE_COLUMNS_PER_BAY - 1;
+  for (let bayIndex = 0; bayIndex < profile.storageColumnBays - 1; bayIndex += 1) {
+    const leftColumnIndex = (bayIndex + 1) * profile.storageColumnsPerBay - 1;
     const rightColumnIndex = leftColumnIndex + 1;
     portalXs.push(round((columnXs[leftColumnIndex]! + columnXs[rightColumnIndex]!) / 2, 3));
   }
@@ -319,16 +314,17 @@ function mainLaneNodeId(lane: 'north' | 'south', index: number): string {
   return `main-${lane}-${String(index).padStart(2, '0')}`;
 }
 
-function createDefaultLayout(): ShuttleScenario['layout'] {
-  const leftSpineX = DEFAULT_LEFT_SPINE_X_M;
-  const rowZs = defaultStorageRowZs();
-  const columnXs = defaultStorageColumnXs();
-  const rightSpineX = round(columnXs[columnXs.length - 1]! + DEFAULT_SIDE_CLEARANCE_X_M, 3);
-  const topZ = round(rowZs[0]! - DEFAULT_STORAGE_CELL_PITCH_Z_M * 1.5, 3);
-  const bottomZ = round(rowZs[rowZs.length - 1]! + DEFAULT_STORAGE_CELL_PITCH_Z_M * 1.5, 3);
-  const topLiftZ = round(topZ - DEFAULT_LIFT_STANDOFF_Z_M, 3);
-  const bottomLiftZ = round(bottomZ + DEFAULT_LIFT_STANDOFF_Z_M, 3);
-  const liftPortalXs = defaultLiftPortalXs(columnXs, rightSpineX);
+function createDefaultLayout(profile: ShuttleLayoutGeometryProfile = DEFAULT_SHUTTLE_LAYOUT_PROFILE): ShuttleScenario['layout'] {
+  const leftSpineX = profile.leftSpineXM;
+  const rowZs = defaultStorageRowZs(profile);
+  const columnXs = defaultStorageColumnXs(profile);
+  const storageColumns = columnXs.length;
+  const rightSpineX = round(columnXs[columnXs.length - 1]! + profile.sideClearanceXM, 3);
+  const topZ = round(rowZs[0]! - profile.storageCellPitchZM * 1.5, 3);
+  const bottomZ = round(rowZs[rowZs.length - 1]! + profile.storageCellPitchZM * 1.5, 3);
+  const topLiftZ = round(topZ - profile.liftStandoffZM, 3);
+  const bottomLiftZ = round(bottomZ + profile.liftStandoffZM, 3);
+  const liftPortalXs = defaultLiftPortalXs(columnXs, rightSpineX, profile);
   const mainXs = [leftSpineX, ...liftPortalXs, rightSpineX];
 
   const nodes: LayoutNode[] = [
@@ -336,16 +332,16 @@ function createDefaultLayout(): ShuttleScenario['layout'] {
     { id: 'left-bottom', type: 'aisle', x: leftSpineX, y: 0, z: bottomZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'right-top', type: 'aisle', x: rightSpineX, y: 0, z: topZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'right-bottom', type: 'aisle', x: rightSpineX, y: 0, z: bottomZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-    { id: 'parking-a', type: 'parking', x: round(rightSpineX + DEFAULT_PARKING_STANDOFF_X_M, 3), y: 0, z: DEFAULT_MAIN_LANE_NORTH_Z_M, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
-    { id: 'parking-b', type: 'parking', x: round(rightSpineX + DEFAULT_PARKING_STANDOFF_X_M, 3), y: 0, z: DEFAULT_MAIN_LANE_SOUTH_Z_M, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
-    { id: 'parking-c', type: 'parking', x: round(leftSpineX - DEFAULT_PARKING_STANDOFF_X_M, 3), y: 0, z: DEFAULT_MAIN_LANE_NORTH_Z_M, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
-    { id: 'parking-d', type: 'parking', x: round(leftSpineX - DEFAULT_PARKING_STANDOFF_X_M, 3), y: 0, z: DEFAULT_MAIN_LANE_SOUTH_Z_M, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
+    { id: 'parking-a', type: 'parking', x: round(rightSpineX + profile.parkingStandoffXM, 3), y: 0, z: profile.mainLaneNorthZM, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+    { id: 'parking-b', type: 'parking', x: round(rightSpineX + profile.parkingStandoffXM, 3), y: 0, z: profile.mainLaneSouthZM, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+    { id: 'parking-c', type: 'parking', x: round(leftSpineX - profile.parkingStandoffXM, 3), y: 0, z: profile.mainLaneNorthZM, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+    { id: 'parking-d', type: 'parking', x: round(leftSpineX - profile.parkingStandoffXM, 3), y: 0, z: profile.mainLaneSouthZM, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
   ];
 
   mainXs.forEach((x, index) => {
     nodes.push(
-      { id: mainLaneNodeId('north', index), type: 'intersection', x, y: 0, z: DEFAULT_MAIN_LANE_NORTH_Z_M, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-      { id: mainLaneNodeId('south', index), type: 'intersection', x, y: 0, z: DEFAULT_MAIN_LANE_SOUTH_Z_M, noStop: true, noParking: true, capacity: 1, allowedDirections: [] }
+      { id: mainLaneNodeId('north', index), type: 'intersection', x, y: 0, z: profile.mainLaneNorthZM, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+      { id: mainLaneNodeId('south', index), type: 'intersection', x, y: 0, z: profile.mainLaneSouthZM, noStop: true, noParking: true, capacity: 1, allowedDirections: [] }
     );
   });
 
@@ -454,9 +450,9 @@ function createDefaultLayout(): ShuttleScenario['layout'] {
   });
 
   const topRowNodeIds = rowZs.map((z, rowIndex) => ({ z, left: `left-row-${String(rowIndex + 1).padStart(2, '0')}`, right: `right-row-${String(rowIndex + 1).padStart(2, '0')}` }))
-    .filter((row) => row.z < DEFAULT_MAIN_LANE_NORTH_Z_M);
+    .filter((row) => row.z < profile.mainLaneNorthZM);
   const bottomRowNodeIds = rowZs.map((z, rowIndex) => ({ z, left: `left-row-${String(rowIndex + 1).padStart(2, '0')}`, right: `right-row-${String(rowIndex + 1).padStart(2, '0')}` }))
-    .filter((row) => row.z > DEFAULT_MAIN_LANE_SOUTH_Z_M);
+    .filter((row) => row.z > profile.mainLaneSouthZM);
   const leftSpineNodeIds = [
     'left-top',
     ...topRowNodeIds.map((row) => row.left),
@@ -488,18 +484,18 @@ function createDefaultLayout(): ShuttleScenario['layout'] {
     const rowLabel = String(rowIndex + 1).padStart(2, '0');
     const rightRowId = `right-row-${rowLabel}`;
     const leftRowId = `left-row-${rowLabel}`;
-    const rightmostStorageId = storageNodeId(rowIndex, DEFAULT_STORAGE_COLUMNS - 1);
+    const rightmostStorageId = storageNodeId(rowIndex, storageColumns - 1);
     edges.push({
       id: `${rightRowId}-${rightmostStorageId}`,
       from: rightRowId,
       to: rightmostStorageId,
-      lengthM: round(rightSpineX - columnXs[DEFAULT_STORAGE_COLUMNS - 1]!, 3),
+      lengthM: round(rightSpineX - columnXs[storageColumns - 1]!, 3),
       directionMode: 'twoWay',
       reservationType: 'edge',
       conflictGroup: `fifo-lane-${rowLabel}`,
       noParking: true
     });
-    for (let columnIndex = DEFAULT_STORAGE_COLUMNS - 1; columnIndex > 0; columnIndex -= 1) {
+    for (let columnIndex = storageColumns - 1; columnIndex > 0; columnIndex -= 1) {
       const from = storageNodeId(rowIndex, columnIndex);
       const to = storageNodeId(rowIndex, columnIndex - 1);
       edges.push({
@@ -539,10 +535,11 @@ function createDefaultLayout(): ShuttleScenario['layout'] {
     }))
   ];
 
-  return { units: 'meter', nodes, edges, zones };
+  return { units: 'meter', calibrationProfile: profile.calibrationProfile, nodes, edges, zones };
 }
 
 export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides = {}): ShuttleScenario {
+  const layoutProfile = createShuttleLayoutProfile(overrides.layoutProfile);
   const base: ShuttleScenario = {
     schemaVersion: 'shuttle.phase0.v0',
     id: 'shuttle-phase0-balanced',
@@ -566,7 +563,7 @@ export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides
       batteryEnabled: false,
       initialSoc: 1
     },
-    layout: createDefaultLayout(),
+    layout: createDefaultLayout(layoutProfile),
     taskGeneration: {
       inboundRatePerHour: 18,
       outboundRatePerHour: 18,

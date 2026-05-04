@@ -162,12 +162,16 @@ The latest ChatGPT Pro review of current public `main` returned: `Merge now`.
 
 No must-fix findings were reported. Non-blocking recommendations were captured as Phase 1 work: targeted pressure tests should eventually aggregate per-tick physical/reservation inspection, throughput should remain labeled as regression-smoke throughput until CAD/vendor calibration exists, validation violation counts are sampled observations rather than unique incident counts, and Pixel Streaming readiness wording should distinguish prerequisites from a 30-minute release soak. The dashboard/API/docs now use explicit prerequisite wording for that last point.
 
+A narrow follow-up review against `e828741f7ada139a327a5c253fbc619faee60809` confirmed that the Pixel Streaming prerequisite wording did not introduce a blocker, closed the readiness ambiguity, and left the verdict at `Merge now`.
+
 ## Phase 1 Demo Alignment Since Hardening
 
 The browser demo has been adjusted toward the user's four-way shuttle reference:
 
 - Default layout is a single-level orthogonal aisle grid: no diagonal vehicle movement.
 - The storage area is now a 16x24 multi-bank field of adjacent drivable pallet cells, split into upper/lower banks and four column islands.
+- The placeholder physical dimensions are exposed as the assumption-grade `phase0-cad-assumption-v1` layout calibration profile in `scenario.layout.calibrationProfile` and the shared static-scene contract.
+- Static storage-cell footprints now match the calibrated storage pitch inside each island, so cells render as a contiguous grid instead of sparse individual boxes.
 - FIFO storage behavior is modeled at row level as task policy, not one-way rail physics: lane edges are bidirectional for the four-way shuttle, inbound places from the right-side infeed direction into the deepest reachable empty cell, and outbound drains from the left-side outfeed direction.
 - The simulator does not perform hidden row compaction. Stored pallet `nodeId` changes only through explicit vehicle/lift transfer in this branch; push-lane mechanics are deferred until they can be represented with time, reservations, and events.
 - Stored pallet cells are blocked for route planning unless the occupied cell is the current task endpoint, so the model does not rely on free pass-through under stored pallets.

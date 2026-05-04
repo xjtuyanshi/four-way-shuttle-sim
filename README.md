@@ -33,6 +33,8 @@ Unreal Engine 5.7.4 and full Xcode are installed on the local Mac. Local macOS b
 
 Phase 0 storage policy is a conservative row-level contract, not a full industrial throughput proof: inbound placement fills one storage row contiguously from the outfeed side toward the infeed side before opening the next row, outbound drains without hidden compaction, and all reservation capacities remain fixed at `1`.
 
+The default physical layout is generated from the assumption-grade calibration profile `phase0-cad-assumption-v1`. That profile is exposed as `scenario.layout.calibrationProfile` and in the static-scene contract so CAD/vendor/site dimensions can replace the placeholder pitch, aisle, lift, and clearance values without moving authority out of SimCore.
+
 `pnpm shuttle:validate` runs the Phase 0 acceptance gate without rendering: same-seed event-log hash stability, a small seed sweep, a 600-second long-run sweep, prerequisite inspection, KPI summary, deadlock checks, reservation coverage checks, and physical safety checks for speed, acceleration, finite coordinates, and rectangular vehicle footprint clearance.
 
 Phase 0 enforces edge, node, and zone capacity as `1`, and requires at least one parking node per vehicle so reset can assign one authoritative current-node occupant per shuttle. Multi-capacity reservation accounting is reserved for Phase 1.

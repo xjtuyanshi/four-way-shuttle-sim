@@ -110,6 +110,29 @@ export const TrafficPolicySchema = z.object({
   deadlockBreakPolicy: z.enum(['lowest-priority-replan', 'oldest-waits-wins']).default('oldest-waits-wins')
 });
 
+export const LayoutCalibrationSourceSchema = z.enum(['assumed', 'cad', 'vendor', 'site']);
+export const LayoutCalibrationStatusSchema = z.enum(['assumption', 'partial-cad', 'verified']);
+export const LayoutCalibrationConfidenceSchema = z.enum(['low', 'medium', 'high']);
+
+export const LayoutCalibrationDimensionSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  valueM: z.number().nonnegative(),
+  source: LayoutCalibrationSourceSchema,
+  confidence: LayoutCalibrationConfidenceSchema,
+  note: z.string().optional()
+});
+
+export const LayoutCalibrationProfileSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  status: LayoutCalibrationStatusSchema,
+  units: z.literal('meter').default('meter'),
+  sourceDescription: z.string(),
+  dimensions: z.array(LayoutCalibrationDimensionSchema).default([]),
+  notes: z.array(z.string()).default([])
+});
+
 export const ShuttleScenarioSchema = z.object({
   schemaVersion: z.literal('shuttle.phase0.v0'),
   id: z.string(),
@@ -120,6 +143,7 @@ export const ShuttleScenarioSchema = z.object({
   vehicles: VehicleConfigSchema,
   layout: z.object({
     units: z.literal('meter').default('meter'),
+    calibrationProfile: LayoutCalibrationProfileSchema.nullable().default(null),
     nodes: z.array(ShuttleNodeSchema).min(2),
     edges: z.array(ShuttleEdgeSchema).min(1),
     zones: z.array(ShuttleZoneSchema).default([])
@@ -429,6 +453,7 @@ export const ShuttleStreamMessageSchema = z.discriminatedUnion('type', [
 ]);
 
 export type Coordinate3 = z.infer<typeof Coordinate3Schema>;
+export type LayoutCalibrationProfile = z.infer<typeof LayoutCalibrationProfileSchema>;
 export type ShuttleScenario = z.infer<typeof ShuttleScenarioSchema>;
 export type VehicleState = z.infer<typeof VehicleStateSchema>;
 export type TaskStateRecord = z.infer<typeof TaskStateRecordSchema>;
