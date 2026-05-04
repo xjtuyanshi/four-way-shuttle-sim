@@ -1,6 +1,6 @@
 # Phase 1 Plan
 
-Branch: `codex/phase1-validation-traffic-demo`
+Current baseline: public `main` after Phase 0 merge-hardening, real-layout calibration, staged Unreal runtime smoke, and targeted congestion regression coverage.
 
 ## Goal
 
@@ -8,11 +8,11 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 
 ## Current Priorities
 
-1. Add positive-control validation fixtures for every reservation and physical violation code.
-2. Align the default demo environment with the four-way shuttle reference: orthogonal aisle grid only, storage cells in the middle, right-side infeed, left-side outfeed, and FIFO lane direction.
-3. Add more traffic pressure scenarios that expose queues, waits, and deadlock/livelock candidates.
-4. Improve the demo's user-facing diagnostics so waiting, blocking, and movement are legible without reading logs.
-5. Keep Unreal and Pixel Streaming validation gated by installed UE/Xcode tools and by whether a real UE scene exists.
+1. Keep SimCore as the WCS-lite source of truth and keep Unreal/dashboard as visual subscribers.
+2. Calibrate the default layout from CAD/vendor dimensions before treating throughput as an industrial claim.
+3. Expand traffic pressure coverage around lift queues, portal zones, near-full storage, empty outbound, and repeated same-row retrieval.
+4. Improve diagnostics so engineering, mechanical, and IE review can identify whether bottlenecks come from lifts, portals, side aisles, or dense storage lanes.
+5. Keep Unreal and Pixel Streaming validation gated by installed UE/Xcode tools and by whether the visual scene is calibrated enough to review.
 
 ## Completed In This Branch
 
@@ -51,9 +51,15 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 - Fixed route planning so future queued inbound slots reserve logical destinations without becoming physical obstacles before work is assigned.
 - Validated and clamped playback speed input, including `SHUTTLE_SPEED`.
 - Built the first Unreal visual twin scene foundation in `AShuttleVisualTwinRuntimeActor`: one single-level 16x24 multi-bank storage field with per-cell four-way rail detail, rack posts, roller-transfer lift pads, dedicated inbound/outbound black-box lift housings, load placeholders from streamed SimCore load snapshots, and smoke-contract counts for those visual details.
+- Exposed the row-contiguous lane-fill storage policy in the shared static-scene contract with `storagePolicy: "rowContiguousLaneFill"`, `inboundStorageFlow: "rightToLeft"`, and `outboundStorageFlow: "leftPick"` so SimCore, dashboard, Unreal smoke, and review notes use the same wording.
+- Added targeted congestion regression coverage for a near-full storage grid, four-vehicle mixed lift/FIFO pressure, inbound-only pressure, and outbound-only pressure. These tests assert positive throughput where applicable plus no deadlocks, livelocks, or physical safety failures.
+- Verified the local Unreal path through setup, source bridge smoke, live bridge smoke, staged Mac runtime generation, and browser Pixel Streaming smoke evidence. This proves the local runtime scaffold, not a final signed/notarized production package.
 
 ## Next TODO
 
-- Add true multi-axis storage-grid routing or push-lane mechanics only after the FIFO lane policy is explicitly modeled against the target physical layout.
-- Replace the Unreal placeholder cube geometry with calibrated meshes/materials once CAD or vendor dimensions are available; keep SimCore authoritative.
-- Run the packaged or Standalone Pixel Streaming soak only after the Unreal scene foundation is visually reviewed and the browser/API validation gate is green.
+- Send the current public `main` to ChatGPT Pro for another review after action-time confirmation, explicitly asking it to review engineering, mechanical-manufacturing, and IE realism in addition to software correctness.
+- Extract calibrated dimensions from the real layout reference before making stronger throughput claims: storage pitch, aisle widths, shuttle footprint, pallet/load envelope, lift pad envelope, roller-transfer envelope, and blocked/structural cells.
+- Add a configurable layout profile for those calibrated dimensions while keeping the current deterministic default as a regression fixture.
+- Add true push-lane or multi-axis storage-grid mechanics only after the FIFO lane policy is explicitly modeled against the target physical layout.
+- Replace remaining Unreal placeholder geometry with calibrated meshes/materials once CAD or vendor dimensions are available; keep SimCore authoritative.
+- Run a 30-minute 1080p single-user Pixel Streaming soak only after the calibrated Unreal scene foundation is visually reviewed and the browser/API validation gate is green.
