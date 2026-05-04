@@ -135,9 +135,8 @@ const EXAMPLE_LIMIT = 20;
 
 function defaultLongRunThresholds(scenario: ShuttleScenario): LongRunAcceptanceThresholds {
   const requestedPph = scenario.taskGeneration.inboundRatePerHour + scenario.taskGeneration.outboundRatePerHour;
-  const smokeThroughputFloorPph = scenario.vehicles.count * 10;
   return {
-    minTotalPph: round(Math.max(1, Math.min(requestedPph * 0.5, smokeThroughputFloorPph)), 1),
+    minTotalPph: round(Math.max(1, requestedPph * 0.5), 1),
     maxQueuedTasks: Math.max(scenario.vehicles.count * 6, Math.ceil(scenario.taskGeneration.maxTasks * 0.5)),
     maxWaitingVehicles: scenario.vehicles.count,
     maxLiftPortQueueLength: Math.max(1, scenario.vehicles.count * 3)

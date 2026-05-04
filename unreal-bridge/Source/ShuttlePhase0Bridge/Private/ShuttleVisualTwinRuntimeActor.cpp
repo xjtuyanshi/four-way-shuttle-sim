@@ -133,14 +133,14 @@ AShuttleVisualTwinRuntimeActor::AShuttleVisualTwinRuntimeActor()
     LoadPallets = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("LoadPallets"));
     LoadPallets->SetupAttachment(Root);
 
-    SetInstancedMesh(StorageCells, FLinearColor(0.18f, 0.22f, 0.25f, 1.0f));
-    SetInstancedMesh(TrackBeds, FLinearColor(0.28f, 0.34f, 0.38f, 1.0f));
-    SetInstancedMesh(InboundLiftPads, FLinearColor(0.18f, 0.35f, 0.50f, 1.0f));
-    SetInstancedMesh(OutboundLiftPads, FLinearColor(0.25f, 0.42f, 0.58f, 1.0f));
+    SetInstancedMesh(StorageCells, FLinearColor(0.22f, 0.15f, 0.38f, 1.0f));
+    SetInstancedMesh(TrackBeds, FLinearColor(0.86f, 0.68f, 0.12f, 1.0f));
+    SetInstancedMesh(InboundLiftPads, FLinearColor(0.62f, 0.82f, 0.96f, 1.0f));
+    SetInstancedMesh(OutboundLiftPads, FLinearColor(0.90f, 0.68f, 0.16f, 1.0f));
     SetInstancedMesh(ParkingPads, FLinearColor(0.32f, 0.36f, 0.40f, 1.0f));
     SetInstancedMesh(FloorPlates, FLinearColor(0.05f, 0.07f, 0.09f, 1.0f));
-    SetInstancedMesh(StorageRails, FLinearColor(0.58f, 0.63f, 0.66f, 1.0f));
-    SetInstancedMesh(RackPosts, FLinearColor(0.25f, 0.30f, 0.32f, 1.0f));
+    SetInstancedMesh(StorageRails, FLinearColor(0.50f, 0.36f, 1.0f, 1.0f));
+    SetInstancedMesh(RackPosts, FLinearColor(0.70f, 0.44f, 1.0f, 1.0f));
     SetInstancedMesh(TransferRollers, FLinearColor(0.58f, 0.55f, 0.50f, 1.0f));
     SetInstancedMesh(LiftBlocks, FLinearColor(0.04f, 0.06f, 0.07f, 1.0f));
     SetInstancedMesh(LoadPallets, FLinearColor(0.68f, 0.50f, 0.25f, 1.0f));
@@ -212,6 +212,7 @@ void AShuttleVisualTwinRuntimeActor::RebuildStaticScene()
     StaticSceneContract.InboundLiftXM = (LiftPortalX(0) + LiftPortalX(1) + LiftPortalX(2) + LiftPortalX(3)) * 0.25f;
     StaticSceneContract.OutboundLiftXM = StaticSceneContract.InboundLiftXM;
     StaticSceneContract.bSingleLevel = true;
+    StaticSceneContract.StorageIslandCount = StorageColumnBays * StorageRowBanks;
 
     constexpr int32 MainNodeCount = StorageColumnBays + 2;
     const int32 LastMainIndex = MainNodeCount - 1;
@@ -1025,6 +1026,9 @@ void AShuttleVisualTwinRuntimeActor::RebuildLoadPalletInstances()
 void AShuttleVisualTwinRuntimeActor::FinalizeStaticSceneContract()
 {
     const int32 ExpectedStorageCells = StaticSceneContract.StorageRows * StaticSceneContract.StorageColumns;
+    StaticSceneContract.bDenseStorageIslands =
+        StaticSceneContract.StorageIslandCount == StorageColumnBays * StorageRowBanks &&
+        StaticSceneContract.StorageCellCount == ExpectedStorageCells;
     StaticSceneContract.bDenseStorageBlock = false;
 
     StaticSceneContract.bOrthogonalTrackOnly =

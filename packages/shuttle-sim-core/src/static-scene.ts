@@ -41,6 +41,8 @@ export type ShuttleStaticSceneContract = {
   inboundLiftXM: number;
   outboundLiftXM: number;
   singleLevel: boolean;
+  storageIslandCount: number;
+  denseStorageIslands: boolean;
   denseStorageBlock: boolean;
   orthogonalTrackOnly: boolean;
   dedicatedLiftPorts: boolean;
@@ -112,6 +114,17 @@ function hasUniformPitch(values: number[], pitch: number): boolean {
   }
   const sorted = sortedUniqueNumbers(values);
   return sorted.slice(1).every((value, index) => Math.abs(round(value - sorted[index]!, 6) - pitch) <= 1e-6);
+}
+
+function splitBandCount(values: number[], pitch: number): number {
+  const sorted = sortedUniqueNumbers(values);
+  if (sorted.length === 0) {
+    return 0;
+  }
+  const splitThreshold = Math.max(pitch * 1.5, 1e-6);
+  return sorted.slice(1).reduce((count, value, index) => (
+    value - sorted[index]! > splitThreshold ? count + 1 : count
+  ), 1);
 }
 
 function averageX(nodes: LayoutNode[]): number {
@@ -233,6 +246,11 @@ export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario):
   const storageZs = sortedUniqueNumbers(storageNodes.map((node) => node.z));
   const storageRows = storageRowsById.size;
   const storageColumns = storageColumnsById.size;
+  const storagePitchXM = minimumPositivePitch(storageNodes.map((node) => node.x));
+  const storagePitchZM = minimumPositivePitch(storageNodes.map((node) => node.z));
+  const storageColumnIslandCount = splitBandCount(storageXs, storagePitchXM);
+  const storageRowBankCount = splitBandCount(storageZs, storagePitchZM);
+  const storageIslandCount = storageColumnIslandCount * storageRowBankCount;
   const storageBlockMinXM = storageXs[0] ?? 0;
   const storageBlockMaxXM = storageXs[storageXs.length - 1] ?? 0;
   const storageBlockMinZM = storageZs[0] ?? 0;
@@ -352,8 +370,8 @@ export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario):
     inboundLiftPadCount: inboundLiftNodes.length,
     outboundLiftPadCount: outboundLiftNodes.length,
     parkingPadCount: parkingNodes.length,
-    storagePitchXM: minimumPositivePitch(storageNodes.map((node) => node.x)),
-    storagePitchZM: minimumPositivePitch(storageNodes.map((node) => node.z)),
+    storagePitchXM,
+    storagePitchZM,
     storageBlockMinXM,
     storageBlockMaxXM,
     storageBlockMinZM,
@@ -361,14 +379,21 @@ export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario):
     inboundLiftXM: averageX(inboundLiftNodes),
     outboundLiftXM: averageX(outboundLiftNodes),
     singleLevel: sortedUniqueNumbers(scenario.layout.nodes.map((node) => node.y)).length === 1,
+    storageIslandCount,
+    denseStorageIslands:
+      storageIslandCount > 0 &&
+      storageNodes.length === expectedCellCount &&
+      storageXs.length === storageColumns &&
+      storageZs.length === storageRows &&
+      completeIdGrid,
     denseStorageBlock:
       expectedCellCount > 0 &&
       storageNodes.length === expectedCellCount &&
       storageXs.length === storageColumns &&
       storageZs.length === storageRows &&
       completeIdGrid &&
-      hasUniformPitch(storageNodes.map((node) => node.x), minimumPositivePitch(storageNodes.map((node) => node.x))) &&
-      hasUniformPitch(storageNodes.map((node) => node.z), minimumPositivePitch(storageNodes.map((node) => node.z))),
+      hasUniformPitch(storageNodes.map((node) => node.x), storagePitchXM) &&
+      hasUniformPitch(storageNodes.map((node) => node.z), storagePitchZM),
     orthogonalTrackOnly: diagonalTrackCount === 0,
     dedicatedLiftPorts:
       inboundLiftNodes.length > 0 &&

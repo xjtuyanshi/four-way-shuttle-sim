@@ -2,9 +2,7 @@
 
 This is the working visual reference for the Phase 0 dashboard scene. The goal is not to create a decorative warehouse background; the scene should read like a CAD-derived, meter-based shuttle rack layout.
 
-## References Reviewed
-
-- A private customer-layout screenshot was reviewed locally on May 3, 2026. The raw image is intentionally not committed. The visible structure is a single-level shuttle floor with a long yellow main aisle, dense purple storage-cell regions above and below that aisle, multiple vertical lift/transfer corridors, and several aisle sections wide enough to represent two adjacent shuttle lanes.
+## Public References Reviewed
 
 - [Swisslog AgileStore](https://www.swisslog.com/en-us/products-systems-solutions/asrs-automated-storage-retrieval-systems/automated-pallet-warehouse/agilestore-4-way-pallet-shuttle-asrs) describes a roaming pallet shuttle ASRS with high-density pallet storage, deep lanes, dynamic routing, and integrated lifts.
 - [Swisslog's AgileStore launch note](https://www.swisslog.com/en-us/about-swisslog/newsroom/news-press-releases-blog-posts/2026/03/swisslog-agilestore-4-way-roaming-shuttle) emphasizes pallet handling, traffic management, lift integration, and rack-based high-density storage rather than AMR-style open-floor travel.
@@ -18,7 +16,7 @@ This is the working visual reference for the Phase 0 dashboard scene. The goal i
 - The dashboard background is generated from `scenario.layout.nodes` and `scenario.layout.edges`; it is not a freehand image.
 - Storage locations are drawn as drivable track cells, not shelving boxes or AMR pickup stands.
 - Phase 0 now uses a multi-bank storage field: 16 rows x 24 columns = 384 logical storage cells.
-- Storage rows are split into upper and lower banks around the main aisle. Storage columns are split into four 6-column islands with vertical corridor gaps, matching the visual language of the customer reference instead of a single toy-like rectangle.
+- Storage rows are split into upper and lower banks around the main aisle. Storage columns are split into four 6-column islands with vertical corridor gaps, so the scene reads as multiple dense storage islands instead of a single toy-like rectangle.
 - The current visual cell footprint is 1.25 m x 1.20 m so cells touch within each storage island instead of appearing as sparse isolated bays.
 - The current shuttle safety check uses the configured 1.09 m x 1.03 m vehicle footprint plus 0.10 m clearance as a software validation envelope. This is a placeholder until real shuttle/pallet envelope and track-gauge clearance data are available.
 - Inbound and outbound are dedicated lift-port roles, not just left/right sides. The default scene has four inbound lift black boxes and four outbound lift black boxes distributed along upper and lower transfer corridors.
@@ -35,5 +33,5 @@ This is the working visual reference for the Phase 0 dashboard scene. The goal i
 
 - Real pallet orientation and clearance allowance.
 - Real row pitch and track gauge.
-- Exact number of rows, number of pallet positions per row, lift/conveyor locations, and aisle widths from CAD rather than from the photographed screenshot.
+- Exact number of rows, number of pallet positions per row, lift/conveyor locations, and aisle widths from CAD.
 - Real push-lane mechanics and shuttle envelope clearances for later phases.

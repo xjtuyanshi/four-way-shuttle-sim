@@ -6,7 +6,7 @@ Use this packet to review the current branch:
 - Base branch: `main`
 - Base commit: `af1347b Merge pull request #14 from xjtuyanshi/codex/pixel-streaming-readiness`
 - Review branch: `codex/real-layout-multibank-scene`
-- Review branch head: `cf73bd8 Align phase0 shuttle layout with real multi-bank scene`
+- Review branch head: latest pushed tip of `codex/real-layout-multibank-scene`
 
 If GitHub clone or browsing fails, use `docs/chatgpt-pro-stable-review.md` instead. It contains direct raw/patch URLs and a no-network fallback prompt.
 
@@ -170,15 +170,31 @@ Current branch files that matter for this alignment:
 - `docs/layout-reference.md`
 - `docs/phase1-plan.md`
 
+## Latest Pro Merge Blockers Closed
+
+This pass closes the latest Pro "merge after fixes" blockers:
+
+- Default Phase 0 demand is aligned with the validation acceptance floor: 18 inbound PPH + 18 outbound PPH, with long-run acceptance requiring 50% of requested throughput and no vehicle-count cap.
+- The UI sliders now represent 18 PPH exactly instead of snapping the browser control to a 10-PPH step.
+- The 600-second validation gate still passes at `longRun.totalPphMean=18`, `longRunThroughputFloorMet=true`, and bounded queues.
+- Public docs no longer depend on or mention the private customer screenshot. The DNG/PNG reference stayed local and is not committed.
+- The static-scene contract now exposes `storageIslandCount` and `denseStorageIslands` so Unreal/dashboard consumers can distinguish a multi-bank dense layout from a single solid storage block.
+- Added default-layout contention coverage for portal/lift/main-lane behavior so the dedicated lift approach does not create artificial deadlocks.
+- FIFO assignment now opens one row contiguously from outfeed toward infeed, blocks conflicting row/network assignments, and prevents unrelated storage rows from becoming AMR-like transit shortcuts.
+- Browser/Unreal visuals use purple dense pallet-cell islands and yellow aisle tracks, matching the single-level four-way shuttle layout direction.
+
 ## Verification Already Run
 
-All passed locally after the hardening pass:
+All passed locally after the latest merge-blocker fixes:
 
 ```bash
 pnpm typecheck
 pnpm test
 pnpm build
 pnpm shuttle:validate
+pnpm shuttle:ws-smoke
+pnpm unreal:setup
+pnpm unreal:smoke
 ```
 
 Key validation output:
@@ -192,18 +208,19 @@ noPhysicalSafetyViolations=true
 noReservationCoverageViolations=true
 longRunEventLogsPresent=true
 longRunThroughputPositive=true
+longRunThroughputFloorMet=true
 longRunQueuesBounded=true
 noLongRunDeadlocks=true
 noLongRunPhysicalSafetyViolations=true
 noLongRunReservationCoverageViolations=true
-totalPphMean=30
-longRun.totalPphMean=24
-longRun.maxQueuedTasks=13
-longRun.maxWaitingVehicles=1
-longRun.maxLiftPortQueueLength=3
+totalPphMean=15
+longRun.totalPphMean=18
+longRun.maxQueuedTasks=2
+longRun.maxWaitingVehicles=0
+longRun.maxLiftPortQueueLength=1
 maxObservedSpeedMps=2
 maxObservedAccelerationMps2=1
-minVehicleSeparationM=1.203
+minVehicleSeparationM=1.6001
 physicalViolationCount=0
 physicalViolationsByCode all zero
 deadlockCount=0
@@ -213,11 +230,11 @@ Browser smoke also passed:
 
 ```text
 Dashboard loaded at http://localhost:5179
-3D canvas count: 1
-Screenshot captured at output/playwright/shuttle-dashboard-smoke.png
-Runtime advanced from 10.0s to 27.5s after UI reset/resume at 10x; later API check reached 100.0s running
-Vehicle table showed active returning/moving-to-pickup states
-Console errors: none observed
+Dense 384-cell layout appears with purple pallet-cell islands and yellow aisle tracks
+Screenshot captured at output/browser-smoke/real-layout-dashboard.png
+Runtime advanced to 45.0s after UI reset/resume at 10x
+Vehicle table/state stream showed active loaded-moving state
+Console errors for localhost app: none observed
 ```
 
 Environment gate output:
@@ -228,7 +245,7 @@ Unreal 5.7.4: ready, UnrealEditor executable found under /Users/Shared/Epic Game
 Xcode: ready, full Xcode 26.4.1 toolchain available
 Pixel Streaming: ready
 Unreal bridge compile smoke: passed
-Unreal static commandlet smoke: passed with 384 storage cells, 474 track beds, 8 lift pads, and denseStorageBlock=false
+Unreal static commandlet smoke: passed with 384 storage cells, 474 track beds, 8 lift pads, storageIslandCount=8, denseStorageIslands=true, and denseStorageBlock=false
 Unreal live bridge smoke: passed with vehicleState/kpiUpdate parsing, 2 vehicle actors, no duplicate actors, and max target pose error 0cm
 CompileAllBlueprints reported 0 blueprint errors / 0 blueprint warnings
 ```

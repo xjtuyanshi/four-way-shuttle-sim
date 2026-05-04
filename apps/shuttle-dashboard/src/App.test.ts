@@ -120,6 +120,8 @@ describe('dashboard static scene contract', () => {
     expect(contract).toEqual(summarizeScenarioStaticSceneContract(createDefaultShuttleScenario()));
     expect(contract.schemaVersion).toBe('shuttle.simCoreStaticSceneContract.v1');
     expect(contract.singleLevel).toBe(true);
+    expect(contract.storageIslandCount).toBe(8);
+    expect(contract.denseStorageIslands).toBe(true);
     expect(contract.denseStorageBlock).toBe(false);
     expect(contract.orthogonalTrackOnly).toBe(true);
     expect(contract.dedicatedLiftPorts).toBe(true);

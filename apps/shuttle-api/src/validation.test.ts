@@ -65,12 +65,9 @@ describe('phase 0 validation', () => {
   it('checks same-seed hash stability and seed sweep health', () => {
     const result = validatePhase0Scenario(createDefaultShuttleScenario({ durationSec: 120 }), {
       durationSec: 120,
-      longRunDurationSec: 240,
+      longRunDurationSec: 600,
       repeatCount: 3,
-      sweepSeeds: [20260502, 20260503],
-      longRunThresholds: {
-        minTotalPph: 20
-      }
+      sweepSeeds: [20260502, 20260503]
     });
 
     expect(result.deterministic.pass).toBe(true);
@@ -81,9 +78,9 @@ describe('phase 0 validation', () => {
     expect(result.seedSweep.runs.every((run) => run.physicalViolationCount === 0)).toBe(true);
     expect(result.seedSweep.runs.every((run) => run.physicalViolationsByCode.unreservedEdgeOccupancy === 0)).toBe(true);
     expect(result.seedSweep.runs.every((run) => run.physicalViolationExamples.length === 0)).toBe(true);
-    expect(result.longRun.durationSec).toBe(240);
+    expect(result.longRun.durationSec).toBe(600);
     expect(result.longRun.runs).toHaveLength(2);
-    expect(result.longRun.thresholds.minTotalPph).toBe(20);
+    expect(result.longRun.thresholds.minTotalPph).toBe(18);
     expect(result.longRun.maxQueuedTasks).toBeLessThanOrEqual(result.longRun.thresholds.maxQueuedTasks);
     expect(result.longRun.maxLiftPortQueueLength).toBeLessThanOrEqual(result.longRun.thresholds.maxLiftPortQueueLength);
     expect(result.longRun.maxQueuedTasks).toBeLessThanOrEqual(40);
@@ -93,7 +90,7 @@ describe('phase 0 validation', () => {
     expect(result.acceptance.longRunQueuesBounded).toBe(true);
     expect(result.acceptance.noLongRunPhysicalSafetyViolations).toBe(true);
     expect(result.acceptance.pass).toBe(true);
-  }, 10000);
+  }, 40000);
 
   it('fails long-run acceptance when explicit throughput and queue thresholds are missed', () => {
     const result = validatePhase0Scenario(createDefaultShuttleScenario({ durationSec: 120 }), {

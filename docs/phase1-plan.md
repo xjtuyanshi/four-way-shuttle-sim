@@ -27,7 +27,7 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
   - `accelerationLimit`
   - `minSeparation`
   - `invalidCoordinate`
-- Replaced the default demo layout with an orthogonal four-way shuttle grid inspired by the reference video and customer layout screenshot: no diagonal edges, upper/lower storage banks, four column islands, a two-lane main aisle, distributed dedicated lift ports, and FIFO storage/retrieval policy on storage-lane rails.
+- Replaced the default demo layout with an orthogonal four-way shuttle grid based on public four-way pallet-shuttle references and CAD-style assumptions: no diagonal edges, upper/lower storage banks, four column islands, a two-lane main aisle, distributed dedicated lift ports, and FIFO storage/retrieval policy on storage-lane rails.
 - Added a regression test that fails if the default demo reintroduces diagonal edges, sparse storage cells, generic I/O nodes, or non-bidirectional four-way storage-lane rails.
 - Added authoritative FIFO pallet occupancy in SimCore:
   - outbound tasks are deferred with `storage-empty` instead of creating phantom pallets;

@@ -193,6 +193,8 @@ describe('shuttle phase 0 SimCore', () => {
       outboundLiftPadCount: 4,
       parkingPadCount: 4,
       singleLevel: true,
+      storageIslandCount: 8,
+      denseStorageIslands: true,
       denseStorageBlock: false,
       orthogonalTrackOnly: true,
       dedicatedLiftPorts: true,
@@ -208,6 +210,9 @@ describe('shuttle phase 0 SimCore', () => {
     expect(contract.inboundLiftXM).toBeCloseTo(25, 6);
     expect(contract.outboundLiftXM).toBeCloseTo(25, 6);
     expect(contract.storageCells).toHaveLength(384);
+    expect(contract.storageIslandCount).toBe(8);
+    expect(contract.denseStorageIslands).toBe(true);
+    expect(contract.denseStorageBlock).toBe(false);
     expect(contract.storageCells[0]).toMatchObject({
       id: 'storage-r01-c01',
       row: 1,
@@ -390,6 +395,42 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.traffic.liftPorts.some((port) => port.kind === 'inbound' && port.utilization > 0)).toBe(true);
   });
 
+  it('lets opposite one-way main lanes pass without portal-zone deadlock in the default layout', () => {
+    const scenario = createDefaultShuttleScenario({
+      durationSec: 30,
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2
+      },
+      physicsParams: {
+        emptySpeedMps: 4,
+        loadedSpeedMps: 3,
+        accelerationMps2: 4,
+        switchDirectionSec: 0,
+        liftTimeSec: 0.1,
+        lowerTimeSec: 0.1,
+        loadedClearanceM: 0.2,
+        reservationClearanceSec: 0.05
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['main-north-03', 'main-north-02', 'main-north-01']);
+    sim.setVehicleRouteForTest('SH-02', ['main-south-02', 'main-south-03', 'main-south-04']);
+
+    for (let index = 0; index < 80; index += 1) {
+      sim.step(0.2);
+    }
+
+    const state = sim.getState();
+    expect(state.kpis.deadlockCount).toBe(0);
+    expect(state.vehicles.every((vehicle) => vehicle.waitReason !== 'zone-reserved')).toBe(true);
+    expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-01')?.currentNodeId).toBe('main-north-01');
+    expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-02')?.currentNodeId).toBe('main-south-04');
+  });
+
   it('defers outbound work instead of creating phantom pallets when FIFO storage is empty', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       durationSec: 10,
@@ -412,12 +453,12 @@ describe('shuttle phase 0 SimCore', () => {
     expect(sim.getEventLog().some((entry) => entry.eventType === 'task-deferred' && entry.reason === 'storage-empty')).toBe(true);
   });
 
-  it('fills FIFO storage lanes using generated inbound pallet loads', () => {
+  it('reserves one FIFO storage lane contiguously from outfeed toward infeed before opening the next lane', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
-      durationSec: 260,
+      durationSec: 120,
       taskGeneration: {
         inboundRatePerHour: 720,
-        outboundRatePerHour: 720,
+        outboundRatePerHour: 0,
         inboundOutboundMix: 0.5,
         arrivalDistribution: 'deterministic',
         maxTasks: 8
@@ -435,29 +476,34 @@ describe('shuttle phase 0 SimCore', () => {
     }));
 
     sim.start();
-    for (let index = 0; index < 1000 && sim.getState().kpis.completedInbound < 2; index += 1) {
+    for (let index = 0; index < 300 && sim.getState().tasks.filter((task) => task.kind === 'inbound').length < 8; index += 1) {
       sim.step(0.2);
     }
     const state = sim.getState();
     const inboundTasks = state.tasks.filter((task) => task.kind === 'inbound');
     const storageOccupancy = sim.getDebugState().storageNodeOccupancy;
 
-    expect(state.kpis.completedInbound).toBeGreaterThanOrEqual(2);
-    expect(inboundTasks.slice(0, 2).map((task) => [task.dropoffNodeId, task.loadId])).toEqual([
+    expect(inboundTasks).toHaveLength(8);
+    expect(state.kpis.deadlockCount).toBe(0);
+    expect(inboundTasks.slice(0, 8).map((task) => [task.dropoffNodeId, task.loadId])).toEqual([
       ['storage-r01-c01', 'load-0001'],
-      ['storage-r02-c01', 'load-0002']
+      ['storage-r01-c02', 'load-0002'],
+      ['storage-r01-c03', 'load-0003'],
+      ['storage-r01-c04', 'load-0004'],
+      ['storage-r01-c05', 'load-0005'],
+      ['storage-r01-c06', 'load-0006'],
+      ['storage-r01-c07', 'load-0007'],
+      ['storage-r01-c08', 'load-0008']
     ]);
-    expect(state.loads.find((load) => load.id === 'load-0001')).toMatchObject({ state: 'stored', nodeId: 'storage-r01-c01' });
-    expect(state.loads.find((load) => load.id === 'load-0002')).toMatchObject({ state: 'stored', nodeId: 'storage-r02-c01' });
     expect(storageOccupancy).toEqual(expect.arrayContaining([
       { nodeId: 'storage-r01-c01', loadId: 'load-0001' },
-      { nodeId: 'storage-r02-c01', loadId: 'load-0002' },
-      { nodeId: 'storage-r03-c01', loadId: 'load-0003' },
-      { nodeId: 'storage-r04-c01', loadId: 'load-0004' },
-      { nodeId: 'storage-r05-c01', loadId: 'load-0005' },
-      { nodeId: 'storage-r06-c01', loadId: 'load-0006' },
-      { nodeId: 'storage-r07-c01', loadId: 'load-0007' },
-      { nodeId: 'storage-r08-c01', loadId: 'load-0008' }
+      { nodeId: 'storage-r01-c02', loadId: 'load-0002' },
+      { nodeId: 'storage-r01-c03', loadId: 'load-0003' },
+      { nodeId: 'storage-r01-c04', loadId: 'load-0004' },
+      { nodeId: 'storage-r01-c05', loadId: 'load-0005' },
+      { nodeId: 'storage-r01-c06', loadId: 'load-0006' },
+      { nodeId: 'storage-r01-c07', loadId: 'load-0007' },
+      { nodeId: 'storage-r01-c08', loadId: 'load-0008' }
     ]));
   });
 

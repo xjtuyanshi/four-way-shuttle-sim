@@ -161,7 +161,7 @@ const CONTROLLED_PARAMS = [
     path: '/taskGeneration/inboundRatePerHour',
     min: 0,
     max: 720,
-    step: 10,
+    step: 1,
     unit: 'PPH'
   },
   {
@@ -169,7 +169,7 @@ const CONTROLLED_PARAMS = [
     path: '/taskGeneration/outboundRatePerHour',
     min: 0,
     max: 720,
-    step: 10,
+    step: 1,
     unit: 'PPH'
   }
 ] as const;

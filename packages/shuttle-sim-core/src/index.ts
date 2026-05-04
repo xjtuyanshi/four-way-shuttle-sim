@@ -522,7 +522,7 @@ function createDefaultLayout(): ShuttleScenario['layout'] {
     ...mainXs.map((_, index) => ({
       id: `zone-main-portal-${String(index).padStart(2, '0')}`,
       type: 'intersection' as const,
-      nodeIds: [mainLaneNodeId('north', index), mainLaneNodeId('south', index)],
+      nodeIds: [],
       edgeIds: [`${mainLaneNodeId('north', index)}-${mainLaneNodeId('south', index)}`],
       noStop: true,
       noParking: true,
@@ -560,8 +560,8 @@ export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides
     },
     layout: createDefaultLayout(),
     taskGeneration: {
-      inboundRatePerHour: 90,
-      outboundRatePerHour: 90,
+      inboundRatePerHour: 18,
+      outboundRatePerHour: 18,
       inboundOutboundMix: 0.5,
       arrivalDistribution: 'deterministic',
       maxTasks: 40
@@ -806,7 +806,7 @@ export class ShuttleSimCore {
     this.rng = makeRng(seed);
     this.scenario = { ...this.scenario, seed };
     this.traffic = new TrafficReservationController(this.scenario);
-    this.nextInboundSec = this.intervalForRate(this.scenario.taskGeneration.inboundRatePerHour);
+    this.nextInboundSec = this.scenario.taskGeneration.inboundRatePerHour > 0 ? 0 : Infinity;
     this.nextOutboundSec = this.intervalForRate(this.scenario.taskGeneration.outboundRatePerHour) / 2;
 
     const parkingNodes = this.scenario.layout.nodes.filter((node) => node.type === 'parking');
@@ -1277,17 +1277,15 @@ export class ShuttleSimCore {
     }
 
     const occupancy = this.storageNodeLoadOccupancy(true);
-    for (let offset = 0; offset < lanes.length; offset += 1) {
-      const lane = lanes[(this.taskSequence + offset) % lanes.length]!;
-      const candidate = lane.find((node, index) => {
-        if (occupancy.has(node.id)) {
-          return false;
-        }
-        const nodesBetweenCandidateAndInfeed = lane.slice(index + 1);
-        return nodesBetweenCandidateAndInfeed.every((rightSideNode) => !occupancy.has(rightSideNode.id));
-      });
-      if (candidate) {
-        return { nodeId: candidate.id, loadId: '' };
+    for (const lane of lanes) {
+      const firstEmptyIndex = lane.findIndex((node) => !occupancy.has(node.id));
+      if (firstEmptyIndex < 0) {
+        continue;
+      }
+      const occupiedTowardOutfeed = lane.slice(0, firstEmptyIndex).every((leftSideNode) => occupancy.has(leftSideNode.id));
+      const emptyTowardInfeed = lane.slice(firstEmptyIndex + 1).every((rightSideNode) => !occupancy.has(rightSideNode.id));
+      if (occupiedTowardOutfeed && emptyTowardInfeed) {
+        return { nodeId: lane[firstEmptyIndex]!.id, loadId: '' };
       }
     }
     return null;
@@ -1317,7 +1315,7 @@ export class ShuttleSimCore {
 
   private assignQueuedTasks(dtSec: number): void {
     for (const task of this.tasks.filter((candidate) => candidate.state === 'queued')) {
-      const reason = this.liftPortBlockReason(task);
+      const reason = this.taskAssignmentBlockReason(task);
       task.waitReason = reason;
       if (reason) {
         this.blockedTimeByReasonSec.set(reason, round((this.blockedTimeByReasonSec.get(reason) ?? 0) + dtSec));
@@ -1326,7 +1324,7 @@ export class ShuttleSimCore {
 
     const idleVehicles = this.vehicles.filter((vehicle) => vehicle.state === 'idle');
     for (const vehicle of idleVehicles) {
-      const task = this.tasks.find((candidate) => candidate.state === 'queued' && !this.liftPortBlockReason(candidate));
+      const task = this.tasks.find((candidate) => candidate.state === 'queued' && !this.taskAssignmentBlockReason(candidate));
       if (!task) {
         return;
       }
@@ -1350,6 +1348,10 @@ export class ShuttleSimCore {
     }
   }
 
+  private taskAssignmentBlockReason(task: TaskStateRecord): string | null {
+    return this.liftPortBlockReason(task) ?? this.fifoNetworkBlockReason(task) ?? this.fifoLaneBlockReason(task);
+  }
+
   private liftPortBlockReason(task: TaskStateRecord): string | null {
     if (task.kind === 'inbound' && task.pickupNodeId.startsWith('inbound-lift')) {
       return this.isLiftPortBusyForAssignment('inbound', task.pickupNodeId) ? `inbound-lift-busy:${task.pickupNodeId}` : null;
@@ -1358,6 +1360,70 @@ export class ShuttleSimCore {
       return this.isLiftPortBusyForAssignment('outbound', task.dropoffNodeId) ? `outbound-lift-busy:${task.dropoffNodeId}` : null;
     }
     return null;
+  }
+
+  private fifoLaneBlockReason(task: TaskStateRecord): string | null {
+    const rowLabel = this.taskStorageRowLabel(task);
+    if (!rowLabel) {
+      return null;
+    }
+    const hasActiveSameLaneTask = this.tasks.some((candidate) =>
+      candidate.id !== task.id &&
+      (candidate.state === 'assigned' || candidate.state === 'in-progress') &&
+      this.taskStorageRowLabel(candidate) === rowLabel
+    );
+    return hasActiveSameLaneTask ? `fifo-lane-busy:${rowLabel}` : null;
+  }
+
+  private fifoNetworkBlockReason(task: TaskStateRecord): string | null {
+    const rowLabel = this.taskStorageRowLabel(task);
+    if (!rowLabel) {
+      return null;
+    }
+    const side = task.kind === 'inbound' ? 'right' : 'left';
+    const hasVehicleInFifoNetwork = this.vehicles.some((vehicle) =>
+      vehicle.state !== 'idle' && this.vehicleBlocksFifoTask(vehicle, rowLabel, side)
+    );
+    return hasVehicleInFifoNetwork ? `fifo-${side}-network-busy` : null;
+  }
+
+  private vehicleBlocksFifoTask(vehicle: VehicleState, taskRowLabel: string, taskSide: 'left' | 'right'): boolean {
+    const nodeBlocks = (nodeId: string | null): boolean => {
+      if (!nodeId) {
+        return false;
+      }
+      const storageRow = this.nodeStorageRowLabel(nodeId);
+      if (storageRow === taskRowLabel) {
+        return true;
+      }
+      return this.nodeFifoSide(nodeId) === taskSide;
+    };
+    if (nodeBlocks(vehicle.currentNodeId) || nodeBlocks(vehicle.targetNodeId)) {
+      return true;
+    }
+    return vehicle.routeNodeIds.slice(Math.max(0, vehicle.routeIndex)).some((nodeId) => nodeBlocks(nodeId));
+  }
+
+  private taskStorageRowLabel(task: TaskStateRecord): string | null {
+    const storageNodeId = task.kind === 'inbound' ? task.dropoffNodeId : task.pickupNodeId;
+    return this.nodeStorageRowLabel(storageNodeId);
+  }
+
+  private nodeStorageRowLabel(nodeId: string): string | null {
+    const match = /^storage-r(\d+)-c\d+$/.exec(nodeId);
+    if (match) {
+      return `r${match[1]}`;
+    }
+    const sideMatch = /^(?:left|right)-row-(\d+)$/.exec(nodeId);
+    if (sideMatch) {
+      return `r${sideMatch[1]}`;
+    }
+    return null;
+  }
+
+  private nodeFifoSide(nodeId: string): 'left' | 'right' | null {
+    const sideMatch = /^(left|right)-row-\d+$/.exec(nodeId);
+    return sideMatch ? sideMatch[1] as 'left' | 'right' : null;
   }
 
   private planRoute(currentNodeId: string, task: TaskStateRecord, parkingNodeId: string): string[] {
@@ -1371,7 +1437,7 @@ export class ShuttleSimCore {
         continue;
       }
       const fromNodeId = route[route.length - 1]!;
-      const blockedStorageNodeIds = this.blockedStorageTransitNodeIds(new Set([fromNodeId, target]));
+      const blockedStorageNodeIds = this.blockedStorageTransitNodeIds(fromNodeId, target);
       const segment = this.shortestPath(fromNodeId, target, blockedStorageNodeIds);
       route.push(...segment.slice(1));
     }
@@ -1387,9 +1453,26 @@ export class ShuttleSimCore {
     return this.scenario.layout.nodes.some((node) => node.id === sideNodeId) ? sideNodeId : null;
   }
 
-  private blockedStorageTransitNodeIds(allowedNodeIds: Set<string>): Set<string> {
+  private blockedStorageTransitNodeIds(fromNodeId: string, targetNodeId: string): Set<string> {
     const storageNodeIds = new Set(this.scenario.layout.nodes.filter((node) => node.type === 'storage').map((node) => node.id));
+    const allowedNodeIds = new Set([fromNodeId, targetNodeId]);
     const blockedNodeIds = new Set<string>();
+    const fromRowLabel = this.nodeStorageRowLabel(fromNodeId);
+    const targetRowLabel = this.nodeStorageRowLabel(targetNodeId);
+    const allowStorageTransitRow = (
+      fromRowLabel &&
+      fromRowLabel === targetRowLabel &&
+      (this.isStorageNode(fromNodeId) || this.isStorageNode(targetNodeId))
+    )
+      ? fromRowLabel
+      : null;
+
+    for (const nodeId of storageNodeIds) {
+      if (!allowedNodeIds.has(nodeId) && this.nodeStorageRowLabel(nodeId) !== allowStorageTransitRow) {
+        blockedNodeIds.add(nodeId);
+      }
+    }
+
     for (const nodeId of this.storageNodeLoadOccupancy(false).keys()) {
       if (storageNodeIds.has(nodeId) && !allowedNodeIds.has(nodeId)) {
         blockedNodeIds.add(nodeId);

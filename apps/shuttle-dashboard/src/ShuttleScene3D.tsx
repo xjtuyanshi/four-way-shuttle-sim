@@ -48,6 +48,11 @@ const VEHICLE_BASE_Y = 0.08;
 const CAD_CANVAS_WIDTH = 2048;
 const CAD_CANVAS_HEIGHT = 1536;
 const STORAGE_MARKER_HEIGHT_M = 0.16;
+const CAD_STORAGE_FILL = 'rgba(103, 72, 176, 0.2)';
+const CAD_STORAGE_STROKE = 'rgba(176, 111, 255, 0.86)';
+const CAD_AISLE_FILL = 'rgba(231, 190, 44, 0.22)';
+const CAD_AISLE_STROKE = 'rgba(246, 214, 62, 0.92)';
+const CAD_DIMENSION_STROKE = 'rgba(222, 231, 236, 0.76)';
 
 function computeBounds(nodes: ShuttleNode[]): {
   minX: number;
@@ -212,6 +217,29 @@ function createCadFloorTexture(
     const bottom = zToPx(centerZ + depthM / 2);
     return { left, top, width: right - left, height: bottom - top };
   };
+  const drawDimensionLine = (start: { x: number; z: number }, end: { x: number; z: number }, label: string) => {
+    const startX = xToPx(start.x);
+    const startZ = zToPx(start.z);
+    const endX = xToPx(end.x);
+    const endZ = zToPx(end.z);
+    const labelX = (startX + endX) / 2;
+    const labelZ = (startZ + endZ) / 2;
+    ctx.save();
+    ctx.strokeStyle = CAD_DIMENSION_STROKE;
+    ctx.fillStyle = CAD_DIMENSION_STROKE;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([10, 8]);
+    ctx.beginPath();
+    ctx.moveTo(startX, startZ);
+    ctx.lineTo(endX, endZ);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font = '26px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, labelX, labelZ - 14);
+    ctx.restore();
+  };
 
   ctx.fillStyle = '#0f151c';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -223,8 +251,8 @@ function createCadFloorTexture(
   for (const track of staticScene.trackBeds) {
     const rect = rectForMeterBox(track.xM, track.zM, Math.max(track.lengthXM, 0.08), Math.max(track.lengthZM, 0.08));
     const isStorageLane = track.category === 'storageLane';
-    ctx.fillStyle = isStorageLane ? 'rgba(132, 145, 154, 0.38)' : 'rgba(77, 90, 100, 0.44)';
-    ctx.strokeStyle = isStorageLane ? 'rgba(180, 191, 198, 0.64)' : 'rgba(98, 113, 124, 0.58)';
+    ctx.fillStyle = isStorageLane ? CAD_STORAGE_FILL : CAD_AISLE_FILL;
+    ctx.strokeStyle = isStorageLane ? CAD_STORAGE_STROKE : CAD_AISLE_STROKE;
     ctx.lineWidth = 2;
     ctx.fillRect(rect.left, rect.top, rect.width, rect.height);
     ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
@@ -237,8 +265,8 @@ function createCadFloorTexture(
     const width = xToPx(storageField.maxX) - left;
     const height = zToPx(storageField.maxZ) - top;
 
-    ctx.fillStyle = 'rgba(66, 80, 91, 0.32)';
-    ctx.strokeStyle = 'rgba(142, 162, 176, 0.7)';
+    ctx.fillStyle = CAD_STORAGE_FILL;
+    ctx.strokeStyle = CAD_STORAGE_STROKE;
     ctx.lineWidth = 3;
     ctx.fillRect(left, top, width, height);
     ctx.strokeRect(left, top, width, height);
@@ -246,11 +274,17 @@ function createCadFloorTexture(
 
   for (const cell of staticScene.storageCells) {
     const rect = rectForMeterBox(cell.xM, cell.zM, cell.lengthXM, cell.lengthZM);
-    ctx.fillStyle = 'rgba(141, 150, 156, 0.18)';
-    ctx.strokeStyle = '#6f7b84';
+    ctx.fillStyle = 'rgba(94, 70, 164, 0.16)';
+    ctx.strokeStyle = '#9d6cff';
     ctx.lineWidth = 2;
     ctx.fillRect(rect.left, rect.top, rect.width, rect.height);
     ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
+    ctx.beginPath();
+    ctx.moveTo(rect.left, rect.top);
+    ctx.lineTo(rect.left + rect.width, rect.top + rect.height);
+    ctx.moveTo(rect.left + rect.width, rect.top);
+    ctx.lineTo(rect.left, rect.top + rect.height);
+    ctx.stroke();
   }
 
   for (const pad of [...staticScene.liftPads, ...staticScene.parkingPads]) {
@@ -270,11 +304,30 @@ function createCadFloorTexture(
     if (node.type !== 'storage' && node.type !== 'lift-blackbox' && node.type !== 'parking') {
       const x = xToPx(node.x);
       const z = zToPx(node.z);
-      ctx.fillStyle = node.type === 'inbound' ? '#4f8fcb' : node.type === 'outbound' ? '#6da8d6' : '#e2b84b';
+      ctx.fillStyle = node.type === 'inbound' ? '#9fd9ff' : node.type === 'outbound' ? '#f6d63e' : '#f6d63e';
       ctx.beginPath();
       ctx.arc(x, z, node.type === 'intersection' ? 14 : 18, 0, Math.PI * 2);
       ctx.fill();
     }
+  }
+
+  if (staticScene.storageCells.length > 0) {
+    const sample = staticScene.storageCells[0]!;
+    drawDimensionLine(
+      { x: sample.xM - sample.lengthXM / 2, z: sample.zM - sample.lengthZM * 0.95 },
+      { x: sample.xM + sample.lengthXM / 2, z: sample.zM - sample.lengthZM * 0.95 },
+      `${Math.round(staticScene.storagePitchXM * 1000)}`
+    );
+    drawDimensionLine(
+      { x: sample.xM - sample.lengthXM * 0.85, z: sample.zM - sample.lengthZM / 2 },
+      { x: sample.xM - sample.lengthXM * 0.85, z: sample.zM + sample.lengthZM / 2 },
+      `${Math.round(staticScene.storagePitchZM * 1000)}`
+    );
+    drawDimensionLine(
+      { x: sample.xM, z: -2.2 },
+      { x: sample.xM, z: 2.2 },
+      '4400'
+    );
   }
 
   const texture = new THREE.CanvasTexture(canvas);
@@ -423,10 +476,10 @@ function createPalletLoadObject(widthM: number, depthM: number, crateColor = 0x8
 
 function createStorageRackField(field: StorageField): THREE.Group {
   const group = new THREE.Group();
-  const deckMaterial = material(0x191d2a, 0.88, 0.05);
-  const railMaterial = material(0x8f8ab1, 0.48, 0.24);
-  const beamMaterial = material(0x3a3f55, 0.74, 0.16);
-  const markerMaterial = material(0x4d5268, 0.6, 0.22);
+  const deckMaterial = material(0x171323, 0.88, 0.05);
+  const railMaterial = material(0x7c5cff, 0.48, 0.2);
+  const beamMaterial = material(0xb177ff, 0.6, 0.16);
+  const markerMaterial = material(0x6b5fa6, 0.6, 0.18);
   const averageCellLengthM = field.cells.reduce((sum, cell) => sum + cell.lengthXM, 0) / field.cells.length;
   const averageCellDepthM = field.cells.reduce((sum, cell) => sum + cell.lengthZM, 0) / field.cells.length;
 
@@ -508,7 +561,8 @@ function createStorageTrackCell(cell: ShuttleStaticSceneStorageCell): THREE.Grou
   const group = new THREE.Group();
   group.position.set(cell.xM, cell.yM, cell.zM);
 
-  const railMaterial = material(0x9aa5ad, 0.5, 0.24);
+  const railMaterial = material(0x8d78ff, 0.5, 0.2);
+  const braceMaterial = material(0xb177ff, 0.48, 0.16);
   for (const z of [-cell.lengthZM * 0.42, cell.lengthZM * 0.42]) {
     const rail = new THREE.Mesh(new THREE.BoxGeometry(cell.lengthXM * 0.94, 0.04, 0.04), railMaterial);
     rail.position.set(0, 0.12, z);
@@ -522,7 +576,17 @@ function createStorageTrackCell(cell: ShuttleStaticSceneStorageCell): THREE.Grou
     group.add(crossRail);
   }
 
-  const crossTieMaterial = material(0x3f4b54, 0.76, 0.12);
+  for (const [startX, startZ, endX, endZ] of [
+    [-cell.lengthXM * 0.42, -cell.lengthZM * 0.42, cell.lengthXM * 0.42, cell.lengthZM * 0.42],
+    [cell.lengthXM * 0.42, -cell.lengthZM * 0.42, -cell.lengthXM * 0.42, cell.lengthZM * 0.42]
+  ] satisfies Array<[number, number, number, number]>) {
+    const brace = createSegment({ x: startX, z: startZ }, { x: endX, z: endZ }, 0.012, braceMaterial, 0.165);
+    if (brace) {
+      group.add(brace);
+    }
+  }
+
+  const crossTieMaterial = material(0x40365f, 0.76, 0.12);
   for (const x of [-cell.lengthXM * 0.34, 0, cell.lengthXM * 0.34]) {
     const tie = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.028, cell.lengthZM * 0.9), crossTieMaterial);
     tie.position.set(x, 0.095, 0);
@@ -856,8 +920,8 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario): voi
     runtime.staticGroup.add(storageBlock);
   }
 
-  const edgeMaterial = new THREE.MeshStandardMaterial({ color: 0x64727c, roughness: 0.64, metalness: 0.22 });
-  const fifoEdgeMaterial = new THREE.MeshStandardMaterial({ color: 0x8a969f, roughness: 0.58, metalness: 0.24 });
+  const edgeMaterial = new THREE.MeshStandardMaterial({ color: 0xf0ce3b, roughness: 0.52, metalness: 0.18 });
+  const fifoEdgeMaterial = new THREE.MeshStandardMaterial({ color: 0x8d78ff, roughness: 0.54, metalness: 0.2 });
   const edgeBedMaterial = new THREE.MeshStandardMaterial({ color: 0x1a232b, roughness: 0.86, metalness: 0.06 });
   for (const track of staticScene.trackBeds) {
     const [from, to] = trackBedEndpoints(track);

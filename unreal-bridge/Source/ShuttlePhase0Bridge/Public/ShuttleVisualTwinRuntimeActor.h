@@ -82,6 +82,8 @@ struct FShuttleStaticSceneContractForSmoke
     float InboundLiftXM = 0.0f;
     float OutboundLiftXM = 0.0f;
     bool bSingleLevel = false;
+    int32 StorageIslandCount = 0;
+    bool bDenseStorageIslands = false;
     bool bDenseStorageBlock = false;
     bool bOrthogonalTrackOnly = false;
     bool bDedicatedLiftPorts = false;

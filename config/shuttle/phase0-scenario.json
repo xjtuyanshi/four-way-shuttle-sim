@@ -9655,10 +9655,7 @@
       {
         "id": "zone-main-portal-00",
         "type": "intersection",
-        "nodeIds": [
-          "main-north-00",
-          "main-south-00"
-        ],
+        "nodeIds": [],
         "edgeIds": [
           "main-north-00-main-south-00"
         ],
@@ -9670,10 +9667,7 @@
       {
         "id": "zone-main-portal-01",
         "type": "intersection",
-        "nodeIds": [
-          "main-north-01",
-          "main-south-01"
-        ],
+        "nodeIds": [],
         "edgeIds": [
           "main-north-01-main-south-01"
         ],
@@ -9685,10 +9679,7 @@
       {
         "id": "zone-main-portal-02",
         "type": "intersection",
-        "nodeIds": [
-          "main-north-02",
-          "main-south-02"
-        ],
+        "nodeIds": [],
         "edgeIds": [
           "main-north-02-main-south-02"
         ],
@@ -9700,10 +9691,7 @@
       {
         "id": "zone-main-portal-03",
         "type": "intersection",
-        "nodeIds": [
-          "main-north-03",
-          "main-south-03"
-        ],
+        "nodeIds": [],
         "edgeIds": [
           "main-north-03-main-south-03"
         ],
@@ -9715,10 +9703,7 @@
       {
         "id": "zone-main-portal-04",
         "type": "intersection",
-        "nodeIds": [
-          "main-north-04",
-          "main-south-04"
-        ],
+        "nodeIds": [],
         "edgeIds": [
           "main-north-04-main-south-04"
         ],
@@ -9730,10 +9715,7 @@
       {
         "id": "zone-main-portal-05",
         "type": "intersection",
-        "nodeIds": [
-          "main-north-05",
-          "main-south-05"
-        ],
+        "nodeIds": [],
         "edgeIds": [
           "main-north-05-main-south-05"
         ],
@@ -9745,8 +9727,8 @@
     ]
   },
   "taskGeneration": {
-    "inboundRatePerHour": 90,
-    "outboundRatePerHour": 90,
+    "inboundRatePerHour": 18,
+    "outboundRatePerHour": 18,
     "inboundOutboundMix": 0.5,
     "arrivalDistribution": "deterministic",
     "maxTasks": 40

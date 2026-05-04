@@ -25,6 +25,8 @@ bool StaticSceneContractPass(const FShuttleStaticSceneContractForSmoke& Contract
 {
     return
         Contract.bSingleLevel &&
+        Contract.StorageIslandCount == 8 &&
+        Contract.bDenseStorageIslands &&
         !Contract.bDenseStorageBlock &&
         Contract.bOrthogonalTrackOnly &&
         Contract.bDedicatedLiftPorts &&
@@ -150,6 +152,8 @@ TSharedRef<FJsonObject> StaticSceneContractToJson(const FShuttleStaticSceneContr
     Summary->SetNumberField(TEXT("inboundLiftXM"), Contract.InboundLiftXM);
     Summary->SetNumberField(TEXT("outboundLiftXM"), Contract.OutboundLiftXM);
     Summary->SetBoolField(TEXT("singleLevel"), Contract.bSingleLevel);
+    Summary->SetNumberField(TEXT("storageIslandCount"), Contract.StorageIslandCount);
+    Summary->SetBoolField(TEXT("denseStorageIslands"), Contract.bDenseStorageIslands);
     Summary->SetBoolField(TEXT("denseStorageBlock"), Contract.bDenseStorageBlock);
     Summary->SetBoolField(TEXT("orthogonalTrackOnly"), Contract.bOrthogonalTrackOnly);
     Summary->SetBoolField(TEXT("dedicatedLiftPorts"), Contract.bDedicatedLiftPorts);
@@ -279,7 +283,7 @@ int32 UShuttleVisualTwinSmokeCommandlet::Main(const FString& Params)
         UE_LOG(
             LogShuttleVisualTwinSmoke,
             Display,
-            TEXT("Static scene counts: pass=%s storage=%d track=%d inboundLift=%d outboundLift=%d parking=%d floor=%d storageRails=%d rackPosts=%d rollers=%d liftBlocks=%d rows=%d columns=%d dense=%s orthogonal=%s dedicatedLift=%s summary='%s'"),
+            TEXT("Static scene counts: pass=%s storage=%d track=%d inboundLift=%d outboundLift=%d parking=%d floor=%d storageRails=%d rackPosts=%d rollers=%d liftBlocks=%d rows=%d columns=%d islands=%d denseIslands=%s denseBlock=%s orthogonal=%s dedicatedLift=%s summary='%s'"),
             bStaticScenePass ? TEXT("true") : TEXT("false"),
             StorageCells,
             TrackBeds,
@@ -293,6 +297,8 @@ int32 UShuttleVisualTwinSmokeCommandlet::Main(const FString& Params)
             LiftBlocks,
             StaticSceneContract.StorageRows,
             StaticSceneContract.StorageColumns,
+            StaticSceneContract.StorageIslandCount,
+            StaticSceneContract.bDenseStorageIslands ? TEXT("true") : TEXT("false"),
             StaticSceneContract.bDenseStorageBlock ? TEXT("true") : TEXT("false"),
             StaticSceneContract.bOrthogonalTrackOnly ? TEXT("true") : TEXT("false"),
             StaticSceneContract.bDedicatedLiftPorts ? TEXT("true") : TEXT("false"),

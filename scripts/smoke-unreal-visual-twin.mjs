@@ -121,6 +121,8 @@ function assertStaticSceneParityWithSimCore(unrealSummary, simCoreContract) {
     'outboundLiftPadCount',
     'parkingPadCount',
     'singleLevel',
+    'storageIslandCount',
+    'denseStorageIslands',
     'denseStorageBlock',
     'orthogonalTrackOnly',
     'dedicatedLiftPorts',
@@ -441,6 +443,8 @@ async function main() {
     simCoreStaticSceneContract.storageRows !== 16 ||
     simCoreStaticSceneContract.storageColumns !== 24 ||
     simCoreStaticSceneContract.storageCellCount !== 384 ||
+    simCoreStaticSceneContract.storageIslandCount !== 8 ||
+    simCoreStaticSceneContract.denseStorageIslands !== true ||
     simCoreStaticSceneContract.denseStorageBlock !== false ||
     simCoreStaticSceneContract.orthogonalTrackOnly !== true ||
     simCoreStaticSceneContract.dedicatedLiftPorts !== true
