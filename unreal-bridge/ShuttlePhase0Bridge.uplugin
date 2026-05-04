@@ -6,6 +6,7 @@
   "Description": "Subscribes to SimCore authoritative shuttle state and drives placeholder Unreal visual actors.",
   "Category": "Simulation",
   "CreatedBy": "Four-Way Shuttle Sim",
+  "Installed": true,
   "Modules": [
     {
       "Name": "ShuttlePhase0Bridge",

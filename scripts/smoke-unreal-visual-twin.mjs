@@ -206,14 +206,14 @@ function inspectGeneratedProject() {
   const project = readJson('Generated Unreal project', projectPath);
   const plugin = readJson('Generated Shuttle bridge plugin', bridgePluginDescriptor);
   assertPluginEnabled(project, 'ShuttlePhase0Bridge');
-  assertPluginEnabled(project, 'PixelStreaming');
+  assertPluginEnabled(project, 'PixelStreaming2');
   const bridgeSourceFiles = assertBridgeSourcePresent();
   return {
     project: projectPath,
     engineAssociation: project.EngineAssociation,
     targetName,
     enabledPlugins: (project.Plugins ?? []).filter((candidate) =>
-      ['ShuttlePhase0Bridge', 'PixelStreaming'].includes(candidate.Name)
+      ['ShuttlePhase0Bridge', 'PixelStreaming2'].includes(candidate.Name)
     ).map((candidate) => candidate.Name),
     bridgePlugin: {
       descriptor: bridgePluginDescriptor,

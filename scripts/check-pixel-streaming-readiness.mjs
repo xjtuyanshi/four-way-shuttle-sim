@@ -41,6 +41,9 @@ function inspectPlugin(pluginName) {
   const installedServerDirs = entries.filter((entry) =>
     ['Frontend', 'Matchmaker', 'SFU', 'SignallingWebServer', 'SignallingWebserver'].includes(entry)
   );
+  const signallingWebServerDir = ['SignallingWebServer', 'SignallingWebserver']
+    .map((entry) => path.join(webServersRoot, entry))
+    .find((candidate) => existsSync(candidate)) ?? null;
 
   return {
     pluginName,
@@ -51,6 +54,7 @@ function inspectPlugin(pluginName) {
     downloaderExists: existsSync(downloader),
     downloaderExecutable: isExecutable(downloader),
     installedServerDirs,
+    signallingWebServerDir,
     infrastructureInstalled: installedServerDirs.includes('SignallingWebServer') || installedServerDirs.includes('SignallingWebserver')
   };
 }
@@ -58,6 +62,12 @@ function inspectPlugin(pluginName) {
 const plugins = [inspectPlugin('PixelStreaming'), inspectPlugin('PixelStreaming2')];
 const enabledPlugins = readProjectPlugins();
 const selectedPlugin = plugins.find((plugin) => enabledPlugins.includes(plugin.pluginName)) ?? plugins[0];
+const infrastructurePlugin = selectedPlugin.infrastructureInstalled
+  ? selectedPlugin
+  : plugins.find((plugin) => plugin.infrastructureInstalled) ?? selectedPlugin;
+const infrastructureCompatible =
+  selectedPlugin.infrastructureInstalled ||
+  (selectedPlugin.pluginName === 'PixelStreaming2' && infrastructurePlugin.infrastructureInstalled);
 const unrealEditor = path.join(ueRoot, 'Engine', 'Binaries', 'Mac', 'UnrealEditor.app', 'Contents', 'MacOS', 'UnrealEditor');
 
 const summary = {
@@ -69,14 +79,22 @@ const summary = {
   projectExists: existsSync(projectPath),
   enabledPlugins,
   selectedPixelStreamingPlugin: selectedPlugin.pluginName,
+  selectedInfrastructurePlugin: infrastructurePlugin.pluginName,
+  signallingWebServerDir: infrastructurePlugin.signallingWebServerDir,
   plugins,
-  status: selectedPlugin.infrastructureInstalled ? 'ready' : 'needs-pixel-streaming-infrastructure',
-  nextCommand: `"${selectedPlugin.downloader}" -v 5.7`,
-  note: 'This check does not download or run Pixel Streaming infrastructure. Run the nextCommand only after explicit confirmation.'
+  status: infrastructureCompatible
+    ? selectedPlugin.pluginName === infrastructurePlugin.pluginName
+      ? 'ready'
+      : 'ready-with-shared-pixel-streaming-infrastructure'
+    : 'needs-pixel-streaming-infrastructure',
+  nextCommand: infrastructureCompatible ? null : `"${selectedPlugin.downloader}" -v 5.7`,
+  note: infrastructureCompatible
+    ? 'This check does not download or run Pixel Streaming infrastructure.'
+    : 'This check does not download or run Pixel Streaming infrastructure. Run the nextCommand only after explicit confirmation.'
 };
 
 console.log(JSON.stringify(summary, null, 2));
 
-if (requireInfra && !selectedPlugin.infrastructureInstalled) {
+if (requireInfra && !infrastructureCompatible) {
   process.exitCode = 1;
 }
