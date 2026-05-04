@@ -628,41 +628,66 @@ function createLiftBlackboxPort(node: ShuttleNode, pad?: ShuttleStaticScenePad):
   const group = new THREE.Group();
   group.position.set(node.x, 0, node.z);
 
-  const isInbound = node.id.includes('inbound');
-  const accent = isInbound ? 0x4f8fcb : 0x6da8d6;
+  const isInbound = node.liftKind === 'inbound';
+  const roleAccent = isInbound ? 0x4f8fcb : 0x6da8d6;
   const padLengthX = pad?.lengthXM ?? 1.5;
   const padLengthZ = pad?.lengthZM ?? 1.15;
-  const base = new THREE.Mesh(new THREE.BoxGeometry(padLengthX, 0.09, padLengthZ), material(0x111820, 0.86, 0.08));
-  base.position.y = 0.055;
+
+  const base = new THREE.Mesh(new THREE.BoxGeometry(padLengthX * 1.08, 0.045, padLengthZ * 1.12), material(0x111820, 0.86, 0.08));
+  base.position.y = 0.025;
   base.castShadow = true;
   base.receiveShadow = true;
   group.add(base);
 
-  const blackbox = new THREE.Mesh(new THREE.BoxGeometry(padLengthX * 0.7, 0.28, padLengthZ * 0.72), material(0x080d11, 0.72, 0.18));
-  blackbox.position.y = 0.23;
-  blackbox.castShadow = true;
-  blackbox.receiveShadow = true;
-  group.add(blackbox);
+  const transferDeck = new THREE.Mesh(new THREE.BoxGeometry(padLengthX * 0.88, 0.055, padLengthZ * 0.78), material(0x322914, 0.72, 0.12));
+  transferDeck.position.y = 0.095;
+  transferDeck.castShadow = true;
+  transferDeck.receiveShadow = true;
+  group.add(transferDeck);
+
+  const guideMaterial = material(0xf0ce3b, 0.42, 0.24);
+  for (const z of [-padLengthZ * 0.42, padLengthZ * 0.42]) {
+    const guideRail = new THREE.Mesh(new THREE.BoxGeometry(padLengthX * 1.02, 0.05, 0.045), guideMaterial);
+    guideRail.position.set(0, 0.17, z);
+    guideRail.castShadow = true;
+    group.add(guideRail);
+  }
+
+  for (const x of [-padLengthX * 0.46, padLengthX * 0.46]) {
+    const sideGuide = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.07, padLengthZ * 0.88), guideMaterial);
+    sideGuide.position.set(x, 0.185, 0);
+    sideGuide.castShadow = true;
+    group.add(sideGuide);
+  }
 
   const rollerMaterial = material(0x96a3ad, 0.42, 0.28);
-  for (let index = 0; index < 5; index += 1) {
-    const x = -padLengthX * 0.28 + index * padLengthX * 0.14;
-    const roller = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, padLengthZ * 0.62, 12), rollerMaterial);
+  for (let index = 0; index < 7; index += 1) {
+    const x = -padLengthX * 0.34 + index * padLengthX * 0.113;
+    const roller = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, padLengthZ * 0.66, 12), rollerMaterial);
     roller.rotation.x = Math.PI / 2;
-    roller.position.set(x, 0.39, 0);
+    roller.position.set(x, 0.235, 0);
     roller.castShadow = true;
     group.add(roller);
   }
 
-  for (const z of [-padLengthZ * 0.45, padLengthZ * 0.45]) {
-    const guard = new THREE.Mesh(new THREE.BoxGeometry(padLengthX, 0.08, 0.05), material(0x303c45, 0.66, 0.18));
-    guard.position.set(0, 0.42, z);
-    guard.castShadow = true;
-    group.add(guard);
+  const postMaterial = material(0xe6eef2, 0.38, 0.32);
+  const postAccentMaterial = material(roleAccent, 0.5, 0.22);
+  for (const x of [-padLengthX * 0.5, padLengthX * 0.5]) {
+    for (const z of [-padLengthZ * 0.46, padLengthZ * 0.46]) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.62, 12), postMaterial);
+      post.position.set(x, 0.38, z);
+      post.castShadow = true;
+      group.add(post);
+
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.05, 0.16), postAccentMaterial);
+      cap.position.set(x, 0.71, z);
+      cap.castShadow = true;
+      group.add(cap);
+    }
   }
 
-  const portPlate = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.34, padLengthZ * 0.92), material(accent, 0.54, 0.16));
-  portPlate.position.set(isInbound ? -padLengthX * 0.55 : padLengthX * 0.55, 0.26, 0);
+  const portPlate = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.22, padLengthZ * 0.68), material(roleAccent, 0.54, 0.16));
+  portPlate.position.set(isInbound ? -padLengthX * 0.58 : padLengthX * 0.58, 0.22, 0);
   portPlate.castShadow = true;
   group.add(portPlate);
 
