@@ -499,6 +499,19 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
   const liftPorts = traffic?.liftPorts ?? [];
   const queuedLiftTasks = liftPorts.reduce((sum, port) => sum + port.queueLength, 0);
   const activeLiftPorts = liftPorts.filter((port) => port.activeTaskId).length;
+  const blockedReasons = Object.entries(state?.kpis.blockedTimeByReasonSec ?? {});
+  const laneWaitSec = blockedReasons
+    .filter(([reason]) => reason.startsWith('fifo-'))
+    .reduce((sum, [, value]) => sum + value, 0);
+  const storageWaitSec = blockedReasons
+    .filter(([reason]) => reason.startsWith('storage-'))
+    .reduce((sum, [, value]) => sum + value, 0);
+  const liftWaitSec = blockedReasons
+    .filter(([reason]) => reason.includes('lift') || reason.includes('port'))
+    .reduce((sum, [, value]) => sum + value, 0);
+  const activePortalZones = (state?.reservations ?? []).filter(
+    (reservation) => reservation.resourceType === 'zone' && reservation.resourceId.startsWith('zone-main-portal')
+  ).length;
 
   return (
     <section className="traffic-diagnostics" aria-label="Traffic diagnostics">
@@ -522,6 +535,22 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
         <span>Port diagnostics</span>
         <strong>{activeLiftPorts}/{liftPorts.length}</strong>
         <small>{queuedLiftTasks} queued</small>
+      </div>
+      <div>
+        <span>Lane waits</span>
+        <strong>{formatNumber(laneWaitSec, 1)}s</strong>
+      </div>
+      <div>
+        <span>Storage waits</span>
+        <strong>{formatNumber(storageWaitSec, 1)}s</strong>
+      </div>
+      <div>
+        <span>Lift waits</span>
+        <strong>{formatNumber(liftWaitSec, 1)}s</strong>
+      </div>
+      <div>
+        <span>Portal zones</span>
+        <strong>{activePortalZones}</strong>
       </div>
       <div className="traffic-wait-list">
         {waiting.length === 0 ? (
@@ -590,6 +619,22 @@ function FifoInventoryPanel({ scenario, state }: { scenario: ShuttleScenario | n
     (sum, lane) => sum + lane.cells.filter((cell) => storedByNode.has(cell.id) || inboundTargets.has(cell.id)).length,
     0
   );
+  const laneDiagnostics = lanes.map((lane, laneIndex) => {
+    const stored = lane.cells.filter((cell) => storedByNode.has(cell.id)).length;
+    const reserved = lane.cells.filter((cell) => inboundTargets.has(cell.id)).length;
+    const outbound = lane.cells.filter((cell) => outboundPickups.has(cell.id)).length;
+    return {
+      id: lane.id,
+      label: `Row ${laneIndex + 1}`,
+      stored,
+      reserved,
+      outbound,
+      total: lane.cells.length
+    };
+  });
+  const activeLaneDiagnostics = laneDiagnostics
+    .filter((lane) => lane.stored + lane.reserved + lane.outbound > 0)
+    .slice(0, 8);
 
   return (
     <section className="panel fifo-panel" aria-label="FIFO inventory">
@@ -620,6 +665,24 @@ function FifoInventoryPanel({ scenario, state }: { scenario: ShuttleScenario | n
           ))}
         </div>
         <div className="fifo-reasons">
+          <div className="fifo-policy-card">
+            <span>Storage policy</span>
+            <strong>row-contiguous lane-fill</strong>
+            <small>Inbound right-to-left. Outbound left pick. No hidden compaction.</small>
+          </div>
+          <div className="fifo-row-summary">
+            <span>Active rows</span>
+            {activeLaneDiagnostics.length === 0 ? (
+              <small>No active storage rows</small>
+            ) : (
+              activeLaneDiagnostics.map((lane) => (
+                <small key={lane.id}>
+                  {lane.label} {lane.stored + lane.reserved}/{lane.total}
+                  {lane.outbound > 0 ? ` / pick ${lane.outbound}` : ''}
+                </small>
+              ))
+            )}
+          </div>
           <div>
             <span>Empty wait</span>
             <strong>{formatNumber(storageEmptySec, 1)}s</strong>

@@ -519,7 +519,7 @@ input[type="range"] {
 
 .traffic-diagnostics {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr)) repeat(2, minmax(220px, 1.2fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -545,6 +545,7 @@ input[type="range"] {
 .traffic-wait-list,
 .traffic-lift-list {
   align-content: start;
+  grid-column: span 2;
 }
 
 .traffic-wait-list small,
@@ -561,7 +562,7 @@ input[type="range"] {
 
 .fifo-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 220px;
+  grid-template-columns: minmax(0, 1fr) 300px;
   gap: 12px;
   padding: 14px;
 }
@@ -580,9 +581,26 @@ input[type="range"] {
 
 .fifo-lane-label,
 .fifo-reasons span,
+.fifo-reasons small,
 .fifo-cell span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.fifo-policy-card,
+.fifo-row-summary {
+  align-content: start;
+}
+
+.fifo-policy-card strong {
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.fifo-policy-card small,
+.fifo-row-summary small {
+  display: block;
+  line-height: 1.45;
 }
 
 .fifo-cells {
@@ -624,7 +642,7 @@ input[type="range"] {
 
 .fifo-reasons {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 10px;
 }
 
@@ -817,6 +835,11 @@ th {
 
   .traffic-diagnostics {
     grid-template-columns: 1fr;
+  }
+
+  .traffic-wait-list,
+  .traffic-lift-list {
+    grid-column: auto;
   }
 
   .fifo-lane,
