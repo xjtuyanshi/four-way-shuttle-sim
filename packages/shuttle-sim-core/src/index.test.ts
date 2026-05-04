@@ -89,6 +89,32 @@ function testScenario(overrides: Partial<ShuttleScenario>): ShuttleScenario {
   });
 }
 
+function runFor(sim: ShuttleSimCore, durationSec: number, dtSec = 0.2) {
+  sim.start();
+  for (let elapsedSec = 0; elapsedSec < durationSec; elapsedSec = Number((elapsedSec + dtSec).toFixed(6))) {
+    sim.step(dtSec);
+  }
+  return sim.getState();
+}
+
+function expectNoTrafficSafetyFailures(state: ReturnType<ShuttleSimCore['getState']>) {
+  expect(state.kpis.deadlockCount).toBe(0);
+  expect(state.kpis.livelockCount).toBe(0);
+  expect(state.traffic.physicalViolationCount).toBe(0);
+}
+
+function addStoredLoads(sim: ShuttleSimCore, nodeIds: string[]) {
+  nodeIds.forEach((nodeId, index) => {
+    sim.addLoadForTest({
+      id: `stored-${String(index + 1).padStart(4, '0')}`,
+      state: 'stored',
+      nodeId,
+      vehicleId: null,
+      weightKg: 100
+    });
+  });
+}
+
 describe('shuttle phase 0 SimCore', () => {
   it('validates the default phase 0 scenario schema', () => {
     const scenario = createDefaultShuttleScenario();
@@ -728,6 +754,152 @@ describe('shuttle phase 0 SimCore', () => {
     expect(sim.getDebugState().storageNodeOccupancy).toHaveLength(384);
     expect(state.kpis.blockedTimeByReasonSec['storage-full']).toBeGreaterThan(0);
     expect(sim.getEventLog().some((entry) => entry.eventType === 'task-deferred' && entry.reason === 'storage-full')).toBe(true);
+  });
+
+  it('keeps a near-full contiguous lane-fill store bounded without over-allocating slots', () => {
+    const scenario = createDefaultShuttleScenario({
+      durationSec: 20,
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 3
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    const finalSlotNodeId = 'storage-r16-c24';
+    const occupiedStorageNodeIds = scenario.layout.nodes
+      .filter((node) => node.type === 'storage' && node.id !== finalSlotNodeId)
+      .map((node) => node.id);
+    addStoredLoads(sim, occupiedStorageNodeIds);
+
+    sim.start();
+    for (let index = 0; index < 20 && !(sim.getState().kpis.blockedTimeByReasonSec['storage-full'] > 0); index += 1) {
+      sim.step(0.2);
+    }
+    const state = sim.getState();
+
+    expectNoTrafficSafetyFailures(state);
+    expect(state.tasks).toHaveLength(1);
+    expect(state.tasks[0]?.dropoffNodeId).toBe(finalSlotNodeId);
+    expect(sim.getDebugState().storageNodeOccupancy).toHaveLength(384);
+    expect(state.kpis.blockedTimeByReasonSec['storage-full']).toBeGreaterThan(0);
+  });
+
+  it('keeps four-vehicle mixed lift and FIFO pressure bounded without deadlock', () => {
+    const scenario = createDefaultShuttleScenario({
+      durationSec: 360,
+      vehicles: { count: 4 },
+      taskGeneration: {
+        inboundRatePerHour: 240,
+        outboundRatePerHour: 240,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 32
+      },
+      physicsParams: {
+        emptySpeedMps: 4,
+        loadedSpeedMps: 3,
+        accelerationMps2: 4,
+        switchDirectionSec: 0.2,
+        liftTimeSec: 0.2,
+        lowerTimeSec: 0.2,
+        loadedClearanceM: 0.2,
+        reservationClearanceSec: 0.05
+      },
+      trafficPolicy: {
+        deadlockDetectSec: 5
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    addStoredLoads(sim, [
+      'storage-r01-c01',
+      'storage-r01-c02',
+      'storage-r02-c01',
+      'storage-r02-c02',
+      'storage-r03-c01',
+      'storage-r03-c02',
+      'storage-r04-c01',
+      'storage-r04-c02'
+    ]);
+
+    const state = runFor(sim, scenario.durationSec);
+    const blockedReasons = Object.keys(state.kpis.blockedTimeByReasonSec);
+
+    expectNoTrafficSafetyFailures(state);
+    expect(state.kpis.completedInbound).toBeGreaterThan(0);
+    expect(state.kpis.completedOutbound).toBeGreaterThan(0);
+    expect(blockedReasons.some((reason) => reason.startsWith('fifo-') || reason.includes('lift-busy'))).toBe(true);
+    expect(state.vehicles).toHaveLength(4);
+    expect(state.vehicles.every((vehicle) => Number.isFinite(vehicle.x) && Number.isFinite(vehicle.z))).toBe(true);
+  });
+
+  it('keeps one-direction pressure cases bounded for inbound-only and outbound-only runs', () => {
+    const inboundScenario = createDefaultShuttleScenario({
+      durationSec: 240,
+      vehicles: { count: 4 },
+      taskGeneration: {
+        inboundRatePerHour: 240,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 20
+      },
+      physicsParams: {
+        emptySpeedMps: 4,
+        loadedSpeedMps: 3,
+        accelerationMps2: 4,
+        switchDirectionSec: 0.2,
+        liftTimeSec: 0.2,
+        lowerTimeSec: 0.2,
+        loadedClearanceM: 0.2,
+        reservationClearanceSec: 0.05
+      }
+    });
+    const inboundState = runFor(new ShuttleSimCore(inboundScenario), inboundScenario.durationSec);
+
+    expectNoTrafficSafetyFailures(inboundState);
+    expect(inboundState.kpis.completedInbound).toBeGreaterThan(0);
+    expect(inboundState.kpis.completedOutbound).toBe(0);
+
+    const outboundScenario = createDefaultShuttleScenario({
+      durationSec: 240,
+      vehicles: { count: 4 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 240,
+        inboundOutboundMix: 0,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 20
+      },
+      physicsParams: {
+        emptySpeedMps: 4,
+        loadedSpeedMps: 3,
+        accelerationMps2: 4,
+        switchDirectionSec: 0.2,
+        liftTimeSec: 0.2,
+        lowerTimeSec: 0.2,
+        loadedClearanceM: 0.2,
+        reservationClearanceSec: 0.05
+      }
+    });
+    const outboundSim = new ShuttleSimCore(outboundScenario);
+    addStoredLoads(outboundSim, [
+      'storage-r01-c01',
+      'storage-r01-c02',
+      'storage-r01-c03',
+      'storage-r01-c04',
+      'storage-r02-c01',
+      'storage-r02-c02',
+      'storage-r02-c03',
+      'storage-r02-c04'
+    ]);
+    const outboundState = runFor(outboundSim, outboundScenario.durationSec);
+
+    expectNoTrafficSafetyFailures(outboundState);
+    expect(outboundState.kpis.completedInbound).toBe(0);
+    expect(outboundState.kpis.completedOutbound).toBeGreaterThan(0);
   });
 
   it('accepts dashboard-style parameter updates through JSON pointers', () => {
