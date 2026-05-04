@@ -270,8 +270,12 @@ export function mergeKpiUpdate(
   };
 }
 
-export function shouldRestartAfterParamUpdate(path: string, status: ShuttleSimState['status'] | null | undefined): boolean {
+export function shouldResetAfterParamUpdate(path: string, status: ShuttleSimState['status'] | null | undefined): boolean {
   return path === '/vehicles/count' || path.startsWith('/taskGeneration/') || status === 'completed';
+}
+
+export function shouldResumeAfterParamUpdate(path: string, status: ShuttleSimState['status'] | null | undefined): boolean {
+  return shouldResetAfterParamUpdate(path, status) && (status === 'running' || status === 'completed');
 }
 
 function KpiStrip({ kpis }: { kpis: KpiSnapshot | null }) {
@@ -1023,16 +1027,27 @@ export function App() {
   }
 
   async function updateParam(path: string, value: number): Promise<void> {
-    const restartRun = shouldRestartAfterParamUpdate(path, state?.status);
+    const resetRun = shouldResetAfterParamUpdate(path, state?.status);
+    const resumeRun = shouldResumeAfterParamUpdate(path, state?.status);
     const seed = state?.seed;
     const updated = await postCommand('/api/shuttle/setParam', { path, value });
     if (!updated) {
       return;
     }
-    if (restartRun) {
-      await postCommand('/api/shuttle/reset', { seed });
-      await postCommand('/api/shuttle/resume');
-      setCommandStatus({ label: 'updated + restarted', tone: 'ok' });
+    if (resetRun) {
+      const reset = await postCommand('/api/shuttle/reset', { seed });
+      if (!reset) {
+        return;
+      }
+      if (resumeRun) {
+        const resumed = await postCommand('/api/shuttle/resume');
+        if (!resumed) {
+          return;
+        }
+        setCommandStatus({ label: 'updated + restarted', tone: 'ok' });
+      } else {
+        setCommandStatus({ label: 'updated + reset', tone: 'ok' });
+      }
     }
     try {
       const nextScenario = await requestJson<ShuttleScenario>('/api/shuttle/scenario');

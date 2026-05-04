@@ -3,7 +3,7 @@ import { createDefaultShuttleScenario, summarizeScenarioStaticSceneContract } fr
 import { describe, expect, it } from 'vitest';
 
 import goldenStaticSceneContract from '../../../config/shuttle/static-scene-contract.golden.json';
-import { mergeKpiUpdate, mergeVehicleStateUpdate, shouldRestartAfterParamUpdate } from './App.js';
+import { mergeKpiUpdate, mergeVehicleStateUpdate, shouldResetAfterParamUpdate, shouldResumeAfterParamUpdate } from './App.js';
 import { resolveCadDimensionAnnotations, resolveDashboardStaticSceneContract } from './ShuttleScene3D.js';
 
 function vehicle(overrides: Partial<VehicleState> & { id: string }): VehicleState {
@@ -115,12 +115,21 @@ describe('dashboard stream reducers', () => {
 });
 
 describe('dashboard parameter controls', () => {
-  it('restarts live runs for throughput and shuttle-count changes', () => {
-    expect(shouldRestartAfterParamUpdate('/taskGeneration/inboundRatePerHour', 'running')).toBe(true);
-    expect(shouldRestartAfterParamUpdate('/taskGeneration/outboundRatePerHour', 'paused')).toBe(true);
-    expect(shouldRestartAfterParamUpdate('/vehicles/count', 'running')).toBe(true);
-    expect(shouldRestartAfterParamUpdate('/physicsParams/loadedSpeedMps', 'running')).toBe(false);
-    expect(shouldRestartAfterParamUpdate('/physicsParams/loadedSpeedMps', 'completed')).toBe(true);
+  it('resets structural changes but only auto-resumes active runs', () => {
+    expect(shouldResetAfterParamUpdate('/taskGeneration/inboundRatePerHour', 'running')).toBe(true);
+    expect(shouldResumeAfterParamUpdate('/taskGeneration/inboundRatePerHour', 'running')).toBe(true);
+
+    expect(shouldResetAfterParamUpdate('/taskGeneration/outboundRatePerHour', 'paused')).toBe(true);
+    expect(shouldResumeAfterParamUpdate('/taskGeneration/outboundRatePerHour', 'paused')).toBe(false);
+
+    expect(shouldResetAfterParamUpdate('/vehicles/count', 'idle')).toBe(true);
+    expect(shouldResumeAfterParamUpdate('/vehicles/count', 'idle')).toBe(false);
+
+    expect(shouldResetAfterParamUpdate('/physicsParams/loadedSpeedMps', 'running')).toBe(false);
+    expect(shouldResumeAfterParamUpdate('/physicsParams/loadedSpeedMps', 'running')).toBe(false);
+
+    expect(shouldResetAfterParamUpdate('/physicsParams/loadedSpeedMps', 'completed')).toBe(true);
+    expect(shouldResumeAfterParamUpdate('/physicsParams/loadedSpeedMps', 'completed')).toBe(true);
   });
 });
 
