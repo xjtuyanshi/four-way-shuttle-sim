@@ -47,7 +47,8 @@ Scope: keep the current public `main` merge-ready without adding product feature
 - ChatGPT Pro reviewed commit `717858e` and returned `merge after fixes`.
 - Local hardening now addresses the actionable findings: stopped portal-node zone holds, storage-row connector portal conflicts, `switchDirectionSec` dwell without vehicle body rotation, all-expected-bottleneck stress assertions, by-side long-run throughput acceptance, and defensive Unreal parsing for unknown vehicle state strings.
 - Full verification plus WebSocket, Unreal, and browser smoke passed locally after these fixes.
-- A new Pro re-review should be sent only after action-time confirmation.
+- ChatGPT Pro re-reviewed commit `9cd328659bd9a10a27e32cca12b9197544d4af9b` and returned `Merge now`.
+- No must-fix findings remain from the Pro review. Its remaining recommendations are Phase 1 only.
 
 ## Merge-Blocking TODO
 

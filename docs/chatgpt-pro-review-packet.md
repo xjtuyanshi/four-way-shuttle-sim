@@ -175,6 +175,10 @@ The ChatGPT Pro review against commit `717858e` returned `merge after fixes`. Th
 - Long-run acceptance requires inbound and outbound throughput separately when both demand streams are enabled.
 - Unreal bridge parsing rejects unknown vehicle state strings instead of silently treating them as `Idle`.
 
+The follow-up ChatGPT Pro re-review of commit `9cd328659bd9a10a27e32cca12b9197544d4af9b` returned: `Merge now`.
+
+No must-fix findings were reported. Non-blocking Phase 1 recommendations were: strengthen by-side throughput floors from nonzero liveness to proportional service-balance targets, track direction-switch readiness by node plus axis if dynamic replanning at stopped nodes becomes common, add orthogonal-only validation for external custom layouts, calibrate geometry/timings from CAD/vendor/site data, model true push-lane mechanics only after the current FIFO abstraction is accepted, and run the 30-minute Pixel Streaming soak after the Unreal visual scene is calibrated.
+
 ## Phase 1 Demo Alignment Since Hardening
 
 The browser demo has been adjusted toward the user's four-way shuttle reference:

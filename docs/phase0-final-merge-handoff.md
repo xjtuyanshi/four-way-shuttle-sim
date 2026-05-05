@@ -6,8 +6,8 @@ Repository: `https://github.com/xjtuyanshi/four-way-shuttle-sim`
 
 ## Merge Verdict
 
-- Local verdict after latest fixes: ready for re-review/merge.
-- Latest ChatGPT Pro public-branch verdict: Merge now.
+- Local verdict after latest fixes: merge-ready.
+- Latest ChatGPT Pro public-branch verdict for commit `9cd328659bd9a10a27e32cca12b9197544d4af9b`: Merge now.
 - Verified must-fix findings remaining locally: none after this pass.
 - Unreal Engine 5.7.4 and full Xcode are now installed; bridge compile/headless smoke, live bridge smoke, staged Mac runtime generation, and local browser Pixel Streaming smokes passed. The 30-minute soak and release hardening remain Phase 1 work after calibrated scene review.
 

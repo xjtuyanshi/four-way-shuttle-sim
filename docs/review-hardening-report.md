@@ -161,6 +161,10 @@ The follow-up ChatGPT Pro review against commit `717858e` returned `merge after 
 - Long-run acceptance now checks inbound and outbound throughput separately when both sides have requested demand.
 - Unreal bridge vehicle parsing now rejects unknown operational states with a concise bridge status instead of silently mapping them to `Idle`.
 
+The re-review against commit `9cd328659bd9a10a27e32cca12b9197544d4af9b` returned `Merge now`.
+
+No must-fix findings remained. The reviewer explicitly treated the remaining items as Phase 1: proportional by-side throughput floors, node-plus-axis direction-switch readiness for future dynamic replanning, orthogonal-only validation for externally supplied layouts, CAD/vendor calibration, true push-lane mechanics, and the 30-minute Pixel Streaming soak.
+
 Non-blocking follow-ups were moved to Phase 1:
 
 - multi-capacity reservation semantics after Phase 0
