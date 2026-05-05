@@ -8,7 +8,10 @@ import type {
   ShuttleStreamMessage,
   VehicleState
 } from '@four-way-shuttle/schemas';
-import { summarizeScenarioStaticSceneContract } from '@four-way-shuttle/sim-core/static-scene';
+import {
+  summarizeScenarioStaticSceneContract,
+  type ShuttleStaticSceneCalibrationReadiness
+} from '@four-way-shuttle/sim-core/static-scene';
 
 const ShuttleScene3D = lazy(() =>
   import('./ShuttleScene3D.js').then((module) => ({ default: module.ShuttleScene3D }))
@@ -827,6 +830,54 @@ function PrerequisitePanel({ report }: { report: PrerequisiteReport | null }) {
   );
 }
 
+function previewCalibrationKeys(keys: string[]): string {
+  if (keys.length === 0) {
+    return 'none';
+  }
+  const visibleKeys = keys.slice(0, 3).join(', ');
+  return keys.length > 3 ? `${keys.length} missing: ${visibleKeys}...` : visibleKeys;
+}
+
+function CalibrationPanel({ scenario }: { scenario: ShuttleScenario | null }) {
+  const readiness: ShuttleStaticSceneCalibrationReadiness | null = useMemo(
+    () => scenario ? summarizeScenarioStaticSceneContract(scenario).calibrationReadiness : null,
+    [scenario]
+  );
+
+  return (
+    <section className="panel prereq-panel" aria-label="Layout calibration gate">
+      <div className="panel-head">
+        <h2>Calibration Gate</h2>
+        <span>{readiness?.status ?? 'loading'}</span>
+      </div>
+      {readiness ? (
+        <div className="prereq-grid">
+          <div>
+            <span>Throughput claim</span>
+            <strong className={readiness.readyForIndustrialThroughputClaims ? 'ready' : 'blocked'}>
+              {readiness.readyForIndustrialThroughputClaims ? 'ready' : 'blocked'}
+            </strong>
+          </div>
+          <div>
+            <span>CAD/vendor/site dimensions</span>
+            <strong>{readiness.calibratedDimensionKeys.length}/{readiness.requiredDimensionKeys.length}</strong>
+          </div>
+          <div>
+            <span>Missing dimensions</span>
+            <strong>{previewCalibrationKeys(readiness.missingDimensionKeys)}</strong>
+          </div>
+          <div>
+            <span>Assumed / low confidence</span>
+            <strong>{readiness.assumedDimensionKeys.length} / {readiness.lowConfidenceDimensionKeys.length}</strong>
+          </div>
+        </div>
+      ) : (
+        <p className="muted">Waiting for scenario calibration profile...</p>
+      )}
+    </section>
+  );
+}
+
 function ValidationPanel({
   validation,
   validating,
@@ -1315,6 +1366,7 @@ export function App() {
         </section>
 
         <PrerequisitePanel report={prerequisites} />
+        <CalibrationPanel scenario={scenario} />
         <ValidationPanel validation={validation} validating={validating} onRun={runValidation} />
       </aside>
 

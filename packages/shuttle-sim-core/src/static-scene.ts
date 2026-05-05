@@ -11,11 +11,35 @@ const DEFAULT_CONNECTOR_TRACK_WIDTH_M = 0.12;
 const DEFAULT_LIFT_PAD_SIZE_X_M = 1.5;
 const DEFAULT_LIFT_PAD_SIZE_Z_M = 1.15;
 
+export const REQUIRED_CALIBRATION_DIMENSION_KEYS = [
+  'storageCellPitchX',
+  'storageCellPitchZ',
+  'storageBayGapX',
+  'mainLaneCenterSpacingZ',
+  'innerStorageBankGapZ',
+  'liftStandoffZ',
+  'sideClearanceX',
+  'palletLength',
+  'palletWidth',
+  'palletHeight',
+  'shuttleLength',
+  'shuttleWidth',
+  'shuttleHeight',
+  'loadedClearance',
+  'liftPadLength',
+  'liftPadWidth',
+  'rollerTransferLength',
+  'rollerTransferWidth',
+  'parkingPadLength',
+  'parkingPadWidth'
+] as const;
+
 export type ShuttleStaticSceneContract = {
   schemaVersion: 'shuttle.simCoreStaticSceneContract.v1';
   scenarioId: string;
   units: 'meter';
   layoutCalibrationProfile: ShuttleStaticSceneLayoutCalibrationProfile | null;
+  calibrationReadiness: ShuttleStaticSceneCalibrationReadiness;
   storageCells: ShuttleStaticSceneStorageCell[];
   blockedCells: ShuttleStaticSceneBlockedCell[];
   trackBeds: ShuttleStaticSceneTrackBed[];
@@ -60,6 +84,18 @@ export type ShuttleStaticSceneContract = {
 
 export type ShuttleStaticSceneLayoutCalibrationProfile = NonNullable<ShuttleScenario['layout']['calibrationProfile']>;
 export type ShuttleStaticSceneBlockedCell = ShuttleStaticSceneLayoutCalibrationProfile['blockedCells'][number];
+
+export type ShuttleStaticSceneCalibrationReadiness = {
+  status: 'missing' | 'assumption' | 'partial-cad' | 'verified';
+  readyForIndustrialThroughputClaims: boolean;
+  requiredDimensionKeys: string[];
+  presentDimensionKeys: string[];
+  calibratedDimensionKeys: string[];
+  assumedDimensionKeys: string[];
+  lowConfidenceDimensionKeys: string[];
+  missingDimensionKeys: string[];
+  message: string;
+};
 
 export type ShuttleStaticSceneStorageCell = {
   id: string;
@@ -234,6 +270,52 @@ function trackCategoryForEdge(
   return Math.abs(to.x - from.x) >= Math.abs(to.z - from.z) ? 'crossAisle' : 'sideAisle';
 }
 
+function summarizeCalibrationReadiness(
+  profile: ShuttleStaticSceneLayoutCalibrationProfile | null
+): ShuttleStaticSceneCalibrationReadiness {
+  const requiredDimensionKeys = [...REQUIRED_CALIBRATION_DIMENSION_KEYS];
+  const dimensions = profile?.dimensions ?? [];
+  const dimensionsByKey = new Map(dimensions.map((dimension) => [dimension.key, dimension]));
+  const presentDimensionKeys = requiredDimensionKeys.filter((key) => dimensionsByKey.has(key));
+  const calibratedDimensionKeys = presentDimensionKeys.filter((key) => {
+    const dimension = dimensionsByKey.get(key);
+    return Boolean(dimension && dimension.source !== 'assumed' && dimension.confidence !== 'low');
+  });
+  const assumedDimensionKeys = presentDimensionKeys.filter((key) => dimensionsByKey.get(key)?.source === 'assumed');
+  const lowConfidenceDimensionKeys = presentDimensionKeys.filter((key) => dimensionsByKey.get(key)?.confidence === 'low');
+  const missingDimensionKeys = requiredDimensionKeys.filter((key) => !dimensionsByKey.has(key));
+  const readyForIndustrialThroughputClaims =
+    profile !== null &&
+    profile.status === 'verified' &&
+    missingDimensionKeys.length === 0 &&
+    assumedDimensionKeys.length === 0 &&
+    lowConfidenceDimensionKeys.length === 0;
+
+  let message = 'Layout dimensions are verified for industrial throughput claims.';
+  if (!profile) {
+    message = 'No layout calibration profile is attached; geometry remains uncalibrated.';
+  } else if (!readyForIndustrialThroughputClaims) {
+    const blockers = [
+      missingDimensionKeys.length > 0 ? `${missingDimensionKeys.length} missing` : null,
+      assumedDimensionKeys.length > 0 ? `${assumedDimensionKeys.length} assumed` : null,
+      lowConfidenceDimensionKeys.length > 0 ? `${lowConfidenceDimensionKeys.length} low-confidence` : null
+    ].filter(Boolean);
+    message = `${profile.status} calibration profile is incomplete${blockers.length > 0 ? ` (${blockers.join(', ')})` : ''}; throughput remains smoke-test only.`;
+  }
+
+  return {
+    status: profile?.status ?? 'missing',
+    readyForIndustrialThroughputClaims,
+    requiredDimensionKeys,
+    presentDimensionKeys,
+    calibratedDimensionKeys,
+    assumedDimensionKeys,
+    lowConfidenceDimensionKeys,
+    missingDimensionKeys,
+    message
+  };
+}
+
 export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario): ShuttleStaticSceneContract {
   const storageNodes = scenario.layout.nodes.filter((node) => node.type === 'storage');
   const blockedCells = sortedById((scenario.layout.calibrationProfile?.blockedCells ?? []).map((cell) => ({
@@ -381,6 +463,7 @@ export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario):
     scenarioId: scenario.id,
     units: scenario.layout.units,
     layoutCalibrationProfile: scenario.layout.calibrationProfile,
+    calibrationReadiness: summarizeCalibrationReadiness(scenario.layout.calibrationProfile),
     storageCells: sortedById(storageCells),
     blockedCells,
     trackBeds: sortedById(trackBeds),

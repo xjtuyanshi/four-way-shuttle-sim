@@ -152,6 +152,10 @@ describe('dashboard static scene contract', () => {
     expect(contract.outboundStorageFlow).toBe('leftPick');
     expect(contract.layoutCalibrationProfile?.id).toBe('phase0-cad-assumption-v1');
     expect(contract.layoutCalibrationProfile?.status).toBe('assumption');
+    expect(contract.calibrationReadiness.status).toBe('assumption');
+    expect(contract.calibrationReadiness.readyForIndustrialThroughputClaims).toBe(false);
+    expect(contract.calibrationReadiness.missingDimensionKeys).toContain('palletLength');
+    expect(contract.calibrationReadiness.missingDimensionKeys).toContain('shuttleLength');
     expect(contract.storageCells).toHaveLength(384);
     expect(contract.blockedCells).toEqual([]);
     expect(contract.blockedCellCount).toBe(0);

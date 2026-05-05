@@ -24,6 +24,7 @@ import {
   type ShuttleLayoutGeometryProfileOverride
 } from './layout-profile.js';
 export type {
+  ShuttleStaticSceneCalibrationReadiness,
   ShuttleStaticSceneContract,
   ShuttleStaticSceneBlockedCell,
   ShuttleStaticSceneLayoutCalibrationProfile,
@@ -32,6 +33,7 @@ export type {
   ShuttleStaticSceneTrackBed,
   ShuttleStaticSceneTrackCategory
 } from './static-scene.js';
+export { REQUIRED_CALIBRATION_DIMENSION_KEYS } from './static-scene.js';
 export {
   DEFAULT_SHUTTLE_LAYOUT_PROFILE,
   createShuttleLayoutProfile,

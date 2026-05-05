@@ -72,6 +72,76 @@
       "Blocked structural cells from the CAD screenshot are not encoded until exact CAD metadata is available."
     ]
   },
+  "calibrationReadiness": {
+    "status": "assumption",
+    "readyForIndustrialThroughputClaims": false,
+    "requiredDimensionKeys": [
+      "storageCellPitchX",
+      "storageCellPitchZ",
+      "storageBayGapX",
+      "mainLaneCenterSpacingZ",
+      "innerStorageBankGapZ",
+      "liftStandoffZ",
+      "sideClearanceX",
+      "palletLength",
+      "palletWidth",
+      "palletHeight",
+      "shuttleLength",
+      "shuttleWidth",
+      "shuttleHeight",
+      "loadedClearance",
+      "liftPadLength",
+      "liftPadWidth",
+      "rollerTransferLength",
+      "rollerTransferWidth",
+      "parkingPadLength",
+      "parkingPadWidth"
+    ],
+    "presentDimensionKeys": [
+      "storageCellPitchX",
+      "storageCellPitchZ",
+      "storageBayGapX",
+      "mainLaneCenterSpacingZ",
+      "innerStorageBankGapZ",
+      "liftStandoffZ",
+      "sideClearanceX"
+    ],
+    "calibratedDimensionKeys": [],
+    "assumedDimensionKeys": [
+      "storageCellPitchX",
+      "storageCellPitchZ",
+      "storageBayGapX",
+      "mainLaneCenterSpacingZ",
+      "innerStorageBankGapZ",
+      "liftStandoffZ",
+      "sideClearanceX"
+    ],
+    "lowConfidenceDimensionKeys": [
+      "storageCellPitchX",
+      "storageCellPitchZ",
+      "storageBayGapX",
+      "mainLaneCenterSpacingZ",
+      "innerStorageBankGapZ",
+      "liftStandoffZ",
+      "sideClearanceX"
+    ],
+    "missingDimensionKeys": [
+      "palletLength",
+      "palletWidth",
+      "palletHeight",
+      "shuttleLength",
+      "shuttleWidth",
+      "shuttleHeight",
+      "loadedClearance",
+      "liftPadLength",
+      "liftPadWidth",
+      "rollerTransferLength",
+      "rollerTransferWidth",
+      "parkingPadLength",
+      "parkingPadWidth"
+    ],
+    "message": "assumption calibration profile is incomplete (13 missing, 7 assumed, 7 low-confidence); throughput remains smoke-test only."
+  },
   "storageCells": [
     {
       "id": "storage-r01-c01",

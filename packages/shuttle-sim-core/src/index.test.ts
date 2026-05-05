@@ -3,6 +3,7 @@ import { ShuttleScenarioSchema, ShuttleSimStateSchema, type ShuttleScenario } fr
 import goldenStaticSceneContract from '../../../config/shuttle/static-scene-contract.golden.json';
 import {
   ShuttleSimCore,
+  REQUIRED_CALIBRATION_DIMENSION_KEYS,
   calculateTravelTimeSec,
   createDefaultShuttleScenario,
   hashEventLog,
@@ -115,6 +116,19 @@ function addStoredLoads(sim: ShuttleSimCore, nodeIds: string[]) {
       weightKg: 100
     });
   });
+}
+
+function verifiedCalibrationDimensions(): NonNullable<ShuttleScenario['layout']['calibrationProfile']>['dimensions'] {
+  const currentAssumptionValues = new Map(
+    createDefaultShuttleScenario().layout.calibrationProfile?.dimensions.map((dimension) => [dimension.key, dimension.valueM])
+  );
+  return REQUIRED_CALIBRATION_DIMENSION_KEYS.map((key) => ({
+    key,
+    label: key,
+    valueM: currentAssumptionValues.get(key) ?? 1,
+    source: 'cad' as const,
+    confidence: 'high' as const
+  }));
 }
 
 describe('shuttle phase 0 SimCore', () => {
@@ -302,8 +316,40 @@ describe('shuttle phase 0 SimCore', () => {
       layoutCalibrationProfile: {
         id: 'phase0-cad-assumption-v1',
         status: 'assumption'
+      },
+      calibrationReadiness: {
+        status: 'assumption',
+        readyForIndustrialThroughputClaims: false
       }
     });
+    expect(contract.calibrationReadiness.requiredDimensionKeys).toEqual([...REQUIRED_CALIBRATION_DIMENSION_KEYS]);
+    expect(contract.calibrationReadiness.presentDimensionKeys).toEqual([
+      'storageCellPitchX',
+      'storageCellPitchZ',
+      'storageBayGapX',
+      'mainLaneCenterSpacingZ',
+      'innerStorageBankGapZ',
+      'liftStandoffZ',
+      'sideClearanceX'
+    ]);
+    expect(contract.calibrationReadiness.assumedDimensionKeys).toContain('storageCellPitchX');
+    expect(contract.calibrationReadiness.lowConfidenceDimensionKeys).toContain('storageCellPitchX');
+    expect(contract.calibrationReadiness.missingDimensionKeys).toEqual([
+      'palletLength',
+      'palletWidth',
+      'palletHeight',
+      'shuttleLength',
+      'shuttleWidth',
+      'shuttleHeight',
+      'loadedClearance',
+      'liftPadLength',
+      'liftPadWidth',
+      'rollerTransferLength',
+      'rollerTransferWidth',
+      'parkingPadLength',
+      'parkingPadWidth'
+    ]);
+    expect(contract.calibrationReadiness.message).toContain('throughput remains smoke-test only');
     expect(contract.storagePitchXM).toBeCloseTo(1.25, 6);
     expect(contract.storagePitchZM).toBeCloseTo(1.2, 6);
     expect(contract.storageBlockMinXM).toBeCloseTo(2.5, 6);
@@ -426,6 +472,30 @@ describe('shuttle phase 0 SimCore', () => {
     });
     expect(contract.storageCells.some((cell) => cell.id === 'cad-blocked-gap-01')).toBe(false);
     expect(contract.trackBeds.some((track) => track.id === 'cad-blocked-gap-01')).toBe(false);
+  });
+
+  it('marks the static scene ready for industrial throughput claims only with a fully verified calibration profile', () => {
+    const contract = summarizeScenarioStaticSceneContract(createDefaultShuttleScenario({
+      layoutProfile: {
+        calibrationProfile: {
+          id: 'verified-calibration-test-profile',
+          label: 'Verified calibration test profile',
+          status: 'verified',
+          sourceDescription: 'Test profile with every required dimension sourced from CAD.',
+          dimensions: verifiedCalibrationDimensions()
+        }
+      }
+    }));
+
+    expect(contract.calibrationReadiness).toMatchObject({
+      status: 'verified',
+      readyForIndustrialThroughputClaims: true,
+      missingDimensionKeys: [],
+      assumedDimensionKeys: [],
+      lowConfidenceDimensionKeys: []
+    });
+    expect(contract.calibrationReadiness.calibratedDimensionKeys).toEqual([...REQUIRED_CALIBRATION_DIMENSION_KEYS]);
+    expect(contract.calibrationReadiness.message).toBe('Layout dimensions are verified for industrial throughput claims.');
   });
 
   it('keeps layout-profile overrides synchronized with calibration metadata and static-scene footprints', () => {

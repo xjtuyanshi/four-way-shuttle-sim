@@ -24,6 +24,8 @@ Current Phase 0 constants remain placeholders:
 
 These placeholders are now encoded in the SimCore default layout calibration profile `phase0-cad-assumption-v1`, exposed through `scenario.layout.calibrationProfile` and the shared static-scene contract. Treat every dimension in that profile as `source: assumed` / `confidence: low` until replaced by CAD/vendor/site measurements.
 
+The static-scene contract also reports `calibrationReadiness`. That gate keeps `readyForIndustrialThroughputClaims=false` until every required layout, pallet, shuttle, lift-pad, roller-transfer, and parking-pad dimension is present with CAD/vendor/site source data and at least medium confidence.
+
 ## Implementation Rules From This Reference
 
 - Draw storage as dense purple track-cell grids with no interior gap inside each island.
@@ -40,4 +42,5 @@ These placeholders are now encoded in the SimCore default layout calibration pro
 - Confirmed storage cell pitch and pallet envelope.
 - Confirmed corridor lane center spacing and clear width.
 - Exact transfer/lift port coordinates and which ports are inbound versus outbound.
+- Confirmed shuttle, pallet/load, lift-pad, roller-transfer, and parking-pad envelopes.
 - Blocked structural cells inside storage islands, if any should be part of the routing graph.
