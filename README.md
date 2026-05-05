@@ -31,7 +31,7 @@ Default local URLs:
 
 Unreal Engine 5.7.4 and full Xcode are installed on the local Mac. Local macOS browser smoke has passed with a generated `PixelStreaming2` render-target capture scene plus the source bridge compile/headless smoke path. Packaged runtime soak and release hardening remain out of scope for Phase 0.
 
-Phase 0 storage policy is a conservative row-level contract, not a full industrial throughput proof: inbound placement spreads work across FIFO rows while preserving contiguous fill inside each row, outbound drains without hidden compaction, stored pallets do not block shuttle pass-through under the load, and all reservation capacities remain fixed at `1`.
+Phase 0 storage policy is a conservative row-level contract, not a full industrial throughput proof: inbound placement spreads work across FIFO rows while preserving contiguous fill inside each row, inbound shuttles back out toward the infeed side after dropoff, outbound drains without hidden compaction, stored pallets do not block shuttle pass-through under the load, and all reservation capacities remain fixed at `1`.
 
 The default physical layout is generated from the assumption-grade calibration profile `phase0-cad-assumption-v1`. That profile is exposed as `scenario.layout.calibrationProfile` and in the static-scene contract so CAD/vendor/site dimensions can replace the placeholder pitch, aisle, lift, and clearance values without moving authority out of SimCore.
 

@@ -1582,6 +1582,11 @@ export class ShuttleSimCore {
     return liftNodeId && this.isLiftPortBusyForAssignment(task.kind, liftNodeId) ? `${task.kind}-lift-busy:${liftNodeId}` : null;
   }
 
+  private liftPortWaitReason(nodeId: string): string | null {
+    const kind = this.liftPortKindForNodeId(nodeId);
+    return kind ? `${kind}-lift-busy:${nodeId}` : null;
+  }
+
   private fifoLaneBlockReason(task: TaskStateRecord): string | null {
     const rowLabel = this.taskStorageRowLabel(task);
     if (!rowLabel) {
@@ -1632,8 +1637,8 @@ export class ShuttleSimCore {
   private planRoute(currentNodeId: string, task: TaskStateRecord, parkingNodeId: string): string[] {
     const route: string[] = [currentNodeId];
     const storageEntrySideNodeId = task.kind === 'inbound' ? this.storageSideNodeId(task.dropoffNodeId, 'right') : this.storageSideNodeId(task.pickupNodeId, 'left');
-    const currentStorageExitNodeId = task.kind === 'inbound' && this.isStorageNode(currentNodeId) ? this.storageSideNodeId(currentNodeId, 'left') : null;
-    const inboundDropoffExitNodeId = task.kind === 'inbound' ? this.storageSideNodeId(task.dropoffNodeId, 'left') : null;
+    const currentStorageExitNodeId = task.kind === 'inbound' && this.isStorageNode(currentNodeId) ? this.nearestStorageSideNodeId(currentNodeId) : null;
+    const inboundDropoffExitNodeId = task.kind === 'inbound' ? this.storageSideNodeId(task.dropoffNodeId, 'right') : null;
     const targets = task.kind === 'inbound'
       ? [currentStorageExitNodeId, task.pickupNodeId, storageEntrySideNodeId, task.dropoffNodeId, inboundDropoffExitNodeId, parkingNodeId]
       : [storageEntrySideNodeId, task.pickupNodeId, storageEntrySideNodeId, task.dropoffNodeId, parkingNodeId];
@@ -1656,6 +1661,20 @@ export class ShuttleSimCore {
     }
     const sideNodeId = `${side}-row-${match[1]}`;
     return this.scenario.layout.nodes.some((node) => node.id === sideNodeId) ? sideNodeId : null;
+  }
+
+  private nearestStorageSideNodeId(storageNodeId: string): string | null {
+    const position = this.storageGridPosition(storageNodeId);
+    if (!position) {
+      return null;
+    }
+    const maxColumn = Math.max(
+      position.column,
+      ...this.scenario.layout.nodes
+        .map((node) => this.storageGridPosition(node.id)?.column ?? 0)
+    );
+    const preferredSide = position.column <= (maxColumn + 1) / 2 ? 'left' : 'right';
+    return this.storageSideNodeId(storageNodeId, preferredSide) ?? this.storageSideNodeId(storageNodeId, preferredSide === 'left' ? 'right' : 'left');
   }
 
   private blockedStorageTransitNodeIds(fromNodeId: string, targetNodeId: string): Set<string> {
@@ -2027,17 +2046,18 @@ export class ShuttleSimCore {
 
     const occupiedTargetId = this.currentNodeOccupancy.get(toNodeId);
     if (occupiedTargetId && occupiedTargetId !== vehicle.id) {
+      const waitReason = this.liftPortWaitReason(toNodeId) ?? 'node-occupied';
       this.reservationConflictCount += 1;
       vehicle.state = 'waiting-blocked';
       vehicle.speedMps = 0;
-      vehicle.waitReason = 'node-occupied';
+      vehicle.waitReason = waitReason;
       vehicle.blockingReservationId = null;
       vehicle.blockingVehicleId = occupiedTargetId;
       vehicle.waitingSinceSec ??= this.simTimeSec;
       vehicle.blockedTimeSec = round(vehicle.blockedTimeSec + dtSec);
       this.ensureZoneHoldReservation(vehicle, fromNodeId);
-      this.blockedTimeByReasonSec.set('node-occupied', round((this.blockedTimeByReasonSec.get('node-occupied') ?? 0) + dtSec));
-      this.logEvent('vehicle-waiting', vehicle.id, vehicle.taskId, null, fromNodeId, toNodeId, 'node-occupied', this.vehiclePosition(vehicle), {
+      this.blockedTimeByReasonSec.set(waitReason, round((this.blockedTimeByReasonSec.get(waitReason) ?? 0) + dtSec));
+      this.logEvent('vehicle-waiting', vehicle.id, vehicle.taskId, null, fromNodeId, toNodeId, waitReason, this.vehiclePosition(vehicle), {
         blockingVehicleId: occupiedTargetId
       });
       return;
@@ -2059,17 +2079,18 @@ export class ShuttleSimCore {
     });
 
     if (!attempt.ok) {
+      const waitReason = this.liftPortWaitReason(toNodeId) ?? attempt.reasonCode;
       this.reservationConflictCount += 1;
       vehicle.state = 'waiting-blocked';
       vehicle.speedMps = 0;
-      vehicle.waitReason = attempt.reasonCode;
+      vehicle.waitReason = waitReason;
       vehicle.blockingReservationId = attempt.blockingReservationId;
       vehicle.blockingVehicleId = null;
       vehicle.waitingSinceSec ??= this.simTimeSec;
       vehicle.blockedTimeSec = round(vehicle.blockedTimeSec + dtSec);
       this.ensureZoneHoldReservation(vehicle, fromNodeId);
-      this.blockedTimeByReasonSec.set(attempt.reasonCode, round((this.blockedTimeByReasonSec.get(attempt.reasonCode) ?? 0) + dtSec));
-      this.logEvent('vehicle-waiting', vehicle.id, vehicle.taskId, null, fromNodeId, toNodeId, attempt.reasonCode, this.vehiclePosition(vehicle), {
+      this.blockedTimeByReasonSec.set(waitReason, round((this.blockedTimeByReasonSec.get(waitReason) ?? 0) + dtSec));
+      this.logEvent('vehicle-waiting', vehicle.id, vehicle.taskId, null, fromNodeId, toNodeId, waitReason, this.vehiclePosition(vehicle), {
         blockingReservationId: attempt.blockingReservationId
       });
       return;

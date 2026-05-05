@@ -67,6 +67,7 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 - Split pallet/load storage occupancy from shuttle node occupancy for storage cells. Beyond the eight dedicated pads, idle shuttles may now use storage cells as temporary under-load parking; inbound slot allocation skips cells currently occupied by a shuttle.
 - Harden storage-area traversal to row-horizontal movement only: storage-to-storage graph edges may not cross FIFO rows, and cross-row moves must route through side/main aisles. Task assignment now selects the nearest idle executable shuttle resource instead of letting the first idle vehicle claim the first queued task.
 - Reworked pressure behavior after the 7200 inbound / 0 outbound / 12-shuttle stress failure: `maxTasks` is now an active backlog cap, the default demo duration is 7200 simulated seconds, inbound storage allocation spreads work across FIFO rows, right-side row-spine movement is constrained to the inbound feed direction, and outbound left-FIFO work is serialized until calibrated passing/escape logic exists.
+- Tightened the row movement contract for under-load parking: a shuttle parked in a storage cell exits by the nearest left/right row-side access, while an inbound dropoff route backs out toward the right/infeed side rather than crossing the whole FIFO row to the outbound side.
 
 ## Next TODO
 

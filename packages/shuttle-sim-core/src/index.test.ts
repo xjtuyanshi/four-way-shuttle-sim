@@ -1094,6 +1094,58 @@ describe('shuttle phase 0 SimCore', () => {
     expect(crossRowStorageHops(route)).toEqual([]);
   });
 
+  it('uses the nearest storage-side exit when an idle shuttle is parked under a load', () => {
+    const scenario = createDefaultShuttleScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      }
+    });
+    scenario.layout.nodes = scenario.layout.nodes.map((node) =>
+      node.type === 'parking' ? { ...node, noParking: true } : node
+    );
+    const sim = new ShuttleSimCore(scenario);
+
+    expect(sim.getState().vehicles[0]?.currentNodeId).toBe('storage-r16-c24');
+    sim.start();
+    sim.step(0.2);
+    const assigned = sim.getEventLog().find((event) => event.eventType === 'task-assigned');
+    const route = String(assigned?.details.route ?? '').split('>');
+
+    expect(route.slice(0, 2)).toEqual(['storage-r16-c24', 'right-row-16']);
+  });
+
+  it('backs out toward the inbound side after an inbound dropoff route instead of crossing to the outbound side', () => {
+    const scenario = createDefaultShuttleScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+
+    sim.start();
+    sim.step(0.2);
+    const assigned = sim.getEventLog().find((event) => event.eventType === 'task-assigned');
+    const route = String(assigned?.details.route ?? '').split('>');
+    const dropoffIndex = route.indexOf('storage-r01-c01');
+    const rightExitIndex = route.indexOf('right-row-01', dropoffIndex);
+    const leftExitAfterDropoffIndex = route.indexOf('left-row-01', dropoffIndex);
+
+    expect(dropoffIndex).toBeGreaterThan(0);
+    expect(route[dropoffIndex + 1]).toBe('storage-r01-c02');
+    expect(rightExitIndex).toBeGreaterThan(dropoffIndex);
+    expect(leftExitAfterDropoffIndex === -1 || leftExitAfterDropoffIndex > rightExitIndex).toBe(true);
+  });
+
   it('routes cross-row storage moves through side aisles instead of vertical storage hops', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       durationSec: 120,
