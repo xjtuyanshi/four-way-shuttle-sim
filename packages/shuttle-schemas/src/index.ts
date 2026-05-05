@@ -168,6 +168,8 @@ export const ShuttleScenarioSchema = z.object({
   trafficPolicy: TrafficPolicySchema
 }).superRefine((scenario, context) => {
   const nodeIds = new Set(scenario.layout.nodes.map((node) => node.id));
+  const nodesById = new Map(scenario.layout.nodes.map((node) => [node.id, node]));
+  const coordinateToleranceM = 1e-6;
   const duplicateNodeIds = scenario.layout.nodes
     .map((node) => node.id)
     .filter((nodeId, index, ids) => ids.indexOf(nodeId) !== index);
@@ -232,6 +234,13 @@ export const ShuttleScenarioSchema = z.object({
     });
   }
   for (const node of scenario.layout.nodes) {
+    if (Math.abs(node.y) > coordinateToleranceM) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['layout', 'nodes', node.id, 'y'],
+        message: 'Phase 0/1 custom layouts are single-floor only; node y must be 0 and lifts remain black-box I/O resources.'
+      });
+    }
     if (node.type === 'lift-blackbox' && !node.liftKind) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
@@ -255,6 +264,24 @@ export const ShuttleScenarioSchema = z.object({
     }
   }
   for (const zone of scenario.layout.zones) {
+    for (const nodeId of zone.nodeIds) {
+      if (!nodeIds.has(nodeId)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['layout', 'zones', zone.id, 'nodeIds'],
+          message: `Zone ${zone.id} references unknown node ${nodeId}.`
+        });
+      }
+    }
+    for (const edgeId of zone.edgeIds) {
+      if (!scenario.layout.edges.some((edge) => edge.id === edgeId)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['layout', 'zones', zone.id, 'edgeIds'],
+          message: `Zone ${zone.id} references unknown edge ${edgeId}.`
+        });
+      }
+    }
     if (zone.capacity !== 1) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
@@ -264,19 +291,47 @@ export const ShuttleScenarioSchema = z.object({
     }
   }
   for (const edge of scenario.layout.edges) {
-    if (!nodeIds.has(edge.from)) {
+    const from = nodesById.get(edge.from);
+    const to = nodesById.get(edge.to);
+    if (!from) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['layout', 'edges', edge.id, 'from'],
         message: `Unknown edge from node ${edge.from}`
       });
     }
-    if (!nodeIds.has(edge.to)) {
+    if (!to) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['layout', 'edges', edge.id, 'to'],
         message: `Unknown edge to node ${edge.to}`
       });
+    }
+    if (from && to) {
+      const dx = Math.abs(from.x - to.x);
+      const dy = Math.abs(from.y - to.y);
+      const dz = Math.abs(from.z - to.z);
+      if (dy > coordinateToleranceM) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['layout', 'edges', edge.id],
+          message: `Edge ${edge.id} changes vertical level; Phase 0/1 models one floor and treats lifts as black-box I/O.`
+        });
+      }
+      if (dx > coordinateToleranceM && dz > coordinateToleranceM) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['layout', 'edges', edge.id],
+          message: `Edge ${edge.id} is diagonal; four-way shuttle layouts must use orthogonal X/Z track edges only.`
+        });
+      }
+      if (dx <= coordinateToleranceM && dy <= coordinateToleranceM && dz <= coordinateToleranceM) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['layout', 'edges', edge.id],
+          message: `Edge ${edge.id} has identical from/to coordinates; custom layouts must define a physical track segment.`
+        });
+      }
     }
   }
 });

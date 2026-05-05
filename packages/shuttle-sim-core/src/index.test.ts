@@ -214,6 +214,59 @@ describe('shuttle phase 0 SimCore', () => {
     expect(scenario.layout.edges.some((edge) => edge.id === 'outbound-lift-bottom-02-main-south-03')).toBe(true);
   });
 
+  it('rejects diagonal or multi-level custom layout edges', () => {
+    const scenario = createDefaultShuttleScenario();
+
+    expect(() =>
+      ShuttleScenarioSchema.parse({
+        ...scenario,
+        layout: {
+          ...scenario.layout,
+          nodes: scenario.layout.nodes.map((node) =>
+            node.id === 'main-south-01' ? { ...node, x: node.x + 0.4 } : node
+          )
+        }
+      })
+    ).toThrow(/diagonal/);
+
+    expect(() =>
+      ShuttleScenarioSchema.parse({
+        ...scenario,
+        layout: {
+          ...scenario.layout,
+          nodes: scenario.layout.nodes.map((node) =>
+            node.id === 'main-south-01' ? { ...node, y: 1.2 } : node
+          )
+        }
+      })
+    ).toThrow(/single-floor/);
+  });
+
+  it('rejects zones that reference unknown graph resources', () => {
+    const scenario = createDefaultShuttleScenario();
+
+    expect(() =>
+      ShuttleScenarioSchema.parse({
+        ...scenario,
+        layout: {
+          ...scenario.layout,
+          zones: [
+            ...scenario.layout.zones,
+            {
+              id: 'bad-zone',
+              type: 'intersection',
+              nodeIds: ['missing-node'],
+              edgeIds: ['missing-edge'],
+              noStop: true,
+              noParking: true,
+              capacity: 1
+            }
+          ]
+        }
+      })
+    ).toThrow(/references unknown node missing-node/);
+  });
+
   it('summarizes the default layout contract used by the Unreal static scaffold', () => {
     const contract = summarizeScenarioStaticSceneContract(createDefaultShuttleScenario());
 
@@ -790,16 +843,20 @@ describe('shuttle phase 0 SimCore', () => {
           { id: 'left-row-01', type: 'aisle', x: 1, y: 0, z: -1, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
           { id: 'storage-r01-c01', type: 'storage', x: 2, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
           { id: 'storage-r01-c02', type: 'storage', x: 3, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
-          { id: 'right-row-01', type: 'aisle', x: 4, y: 0, z: -1, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
-          { id: 'bypass', type: 'aisle', x: 2, y: 0, z: 2, noStop: false, noParking: true, capacity: 1, allowedDirections: [] }
+          { id: 'right-row-entry', type: 'aisle', x: 1, y: 0, z: -1, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'right-row-01', type: 'aisle', x: 3, y: 0, z: -1, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'bypass-entry', type: 'aisle', x: 1, y: 0, z: 2, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'bypass', type: 'aisle', x: 3, y: 0, z: 2, noStop: false, noParking: true, capacity: 1, allowedDirections: [] }
         ],
         edges: [
           { id: 'parking-a-inbound-lift-test', from: 'parking-a', to: 'inbound-lift-test', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'parking-lift', noParking: true },
           { id: 'inbound-lift-test-storage-r01-c01', from: 'inbound-lift-test', to: 'storage-r01-c01', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'blocked-storage-path', noParking: true },
           { id: 'storage-r01-c01-storage-r01-c02', from: 'storage-r01-c01', to: 'storage-r01-c02', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'blocked-storage-path', noParking: true },
-          { id: 'inbound-lift-test-right-row-01', from: 'inbound-lift-test', to: 'right-row-01', lengthM: 3, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'right-row-access', noParking: true },
+          { id: 'inbound-lift-test-right-row-entry', from: 'inbound-lift-test', to: 'right-row-entry', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'right-row-access', noParking: true },
+          { id: 'right-row-entry-right-row-01', from: 'right-row-entry', to: 'right-row-01', lengthM: 2, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'right-row-access', noParking: true },
           { id: 'right-row-01-storage-r01-c02', from: 'right-row-01', to: 'storage-r01-c02', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'right-row-access', noParking: true },
-          { id: 'inbound-lift-test-bypass', from: 'inbound-lift-test', to: 'bypass', lengthM: 2, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'storage-bypass', noParking: true },
+          { id: 'inbound-lift-test-bypass-entry', from: 'inbound-lift-test', to: 'bypass-entry', lengthM: 2, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'storage-bypass', noParking: true },
+          { id: 'bypass-entry-bypass', from: 'bypass-entry', to: 'bypass', lengthM: 2, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'storage-bypass', noParking: true },
           { id: 'bypass-storage-r01-c02', from: 'bypass', to: 'storage-r01-c02', lengthM: 2, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'storage-bypass', noParking: true }
         ],
         zones: []
@@ -1295,14 +1352,14 @@ describe('shuttle phase 0 SimCore', () => {
         calibrationProfile: null,
         nodes: [
           { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
-          { id: 'B', type: 'parking', x: 0, y: 0, z: 4, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'B', type: 'parking', x: 4, y: 0, z: 4, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
           { id: 'X', type: 'intersection', x: 4, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
           { id: 'C', type: 'parking', x: 8, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
         ],
         edges: [
           { id: 'A-X', from: 'A', to: 'X', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'west', noParking: true },
           { id: 'X-C', from: 'X', to: 'C', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'east', noParking: true },
-          { id: 'B-X', from: 'B', to: 'X', lengthM: 5.66, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'north', noParking: true }
+          { id: 'B-X', from: 'B', to: 'X', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'north', noParking: true }
         ],
         zones: [{ id: 'zone-x', type: 'intersection', nodeIds: ['X'], edgeIds: ['A-X', 'X-C', 'B-X'], noStop: true, noParking: true, capacity: 1, conflictGroup: 'zone-x' }]
       }

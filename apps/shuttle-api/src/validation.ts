@@ -195,13 +195,19 @@ const RESERVATION_COVERAGE_CODES: PhysicalViolationCode[] = [
   'nodeOccupancyMismatch',
   'edgeOccupancyMismatch'
 ];
+const LONG_RUN_TOTAL_THROUGHPUT_FLOOR_RATIO = 0.5;
+const LONG_RUN_SIDE_THROUGHPUT_FLOOR_RATIO = 1 / 3;
+
+function sideThroughputFloor(requestedPph: number): number {
+  return requestedPph > 0 ? round(Math.max(1, requestedPph * LONG_RUN_SIDE_THROUGHPUT_FLOOR_RATIO), 1) : 0;
+}
 
 function defaultLongRunThresholds(scenario: ShuttleScenario): LongRunAcceptanceThresholds {
   const requestedPph = scenario.taskGeneration.inboundRatePerHour + scenario.taskGeneration.outboundRatePerHour;
   return {
-    minTotalPph: round(Math.max(1, requestedPph * 0.5), 1),
-    minInboundPph: scenario.taskGeneration.inboundRatePerHour > 0 ? 1 : 0,
-    minOutboundPph: scenario.taskGeneration.outboundRatePerHour > 0 ? 1 : 0,
+    minTotalPph: round(Math.max(1, requestedPph * LONG_RUN_TOTAL_THROUGHPUT_FLOOR_RATIO), 1),
+    minInboundPph: sideThroughputFloor(scenario.taskGeneration.inboundRatePerHour),
+    minOutboundPph: sideThroughputFloor(scenario.taskGeneration.outboundRatePerHour),
     maxQueuedTasks: Math.max(scenario.vehicles.count * 6, Math.ceil(scenario.taskGeneration.maxTasks * 0.5)),
     maxWaitingVehicles: scenario.vehicles.count,
     maxLiftPortQueueLength: Math.max(1, scenario.vehicles.count * 3)

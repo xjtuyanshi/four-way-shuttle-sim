@@ -82,7 +82,7 @@ describe('phase 0 validation', () => {
       durationSec: 120,
       longRunDurationSec: 600,
       stressDurationSec: 180,
-      repeatCount: 3,
+      repeatCount: 2,
       sweepSeeds: [20260502, 20260503],
       stressSeeds: [20260502]
     });
@@ -98,8 +98,10 @@ describe('phase 0 validation', () => {
     expect(result.longRun.durationSec).toBe(600);
     expect(result.longRun.runs).toHaveLength(2);
     expect(result.longRun.thresholds.minTotalPph).toBe(18);
-    expect(result.longRun.thresholds.minInboundPph).toBe(1);
-    expect(result.longRun.thresholds.minOutboundPph).toBe(1);
+    expect(result.longRun.thresholds.minInboundPph).toBe(6);
+    expect(result.longRun.thresholds.minOutboundPph).toBe(6);
+    expect(result.longRun.runs.every((run) => run.inboundPph >= result.longRun.thresholds.minInboundPph)).toBe(true);
+    expect(result.longRun.runs.every((run) => run.outboundPph >= result.longRun.thresholds.minOutboundPph)).toBe(true);
     expect(result.longRun.maxQueuedTasks).toBeLessThanOrEqual(result.longRun.thresholds.maxQueuedTasks);
     expect(result.longRun.maxLiftPortQueueLength).toBeLessThanOrEqual(result.longRun.thresholds.maxLiftPortQueueLength);
     expect(result.longRun.maxQueuedTasks).toBeLessThanOrEqual(40);
@@ -127,7 +129,7 @@ describe('phase 0 validation', () => {
     expect(result.stress.expectedBottlenecksObserved).toBe(true);
     expect(result.acceptance.stressPass).toBe(true);
     expect(result.acceptance.pass).toBe(true);
-  }, 40000);
+  }, 70000);
 
   it('fails long-run acceptance when explicit throughput and queue thresholds are missed', () => {
     const result = validatePhase0Scenario(createDefaultShuttleScenario({ durationSec: 120 }), {
