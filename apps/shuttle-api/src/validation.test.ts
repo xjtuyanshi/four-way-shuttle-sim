@@ -61,12 +61,27 @@ function putVehicleOnMainEntryEdge(
   });
 }
 
+function putStoppedVehicleOnPortalNode(candidate: InspectionFixture): void {
+  const vehicle = candidate.state.vehicles[0]!;
+  const portalNode = node(candidate.scenario, 'main-south-01');
+  vehicle.state = 'waiting-blocked';
+  vehicle.currentNodeId = portalNode.id;
+  vehicle.currentEdgeId = null;
+  vehicle.targetNodeId = null;
+  vehicle.x = portalNode.x;
+  vehicle.z = portalNode.z;
+  vehicle.speedMps = 0;
+  vehicle.waitReason = 'edge-reserved';
+  candidate.debug.currentNodeOccupancy = [{ nodeId: portalNode.id, vehicleId: vehicle.id }];
+  candidate.state.reservations = [];
+}
+
 describe('phase 0 validation', () => {
   it('checks same-seed hash stability and seed sweep health', () => {
     const result = validatePhase0Scenario(createDefaultShuttleScenario({ durationSec: 120 }), {
       durationSec: 120,
       longRunDurationSec: 600,
-      stressDurationSec: 120,
+      stressDurationSec: 180,
       repeatCount: 3,
       sweepSeeds: [20260502, 20260503],
       stressSeeds: [20260502]
@@ -83,12 +98,15 @@ describe('phase 0 validation', () => {
     expect(result.longRun.durationSec).toBe(600);
     expect(result.longRun.runs).toHaveLength(2);
     expect(result.longRun.thresholds.minTotalPph).toBe(18);
+    expect(result.longRun.thresholds.minInboundPph).toBe(1);
+    expect(result.longRun.thresholds.minOutboundPph).toBe(1);
     expect(result.longRun.maxQueuedTasks).toBeLessThanOrEqual(result.longRun.thresholds.maxQueuedTasks);
     expect(result.longRun.maxLiftPortQueueLength).toBeLessThanOrEqual(result.longRun.thresholds.maxLiftPortQueueLength);
     expect(result.longRun.maxQueuedTasks).toBeLessThanOrEqual(40);
     expect(result.acceptance.longRunEventLogsPresent).toBe(true);
     expect(result.acceptance.longRunThroughputPositive).toBe(true);
     expect(result.acceptance.longRunThroughputFloorMet).toBe(true);
+    expect(result.acceptance.longRunThroughputBySideMet).toBe(true);
     expect(result.acceptance.longRunQueuesBounded).toBe(true);
     expect(result.acceptance.noLongRunPhysicalSafetyViolations).toBe(true);
     expect(result.stress.scenarios.map((scenario) => scenario.id)).toEqual([
@@ -100,6 +118,9 @@ describe('phase 0 validation', () => {
     ]);
     expect(result.stress.scenarios.every((scenario) => scenario.runs.length === 1)).toBe(true);
     expect(result.stress.scenarios.every((scenario) => scenario.observedBottleneckReasons.length > 0)).toBe(true);
+    expect(result.stress.scenarios.every((scenario) =>
+      scenario.runs.every((run) => run.missingExpectedBottleneckReasonPrefixes.length === 0)
+    )).toBe(true);
     expect(result.stress.noStressDeadlocks).toBe(true);
     expect(result.stress.noStressPhysicalSafetyViolations).toBe(true);
     expect(result.stress.noStressReservationCoverageViolations).toBe(true);
@@ -125,6 +146,7 @@ describe('phase 0 validation', () => {
 
     expect(result.acceptance.longRunThroughputPositive).toBe(true);
     expect(result.acceptance.longRunThroughputFloorMet).toBe(false);
+    expect(result.acceptance.longRunThroughputBySideMet).toBe(false);
     expect(result.acceptance.longRunQueuesBounded).toBe(false);
     expect(result.acceptance.pass).toBe(false);
   });
@@ -141,6 +163,10 @@ describe('phase 0 validation', () => {
     {
       code: 'unreservedZoneOccupancy',
       mutate: (candidate: InspectionFixture) => putVehicleOnMainEntryEdge(candidate, ['edge', 'node'])
+    },
+    {
+      code: 'unreservedZoneOccupancy',
+      mutate: putStoppedVehicleOnPortalNode
     },
     {
       code: 'nodeOccupancyMismatch',

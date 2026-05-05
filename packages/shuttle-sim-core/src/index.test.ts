@@ -646,6 +646,62 @@ describe('shuttle phase 0 SimCore', () => {
     expect(sim.getDebugState().currentNodeOccupancy).toContainEqual({ nodeId: 'main-north-03', vehicleId: 'SH-02' });
   });
 
+  it('keeps a stopped portal-node occupant holding the portal zone', () => {
+    const scenario = createDefaultShuttleScenario({
+      durationSec: 20,
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2
+      },
+      physicsParams: {
+        emptySpeedMps: 2.6,
+        loadedSpeedMps: 2.2,
+        accelerationMps2: 2,
+        switchDirectionSec: 0,
+        liftTimeSec: 0.5,
+        lowerTimeSec: 0.5,
+        loadedClearanceM: 0.2,
+        reservationClearanceSec: 0.1
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addReservationForTest({
+      resourceType: 'edge',
+      resourceId: 'main-north-01-main-north-02',
+      vehicleId: 'external-blocker',
+      taskId: null,
+      startTimeSec: 0,
+      endTimeSec: 60,
+      priority: 0,
+      conflictGroup: null,
+      reasonCode: 'test-block'
+    });
+    sim.setVehicleRouteForTest('SH-01', ['main-north-02', 'main-north-01']);
+
+    sim.step(0.2);
+
+    expect(sim.getState().vehicles.find((vehicle) => vehicle.id === 'SH-01')).toMatchObject({
+      currentNodeId: 'main-north-02',
+      currentEdgeId: null,
+      waitReason: 'edge-reserved'
+    });
+    expect(sim.getState().reservations).toContainEqual(
+      expect.objectContaining({ vehicleId: 'SH-01', resourceType: 'zone', resourceId: 'zone-main-portal-node-02', reasonCode: 'zone-hold' })
+    );
+
+    sim.setVehicleRouteForTest('SH-02', ['outbound-lift-top-01', 'main-south-02']);
+    sim.step(0.2);
+
+    expect(sim.getState().vehicles.find((vehicle) => vehicle.id === 'SH-02')).toMatchObject({
+      state: 'waiting-blocked',
+      waitReason: 'zone-reserved',
+      currentNodeId: 'outbound-lift-top-01'
+    });
+  });
+
   it('defers outbound work instead of creating phantom pallets when contiguous lane-fill storage is empty', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       durationSec: 10,
@@ -1136,6 +1192,66 @@ describe('shuttle phase 0 SimCore', () => {
       x: 4,
       z: 4
     });
+  });
+
+  it('adds direction-switch dwell for orthogonal moves without rotating the shuttle body', () => {
+    const scenario = testScenario({
+      durationSec: 40,
+      physicsParams: {
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1,
+        accelerationMps2: 2,
+        switchDirectionSec: 1,
+        liftTimeSec: 0,
+        lowerTimeSec: 0,
+        loadedClearanceM: 0.2,
+        reservationClearanceSec: 0.2
+      },
+      layout: {
+        units: 'meter',
+        calibrationProfile: null,
+        nodes: [
+          { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'P', type: 'parking', x: -4, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'B', type: 'aisle', x: 4, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'C', type: 'aisle', x: 4, y: 0, z: 4, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'D', type: 'aisle', x: 8, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] }
+        ],
+        edges: [
+          { id: 'A-B', from: 'A', to: 'B', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'A-B', noParking: true },
+          { id: 'B-C', from: 'B', to: 'C', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'B-C', noParking: true },
+          { id: 'B-D', from: 'B', to: 'D', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'B-D', noParking: true }
+        ],
+        zones: []
+      }
+    });
+    const turningSim = new ShuttleSimCore(scenario);
+    turningSim.setVehicleRouteForTest('SH-01', ['A', 'B', 'C']);
+
+    for (let index = 0; index < 20; index += 1) {
+      turningSim.step(0.2);
+    }
+
+    const dwellVehicle = turningSim.getState().vehicles.find((vehicle) => vehicle.id === 'SH-01');
+    expect(dwellVehicle).toMatchObject({
+      currentNodeId: 'B',
+      currentEdgeId: null,
+      yaw: 0
+    });
+    expect(dwellVehicle?.phaseRemainingSec ?? 0).toBeGreaterThan(0);
+    expect(turningSim.getEventLog().some((entry) => entry.eventType === 'direction-switch-started')).toBe(true);
+
+    for (let index = 0; index < 8; index += 1) {
+      turningSim.step(0.2);
+    }
+    expect(turningSim.getState().vehicles.find((vehicle) => vehicle.id === 'SH-01')?.currentEdgeId).toBe('B-C');
+
+    const straightSim = new ShuttleSimCore(scenario);
+    straightSim.setVehicleRouteForTest('SH-01', ['A', 'B', 'D']);
+    for (let index = 0; index < 28; index += 1) {
+      straightSim.step(0.2);
+    }
+    expect(straightSim.getEventLog().some((entry) => entry.eventType === 'direction-switch-started')).toBe(false);
   });
 
   it('blocks opposite-direction same-edge movement with an active edge reservation', () => {

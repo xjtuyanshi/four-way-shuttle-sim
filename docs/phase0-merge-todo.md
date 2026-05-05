@@ -42,6 +42,13 @@ Scope: keep the current public `main` merge-ready without adding product feature
 - Verdict before final merge: merge-ready for the stated Phase 0 claims.
 - Unreal bridge compile/headless smoke, live bridge smoke, staged Mac runtime generation, and local browser Pixel Streaming smokes are verified on this machine. The 30-minute soak and release hardening remain Phase 1 work after the calibrated visual scene is ready.
 
+## Commit 717858e Pro Follow-Up
+
+- ChatGPT Pro reviewed commit `717858e` and returned `merge after fixes`.
+- Local hardening now addresses the actionable findings: stopped portal-node zone holds, storage-row connector portal conflicts, `switchDirectionSec` dwell without vehicle body rotation, all-expected-bottleneck stress assertions, by-side long-run throughput acceptance, and defensive Unreal parsing for unknown vehicle state strings.
+- Full verification plus WebSocket, Unreal, and browser smoke passed locally after these fixes.
+- A new Pro re-review should be sent only after action-time confirmation.
+
 ## Merge-Blocking TODO
 
 - Keep `currentNodeOccupancy` and reservation coverage as the authoritative traffic-control invariant.

@@ -60,6 +60,7 @@ export type Phase0StressRun = Phase0ValidationRun & {
   expectedBottleneckReasonPrefixes: string[];
   observedBottleneckReasons: string[];
   expectedBottleneckObserved: boolean;
+  missingExpectedBottleneckReasonPrefixes: string[];
 };
 
 export type Phase0StressScenarioResult = {
@@ -84,6 +85,8 @@ export type Phase0StressScenarioResult = {
 
 export type LongRunAcceptanceThresholds = {
   minTotalPph: number;
+  minInboundPph: number;
+  minOutboundPph: number;
   maxQueuedTasks: number;
   maxWaitingVehicles: number;
   maxLiftPortQueueLength: number;
@@ -137,6 +140,7 @@ export type Phase0ValidationResult = {
     longRunEventLogsPresent: boolean;
     longRunThroughputPositive: boolean;
     longRunThroughputFloorMet: boolean;
+    longRunThroughputBySideMet: boolean;
     longRunQueuesBounded: boolean;
     noLongRunDeadlocks: boolean;
     noLongRunPhysicalSafetyViolations: boolean;
@@ -196,6 +200,8 @@ function defaultLongRunThresholds(scenario: ShuttleScenario): LongRunAcceptanceT
   const requestedPph = scenario.taskGeneration.inboundRatePerHour + scenario.taskGeneration.outboundRatePerHour;
   return {
     minTotalPph: round(Math.max(1, requestedPph * 0.5), 1),
+    minInboundPph: scenario.taskGeneration.inboundRatePerHour > 0 ? 1 : 0,
+    minOutboundPph: scenario.taskGeneration.outboundRatePerHour > 0 ? 1 : 0,
     maxQueuedTasks: Math.max(scenario.vehicles.count * 6, Math.ceil(scenario.taskGeneration.maxTasks * 0.5)),
     maxWaitingVehicles: scenario.vehicles.count,
     maxLiftPortQueueLength: Math.max(1, scenario.vehicles.count * 3)
@@ -286,7 +292,7 @@ function buildStressScenarioSpecs(baseScenario: ShuttleScenario): Phase0StressSc
         }
       }),
       initialStoredNodeIds: [],
-      expectedBottleneckReasonPrefixes: ['storage-empty', 'fifo-', 'inbound-lift-busy:', 'outbound-lift-busy:'],
+      expectedBottleneckReasonPrefixes: ['storage-empty', 'fifo-', 'inbound-lift-busy:'],
       requiresPositiveThroughput: true
     },
     {
@@ -465,10 +471,12 @@ function zonesForVehicle(scenario: ShuttleScenario, vehicle: VehicleState): Shut
     if (vehicle.currentEdgeId && zone.edgeIds.includes(vehicle.currentEdgeId)) {
       return true;
     }
-    if (vehicle.currentEdgeId && zone.nodeIds.includes(vehicle.currentNodeId)) {
+    const zoneAppliesToCurrentEdge =
+      vehicle.currentEdgeId && (zone.edgeIds.length === 0 || zone.edgeIds.includes(vehicle.currentEdgeId));
+    if (zoneAppliesToCurrentEdge && zone.nodeIds.includes(vehicle.currentNodeId)) {
       return true;
     }
-    if (vehicle.currentEdgeId && vehicle.targetNodeId && zone.nodeIds.includes(vehicle.targetNodeId)) {
+    if (zoneAppliesToCurrentEdge && vehicle.targetNodeId && zone.nodeIds.includes(vehicle.targetNodeId)) {
       return true;
     }
     return !vehicle.currentEdgeId && zone.nodeIds.includes(vehicle.currentNodeId);
@@ -752,12 +760,9 @@ function observedBottleneckReasons(run: Phase0ValidationRun): string[] {
     .sort((left, right) => left.localeCompare(right));
 }
 
-function hasExpectedBottleneck(run: Phase0ValidationRun, expectedPrefixes: string[]): boolean {
-  if (expectedPrefixes.length === 0) {
-    return true;
-  }
+function missingExpectedBottleneckPrefixes(run: Phase0ValidationRun, expectedPrefixes: string[]): string[] {
   const observed = observedBottleneckReasons(run);
-  return expectedPrefixes.some((prefix) => observed.some((reason) => reason.startsWith(prefix)));
+  return expectedPrefixes.filter((prefix) => !observed.some((reason) => reason.startsWith(prefix)));
 }
 
 function hasReservationCoverageViolation(run: Phase0ValidationRun): boolean {
@@ -838,6 +843,7 @@ function runStressOnce(
   };
 
   const observed = observedBottleneckReasons(baseRun);
+  const missingExpected = missingExpectedBottleneckPrefixes(baseRun, spec.expectedBottleneckReasonPrefixes);
   return {
     ...baseRun,
     stressScenarioId: spec.id,
@@ -848,7 +854,8 @@ function runStressOnce(
     achievedTotalRatio: requestedTotalPph > 0 ? round(state.kpis.totalPph / requestedTotalPph, 6) : null,
     expectedBottleneckReasonPrefixes: spec.expectedBottleneckReasonPrefixes,
     observedBottleneckReasons: observed,
-    expectedBottleneckObserved: hasExpectedBottleneck(baseRun, spec.expectedBottleneckReasonPrefixes)
+    expectedBottleneckObserved: missingExpected.length === 0,
+    missingExpectedBottleneckReasonPrefixes: missingExpected
   };
 }
 
@@ -977,6 +984,11 @@ export function validatePhase0Scenario(
   const longRunThroughputFloorMet = longRunRuns.every(
     (run) => run.completedInbound + run.completedOutbound > 0 && run.totalPph >= longRunThresholds.minTotalPph
   );
+  const longRunThroughputBySideMet = longRunRuns.every(
+    (run) =>
+      (scenario.taskGeneration.inboundRatePerHour <= 0 || (run.completedInbound > 0 && run.inboundPph >= longRunThresholds.minInboundPph)) &&
+      (scenario.taskGeneration.outboundRatePerHour <= 0 || (run.completedOutbound > 0 && run.outboundPph >= longRunThresholds.minOutboundPph))
+  );
   const longRunQueuesBounded = longRunRuns.every(
     (run) =>
       run.maxQueuedTasks <= longRunThresholds.maxQueuedTasks &&
@@ -1027,6 +1039,7 @@ export function validatePhase0Scenario(
       longRunEventLogsPresent,
       longRunThroughputPositive,
       longRunThroughputFloorMet,
+      longRunThroughputBySideMet,
       longRunQueuesBounded,
       noLongRunDeadlocks,
       noLongRunPhysicalSafetyViolations,
@@ -1046,6 +1059,7 @@ export function validatePhase0Scenario(
         longRunEventLogsPresent &&
         longRunThroughputPositive &&
         longRunThroughputFloorMet &&
+        longRunThroughputBySideMet &&
         longRunQueuesBounded &&
         noLongRunDeadlocks &&
         noLongRunPhysicalSafetyViolations &&

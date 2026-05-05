@@ -44,6 +44,8 @@ type RuntimeStatus = ShuttleSimState['status'];
 type MutableVehicle = VehicleState & {
   targetSpeedMps: number;
   waitingSinceSec: number | null;
+  lastMovementAxis: 'x' | 'z' | null;
+  directionSwitchReadyNodeId: string | null;
 };
 
 type SetParamResult = {
@@ -531,16 +533,6 @@ function createDefaultLayout(profile: ShuttleLayoutGeometryProfile = DEFAULT_SHU
       const portalNodeIdSet = new Set(portalNodeIds);
       const portalEdgeIds = edges
         .filter((edge) => portalNodeIdSet.has(edge.from) || portalNodeIdSet.has(edge.to))
-        .filter((edge) => {
-          const otherNodeId = portalNodeIdSet.has(edge.from) ? edge.to : edge.from;
-          const otherNode = nodesById.get(otherNodeId);
-          return (
-            otherNode?.type === 'lift-blackbox' ||
-            otherNodeId.startsWith('main-north-') ||
-            otherNodeId.startsWith('main-south-') ||
-            edge.id === `${mainLaneNodeId('north', index)}-${mainLaneNodeId('south', index)}`
-          );
-        })
         .map((edge) => edge.id)
         .sort((left, right) => left.localeCompare(right));
       return {
@@ -552,6 +544,32 @@ function createDefaultLayout(profile: ShuttleLayoutGeometryProfile = DEFAULT_SHU
         noParking: true,
         capacity: 1,
         conflictGroup: `intersection-main-portal-${String(index).padStart(2, '0')}`
+      };
+    }),
+    ...mainXs.map((_, index) => {
+      const portalNodeIds = [mainLaneNodeId('north', index), mainLaneNodeId('south', index)];
+      const portalNodeIdSet = new Set(portalNodeIds);
+      const portalLiftEdgeIds = edges
+        .filter((edge) => portalNodeIdSet.has(edge.from) || portalNodeIdSet.has(edge.to))
+        .filter((edge) => {
+          const otherNodeId = portalNodeIdSet.has(edge.from) ? edge.to : edge.from;
+          const otherNode = nodesById.get(otherNodeId);
+          return (
+            otherNode?.type === 'lift-blackbox' ||
+            edge.id === `${mainLaneNodeId('north', index)}-${mainLaneNodeId('south', index)}`
+          );
+        })
+        .map((edge) => edge.id)
+        .sort((left, right) => left.localeCompare(right));
+      return {
+        id: `zone-main-portal-node-${String(index).padStart(2, '0')}`,
+        type: 'intersection' as const,
+        nodeIds: portalNodeIds,
+        edgeIds: portalLiftEdgeIds,
+        noStop: true,
+        noParking: true,
+        capacity: 1,
+        conflictGroup: `intersection-main-portal-node-${String(index).padStart(2, '0')}`
       };
     })
   ];
@@ -656,8 +674,14 @@ class TrafficReservationController {
     }
 
     const endTimeSec = options.startTimeSec + options.travelSec + this.scenario.trafficPolicy.minimumClearanceSec;
-    const currentNodeZones = this.scenario.layout.zones.filter((candidate) => candidate.nodeIds.includes(options.fromNodeId));
-    const targetNodeZones = this.scenario.layout.zones.filter((candidate) => candidate.nodeIds.includes(options.toNodeId));
+    const nodeZonesForEdge = (nodeId: string) =>
+      this.scenario.layout.zones.filter(
+        (candidate) =>
+          candidate.nodeIds.includes(nodeId) &&
+          (candidate.edgeIds.length === 0 || candidate.edgeIds.includes(edge.id))
+      );
+    const currentNodeZones = nodeZonesForEdge(options.fromNodeId);
+    const targetNodeZones = nodeZonesForEdge(options.toNodeId);
     const matchingZones = [
       ...this.scenario.layout.zones.filter((candidate) => candidate.edgeIds.includes(edge.id)),
       ...currentNodeZones,
@@ -864,7 +888,9 @@ export class ShuttleSimCore {
         idleTimeSec: 0,
         busyTimeSec: 0,
         targetSpeedMps: 0,
-        waitingSinceSec: null
+        waitingSinceSec: null,
+        lastMovementAxis: null,
+        directionSwitchReadyNodeId: null
       };
     });
     for (const vehicle of this.vehicles) {
@@ -1028,7 +1054,7 @@ export class ShuttleSimCore {
     for (const [nodeId, occupantId] of [...this.currentNodeOccupancy.entries()]) {
       if (occupantId === vehicle.id) {
         this.currentNodeOccupancy.delete(nodeId);
-        this.releaseZoneHoldReservations(vehicle, nodeId);
+        this.releaseZoneHoldReservations(vehicle);
       }
     }
     const startPosition = nodePosition(this.scenario, routeNodeIds[0]!);
@@ -1053,6 +1079,8 @@ export class ShuttleSimCore {
     vehicle.blockingVehicleId = null;
     vehicle.waitingSinceSec = null;
     vehicle.targetSpeedMps = 0;
+    vehicle.lastMovementAxis = null;
+    vehicle.directionSwitchReadyNodeId = null;
     vehicle.state = routeNodeIds.length > 1 ? 'assigned' : 'idle';
     this.currentNodeOccupancy.set(vehicle.currentNodeId, vehicle.id);
     this.ensureZoneHoldReservation(vehicle, vehicle.currentNodeId);
@@ -1367,6 +1395,7 @@ export class ShuttleSimCore {
       vehicle.waitReason = null;
       vehicle.blockingReservationId = null;
       vehicle.blockingVehicleId = null;
+      vehicle.directionSwitchReadyNodeId = null;
       task.state = 'assigned';
       task.vehicleId = vehicle.id;
       task.assignedAtSec = this.simTimeSec;
@@ -1587,11 +1616,22 @@ export class ShuttleSimCore {
     return this.scenario.layout.zones.filter((zone) => zone.nodeIds.includes(nodeId));
   }
 
+  private axisForEdge(edge: ShuttleScenario['layout']['edges'][number]): 'x' | 'z' | null {
+    const from = nodePosition(this.scenario, edge.from);
+    const to = nodePosition(this.scenario, edge.to);
+    const dx = Math.abs(to.x - from.x);
+    const dz = Math.abs(to.z - from.z);
+    if (dx <= 1e-9 && dz <= 1e-9) {
+      return null;
+    }
+    return dx >= dz ? 'x' : 'z';
+  }
+
   private releaseNodeOccupancy(vehicle: MutableVehicle, nodeId: string): void {
     if (this.currentNodeOccupancy.get(nodeId) === vehicle.id) {
       this.currentNodeOccupancy.delete(nodeId);
     }
-    this.releaseZoneHoldReservations(vehicle, nodeId);
+    this.releaseZoneHoldReservations(vehicle);
   }
 
   private occupyNode(vehicle: MutableVehicle, nodeId: string): void {
@@ -1600,7 +1640,8 @@ export class ShuttleSimCore {
   }
 
   private ensureZoneHoldReservation(vehicle: MutableVehicle, nodeId: string): void {
-    for (const zone of this.zonesForNode(nodeId)) {
+    const zones = this.zonesForNode(nodeId);
+    for (const zone of zones) {
       const existing = this.reservations.find(
         (reservation) =>
           reservation.reasonCode === 'zone-hold' &&
@@ -1627,18 +1668,13 @@ export class ShuttleSimCore {
     }
   }
 
-  private releaseZoneHoldReservations(vehicle: MutableVehicle, nodeId: string): void {
-    const zoneIds = new Set(this.zonesForNode(nodeId).map((zone) => zone.id));
-    if (zoneIds.size === 0) {
-      return;
-    }
+  private releaseZoneHoldReservations(vehicle: MutableVehicle): void {
     this.reservations = this.reservations.filter(
       (reservation) =>
         !(
           reservation.reasonCode === 'zone-hold' &&
           reservation.vehicleId === vehicle.id &&
-          reservation.resourceType === 'zone' &&
-          zoneIds.has(reservation.resourceId)
+          reservation.resourceType === 'zone'
         )
     );
   }
@@ -1653,6 +1689,11 @@ export class ShuttleSimCore {
 
       if (vehicle.state === 'lifting' || vehicle.state === 'lowering' || vehicle.state === 'parking') {
         this.advanceTimedPhase(vehicle, dtSec);
+        continue;
+      }
+
+      if (!vehicle.currentEdgeId && vehicle.legRemainingM <= 0 && vehicle.phaseRemainingSec > 0) {
+        this.advanceDirectionSwitchPhase(vehicle, dtSec);
         continue;
       }
 
@@ -1722,8 +1763,20 @@ export class ShuttleSimCore {
       vehicle.waitReason = null;
       vehicle.blockingReservationId = null;
       vehicle.blockingVehicleId = null;
+      vehicle.directionSwitchReadyNodeId = null;
       this.logEvent('vehicle-parked', vehicle.id, null, null, vehicle.currentNodeId, null, 'idle-parking', this.vehiclePosition(vehicle), {});
     }
+  }
+
+  private advanceDirectionSwitchPhase(vehicle: MutableVehicle, dtSec: number): void {
+    vehicle.phaseRemainingSec = round(Math.max(0, vehicle.phaseRemainingSec - dtSec));
+    vehicle.speedMps = 0;
+    if (vehicle.phaseRemainingSec > 0) {
+      return;
+    }
+
+    vehicle.directionSwitchReadyNodeId = vehicle.currentNodeId;
+    this.logEvent('direction-switch-complete', vehicle.id, vehicle.taskId, null, vehicle.currentNodeId, vehicle.targetNodeId, 'switch-direction-elapsed', this.vehiclePosition(vehicle), {});
   }
 
   private startNextLeg(vehicle: MutableVehicle, dtSec: number): void {
@@ -1752,6 +1805,7 @@ export class ShuttleSimCore {
       vehicle.blockingVehicleId = currentOccupant;
       vehicle.waitingSinceSec ??= this.simTimeSec;
       vehicle.blockedTimeSec = round(vehicle.blockedTimeSec + dtSec);
+      this.ensureZoneHoldReservation(vehicle, fromNodeId);
       this.blockedTimeByReasonSec.set('node-occupancy-mismatch', round((this.blockedTimeByReasonSec.get('node-occupancy-mismatch') ?? 0) + dtSec));
       this.logEvent('vehicle-waiting', vehicle.id, vehicle.taskId, null, fromNodeId, toNodeId, 'node-occupancy-mismatch', this.vehiclePosition(vehicle), {
         blockingVehicleId: currentOccupant
@@ -1770,6 +1824,29 @@ export class ShuttleSimCore {
       return;
     }
 
+    const nextAxis = this.axisForEdge(edge);
+    const requiresDirectionSwitch =
+      nextAxis !== null &&
+      vehicle.lastMovementAxis !== null &&
+      nextAxis !== vehicle.lastMovementAxis &&
+      vehicle.directionSwitchReadyNodeId !== fromNodeId &&
+      this.scenario.physicsParams.switchDirectionSec > 0;
+    if (requiresDirectionSwitch) {
+      vehicle.state = 'assigned';
+      vehicle.speedMps = 0;
+      vehicle.phaseRemainingSec = this.scenario.physicsParams.switchDirectionSec;
+      vehicle.waitReason = null;
+      vehicle.blockingReservationId = null;
+      vehicle.blockingVehicleId = null;
+      this.ensureZoneHoldReservation(vehicle, fromNodeId);
+      this.logEvent('direction-switch-started', vehicle.id, vehicle.taskId, null, fromNodeId, toNodeId, 'orthogonal-axis-change', this.vehiclePosition(vehicle), {
+        fromAxis: vehicle.lastMovementAxis,
+        toAxis: nextAxis,
+        switchDirectionSec: String(this.scenario.physicsParams.switchDirectionSec)
+      });
+      return;
+    }
+
     const occupiedTargetId = this.currentNodeOccupancy.get(toNodeId);
     if (occupiedTargetId && occupiedTargetId !== vehicle.id) {
       this.reservationConflictCount += 1;
@@ -1780,6 +1857,7 @@ export class ShuttleSimCore {
       vehicle.blockingVehicleId = occupiedTargetId;
       vehicle.waitingSinceSec ??= this.simTimeSec;
       vehicle.blockedTimeSec = round(vehicle.blockedTimeSec + dtSec);
+      this.ensureZoneHoldReservation(vehicle, fromNodeId);
       this.blockedTimeByReasonSec.set('node-occupied', round((this.blockedTimeByReasonSec.get('node-occupied') ?? 0) + dtSec));
       this.logEvent('vehicle-waiting', vehicle.id, vehicle.taskId, null, fromNodeId, toNodeId, 'node-occupied', this.vehiclePosition(vehicle), {
         blockingVehicleId: occupiedTargetId
@@ -1811,6 +1889,7 @@ export class ShuttleSimCore {
       vehicle.blockingVehicleId = null;
       vehicle.waitingSinceSec ??= this.simTimeSec;
       vehicle.blockedTimeSec = round(vehicle.blockedTimeSec + dtSec);
+      this.ensureZoneHoldReservation(vehicle, fromNodeId);
       this.blockedTimeByReasonSec.set(attempt.reasonCode, round((this.blockedTimeByReasonSec.get(attempt.reasonCode) ?? 0) + dtSec));
       this.logEvent('vehicle-waiting', vehicle.id, vehicle.taskId, null, fromNodeId, toNodeId, attempt.reasonCode, this.vehiclePosition(vehicle), {
         blockingReservationId: attempt.blockingReservationId
@@ -1820,6 +1899,7 @@ export class ShuttleSimCore {
 
     this.reservations.push(...attempt.reservations);
     this.releaseNodeOccupancy(vehicle, fromNodeId);
+    vehicle.directionSwitchReadyNodeId = null;
     vehicle.waitingSinceSec = null;
     vehicle.waitReason = null;
     vehicle.blockingReservationId = null;
@@ -1872,6 +1952,7 @@ export class ShuttleSimCore {
     vehicle.currentNodeId = toNodeId;
     this.occupyNode(vehicle, toNodeId);
     vehicle.routeIndex += 1;
+    vehicle.lastMovementAxis = edge ? this.axisForEdge(edge) : vehicle.lastMovementAxis;
     vehicle.targetNodeId = null;
     vehicle.currentEdgeId = null;
     vehicle.targetSpeedMps = 0;

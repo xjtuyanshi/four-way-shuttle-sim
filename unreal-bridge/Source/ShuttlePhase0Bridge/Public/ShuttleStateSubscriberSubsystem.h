@@ -142,7 +142,7 @@ private:
     bool TryParseVehicleState(const TSharedPtr<FJsonObject>& Object, FShuttleVisualVehicleState& OutState, FString& OutError) const;
     bool TryParseLoadState(const TSharedPtr<FJsonObject>& Object, FShuttleVisualLoadState& OutState, FString& OutError) const;
     TArray<FString> ParseStringArray(const TSharedPtr<FJsonObject>& Object, const FString& FieldName) const;
-    EShuttleVisualOperationalState ParseState(const FString& Value) const;
+    bool TryParseStateValue(const FString& Value, EShuttleVisualOperationalState& OutState) const;
     bool TryParseLoadStateValue(const FString& Value, EShuttleVisualLoadStatus& OutState) const;
     void RecordSimTime(double SimTimeSec);
     void RecordKpis(const TSharedPtr<FJsonObject>& KpiObject);

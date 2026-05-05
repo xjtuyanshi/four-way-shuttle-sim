@@ -152,6 +152,15 @@ The earlier public-branch ChatGPT Pro review against the UE-ready branch returne
 - UE readiness docs now distinguish local compile/headless/live/staged/browser Pixel Streaming smoke coverage from the later 30-minute soak and release hardening.
 - Lift-port wording is documented as diagnostics/allocation time, not true mechanical service utilization.
 
+The follow-up ChatGPT Pro review against commit `717858e` returned `merge after fixes`. This pass addresses the concrete blockers and small contract issues it raised:
+
+- Stopped vehicles on portal nodes now keep an explicit `zone-main-portal-node-*` hold while waiting, so a shuttle blocked at a lift/main-aisle portal still serializes conflicting lift/transfer moves.
+- Main-aisle portal movement zones now include all movement edges touching that portal node, including storage-row connector edges, closing the collision window between a shuttle exiting storage and another shuttle leaving the same main-aisle node.
+- Orthogonal moves now consume `switchDirectionSec` as a dwell phase while keeping `yaw=0`, matching the four-way shuttle assumption that the body does not rotate for right-angle moves.
+- Stress validation now requires every expected bottleneck prefix for a scenario, not just any one of them.
+- Long-run acceptance now checks inbound and outbound throughput separately when both sides have requested demand.
+- Unreal bridge vehicle parsing now rejects unknown operational states with a concise bridge status instead of silently mapping them to `Idle`.
+
 Non-blocking follow-ups were moved to Phase 1:
 
 - multi-capacity reservation semantics after Phase 0
@@ -185,6 +194,7 @@ noReservationCoverageViolations=true
 longRunEventLogsPresent=true
 longRunThroughputPositive=true
 longRunThroughputFloorMet=true
+longRunThroughputBySideMet=true
 longRunQueuesBounded=true
 noLongRunDeadlocks=true
 noLongRunPhysicalSafetyViolations=true
@@ -196,7 +206,7 @@ noStressReservationCoverageViolations=true
 expectedStressBottlenecksObserved=true
 positiveStressThroughputWhereRequired=true
 longRun.totalPphMean=18
-longRun.maxQueuedTasks=2
+longRun.maxQueuedTasks=3
 longRun.maxWaitingVehicles=1
 longRun.maxLiftPortQueueLength=1
 stress.durationSec=180
@@ -213,16 +223,17 @@ Current stress coverage is validation-owned rather than visual-only. The suite i
 - preloaded outbound pressure: outbound lift/FIFO waits plus `zone-reserved`
 - near-full inbound pressure: `storage-full` after the last FIFO slots are allocated
 
-One bug was found by this stress suite and fixed in `packages/shuttle-sim-core/src/index.ts`: lift connector edges now share portal zones with adjacent main-lane edge segments, preventing a shuttle from crossing vertically through an occupied main-aisle portal.
+Two portal bugs were found by the stress/review loop and fixed in `packages/shuttle-sim-core/src/index.ts`: lift connector edges and storage-row connector edges now share portal movement zones with adjacent main-lane edge segments, and stopped portal-node occupants keep explicit node-hold zone reservations.
 
 Browser smoke:
 
 - dashboard loads
 - 3D canvas appears
-- runtime advances
-- vehicle table shows idle and moving-to-pickup states
+- runtime advances at 4x
+- vehicle table shows idle and moving/returning states
+- Shuttle count, inbound PPH, and outbound PPH controls update the running scenario
 - Pixel Streaming prerequisite label reads as prerequisites, not release-soak readiness
-- latest screenshot evidence: `output/playwright/dashboard-readiness-wording-smoke.png`
+- latest screenshot evidence: `output/playwright/dashboard-pro-review-smoke.png`
 
 Artifacts are intentionally ignored by git:
 

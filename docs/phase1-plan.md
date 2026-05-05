@@ -56,12 +56,12 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 - Added explicit `layoutCalibrationProfile.blockedCells` metadata and static-scene `blockedCells` parity so CAD-visible blocked/structural cells can be represented without pretending they are storage nodes.
 - Added targeted congestion regression coverage for a near-full storage grid, four-vehicle mixed lift/FIFO pressure, inbound-only pressure, and outbound-only pressure. These tests assert positive throughput where applicable plus no deadlocks, livelocks, or physical safety failures.
 - Added a validation-owned stress suite covering balanced 7200/7200 PPH surge, inbound-only saturation, outbound on empty store, preloaded outbound pressure, and near-full inbound pressure. The suite reports requested versus achieved PPH, queue high water, stress pass/fail, and observed bottleneck reasons.
-- The stress suite exposed a real portal conflict between lift connector crossings and the main aisle. Default layout portal zones now include lift connector edges plus adjacent main-lane edge segments, and a regression test asserts that connector crossings serialize with main-lane portal traffic.
+- The stress/review loop exposed real portal conflicts. Default layout portal movement zones now include lift, main-lane, north/south transfer, and storage-row connector edges touching the portal; stopped portal-node occupants also hold explicit node-zone reservations.
 - Verified the local Unreal path through setup, source bridge smoke, live bridge smoke, staged Mac runtime generation, and browser Pixel Streaming smoke evidence. This proves the local runtime scaffold, not a final signed/notarized production package.
 
 ## Next TODO
 
-- Track the current public `main` ChatGPT Pro follow-up and fold in only concrete blockers. The next review request must explicitly ask for software, mechanical/manufacturing, and IE/operations findings against the stress-suite output.
+- After the latest hardening commit is pushed, run one more ChatGPT Pro re-review only with explicit action-time confirmation. The request should explicitly ask for software, mechanical/manufacturing, and IE/operations findings against the stress-suite output.
 - Replace the assumption-grade `phase0-cad-assumption-v1` layout profile with CAD/vendor/site dimensions before making stronger throughput claims: storage pitch, aisle widths, shuttle footprint, pallet/load envelope, lift pad envelope, roller-transfer envelope, and blocked/structural cells.
 - Keep the configurable layout profile as the calibration boundary; when CAD/vendor/site dimensions deliberately change the default scene, regenerate and review the golden static-scene fixture in the same commit.
 - Expand beyond 4 shuttles only after adding calibrated parking/charging/staging positions; Phase 0 still enforces one parking node per vehicle.

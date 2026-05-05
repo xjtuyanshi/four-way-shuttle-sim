@@ -295,8 +295,15 @@ bool UShuttleStateSubscriberSubsystem::TryParseVehicleState(const TSharedPtr<FJs
         return false;
     }
 
+    EShuttleVisualOperationalState ParsedState = EShuttleVisualOperationalState::Idle;
+    if (!TryParseStateValue(StateValue, ParsedState))
+    {
+        OutError = FString::Printf(TEXT("vehicle %s has unknown state %s"), *Id, *StateValue);
+        return false;
+    }
+
     OutState.Id = Id;
-    OutState.State = ParseState(StateValue);
+    OutState.State = ParsedState;
     OutState.Position = FVector(X, Y, Z);
     OutState.YawRadians = static_cast<float>(Yaw);
     OutState.SpeedMps = static_cast<float>(Speed);
@@ -388,20 +395,69 @@ TArray<FString> UShuttleStateSubscriberSubsystem::ParseStringArray(const TShared
     return Values;
 }
 
-EShuttleVisualOperationalState UShuttleStateSubscriberSubsystem::ParseState(const FString& Value) const
+bool UShuttleStateSubscriberSubsystem::TryParseStateValue(const FString& Value, EShuttleVisualOperationalState& OutState) const
 {
-    if (Value == TEXT("assigned")) return EShuttleVisualOperationalState::Assigned;
-    if (Value == TEXT("moving-to-pickup")) return EShuttleVisualOperationalState::MovingToPickup;
-    if (Value == TEXT("aligning-under-load")) return EShuttleVisualOperationalState::AligningUnderLoad;
-    if (Value == TEXT("lifting")) return EShuttleVisualOperationalState::Lifting;
-    if (Value == TEXT("loaded-moving")) return EShuttleVisualOperationalState::LoadedMoving;
-    if (Value == TEXT("lowering")) return EShuttleVisualOperationalState::Lowering;
-    if (Value == TEXT("returning")) return EShuttleVisualOperationalState::Returning;
-    if (Value == TEXT("parking")) return EShuttleVisualOperationalState::Parking;
-    if (Value == TEXT("waiting-blocked")) return EShuttleVisualOperationalState::WaitingBlocked;
-    if (Value == TEXT("charging")) return EShuttleVisualOperationalState::Charging;
-    if (Value == TEXT("faulted")) return EShuttleVisualOperationalState::Faulted;
-    return EShuttleVisualOperationalState::Idle;
+    if (Value == TEXT("idle"))
+    {
+        OutState = EShuttleVisualOperationalState::Idle;
+        return true;
+    }
+    if (Value == TEXT("assigned"))
+    {
+        OutState = EShuttleVisualOperationalState::Assigned;
+        return true;
+    }
+    if (Value == TEXT("moving-to-pickup"))
+    {
+        OutState = EShuttleVisualOperationalState::MovingToPickup;
+        return true;
+    }
+    if (Value == TEXT("aligning-under-load"))
+    {
+        OutState = EShuttleVisualOperationalState::AligningUnderLoad;
+        return true;
+    }
+    if (Value == TEXT("lifting"))
+    {
+        OutState = EShuttleVisualOperationalState::Lifting;
+        return true;
+    }
+    if (Value == TEXT("loaded-moving"))
+    {
+        OutState = EShuttleVisualOperationalState::LoadedMoving;
+        return true;
+    }
+    if (Value == TEXT("lowering"))
+    {
+        OutState = EShuttleVisualOperationalState::Lowering;
+        return true;
+    }
+    if (Value == TEXT("returning"))
+    {
+        OutState = EShuttleVisualOperationalState::Returning;
+        return true;
+    }
+    if (Value == TEXT("parking"))
+    {
+        OutState = EShuttleVisualOperationalState::Parking;
+        return true;
+    }
+    if (Value == TEXT("waiting-blocked"))
+    {
+        OutState = EShuttleVisualOperationalState::WaitingBlocked;
+        return true;
+    }
+    if (Value == TEXT("charging"))
+    {
+        OutState = EShuttleVisualOperationalState::Charging;
+        return true;
+    }
+    if (Value == TEXT("faulted"))
+    {
+        OutState = EShuttleVisualOperationalState::Faulted;
+        return true;
+    }
+    return false;
 }
 
 bool UShuttleStateSubscriberSubsystem::TryParseLoadStateValue(const FString& Value, EShuttleVisualLoadStatus& OutState) const

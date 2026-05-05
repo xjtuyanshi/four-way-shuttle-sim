@@ -164,6 +164,17 @@ No must-fix findings were reported. Non-blocking recommendations were captured a
 
 A narrow follow-up review against `e828741f7ada139a327a5c253fbc619faee60809` confirmed that the Pixel Streaming prerequisite wording did not introduce a blocker, closed the readiness ambiguity, and left the verdict at `Merge now`.
 
+## Latest Pro Review Follow-Up
+
+The ChatGPT Pro review against commit `717858e` returned `merge after fixes`. The current branch folds in the actionable merge-hardening items:
+
+- Portal-node occupancy now has explicit `zone-main-portal-node-*` hold reservations for stopped/waiting shuttles at main-aisle portal nodes.
+- Portal movement zones now include storage-row connector edges as well as main-lane, lift, and north/south transfer edges, so storage-to-main movements serialize against shuttles already leaving that same main-aisle portal.
+- `switchDirectionSec` now affects simulation timing through an orthogonal-move dwell phase. Vehicle yaw remains `0` because Phase 0 models a four-way shuttle body that does not rotate.
+- Stress validation requires all expected bottleneck prefixes per scenario and reports missing prefixes.
+- Long-run acceptance requires inbound and outbound throughput separately when both demand streams are enabled.
+- Unreal bridge parsing rejects unknown vehicle state strings instead of silently treating them as `Idle`.
+
 ## Phase 1 Demo Alignment Since Hardening
 
 The browser demo has been adjusted toward the user's four-way shuttle reference:
@@ -247,6 +258,7 @@ noReservationCoverageViolations=true
 longRunEventLogsPresent=true
 longRunThroughputPositive=true
 longRunThroughputFloorMet=true
+longRunThroughputBySideMet=true
 longRunQueuesBounded=true
 noLongRunDeadlocks=true
 noLongRunPhysicalSafetyViolations=true
@@ -259,7 +271,7 @@ expectedStressBottlenecksObserved=true
 positiveStressThroughputWhereRequired=true
 totalPphMean=15
 longRun.totalPphMean=18
-longRun.maxQueuedTasks=2
+longRun.maxQueuedTasks=3
 longRun.maxWaitingVehicles=1
 longRun.maxLiftPortQueueLength=1
 stress.durationSec=180
@@ -284,6 +296,8 @@ Current SimCore dashboard screenshot captured at output/playwright/static-contra
 FIFO policy panel screenshot captured at output/playwright/static-contract-fifo-policy-smoke.png
 Runtime completed to 00:10:00 at 4x
 Vehicle table/state stream showed idle and moving-to-pickup states
+Latest dashboard smoke at output/playwright/dashboard-pro-review-smoke.png showed the 3D canvas, 4x runtime advance, moving/returning vehicle state, and 0 console errors
+Shuttle count, inbound PPH, and outbound PPH sliders updated the running scenario; setting 4 shuttles produced 4 vehicle rows and 120/90 PPH labels
 ```
 
 Environment gate output:
@@ -296,7 +310,9 @@ Pixel Streaming: ready
 Unreal bridge compile smoke: passed
 Unreal static commandlet smoke: passed with 384 storage cells, 474 track beds, 8 lift pads, storageIslandCount=8, denseStorageIslands=true, and denseStorageBlock=false
 Unreal live bridge smoke: passed with vehicleState/kpiUpdate parsing, 2 vehicle actors, no duplicate actors, and max target pose error 0cm
+Latest Unreal live bridge smoke: pass=true, vehicleActors=2, receivedVehicleStates=6, maxTargetPoseErrorCm=0
 Unreal staged Mac runtime: passed, staged app exists under output/unreal/ShuttleVisualTwin/Saved/StagedBuilds/Mac/ShuttleVisualTwin.app
+WebSocket smoke: passed with connectionRecovered, simState, vehicleState, kpiUpdate, and taskEvent message coverage
 Browser Pixel Streaming smoke: passed against both UnrealEditor -game and staged app; screenshot/video evidence is under output/playwright/
 CompileAllBlueprints reported 0 blueprint errors / 0 blueprint warnings
 ```
