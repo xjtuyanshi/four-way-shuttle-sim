@@ -334,15 +334,24 @@ function createDefaultLayout(profile: ShuttleLayoutGeometryProfile = DEFAULT_SHU
   const liftPortalXs = defaultLiftPortalXs(columnXs, rightSpineX, profile);
   const mainXs = [leftSpineX, ...liftPortalXs, rightSpineX];
 
+  const rightParkingX = round(rightSpineX + profile.parkingStandoffXM, 3);
+  const rightStagingX = round(rightSpineX + profile.parkingStandoffXM * 2, 3);
+  const leftParkingX = round(leftSpineX - profile.parkingStandoffXM, 3);
+  const leftStagingX = round(leftSpineX - profile.parkingStandoffXM * 2, 3);
+
   const nodes: LayoutNode[] = [
     { id: 'left-top', type: 'aisle', x: leftSpineX, y: 0, z: topZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'left-bottom', type: 'aisle', x: leftSpineX, y: 0, z: bottomZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'right-top', type: 'aisle', x: rightSpineX, y: 0, z: topZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
     { id: 'right-bottom', type: 'aisle', x: rightSpineX, y: 0, z: bottomZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
-    { id: 'parking-a', type: 'parking', x: round(rightSpineX + profile.parkingStandoffXM, 3), y: 0, z: profile.mainLaneNorthZM, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
-    { id: 'parking-b', type: 'parking', x: round(rightSpineX + profile.parkingStandoffXM, 3), y: 0, z: profile.mainLaneSouthZM, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
-    { id: 'parking-c', type: 'parking', x: round(leftSpineX - profile.parkingStandoffXM, 3), y: 0, z: profile.mainLaneNorthZM, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
-    { id: 'parking-d', type: 'parking', x: round(leftSpineX - profile.parkingStandoffXM, 3), y: 0, z: profile.mainLaneSouthZM, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
+    { id: 'parking-a', type: 'parking', x: rightParkingX, y: 0, z: profile.mainLaneNorthZM, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+    { id: 'parking-b', type: 'parking', x: rightParkingX, y: 0, z: profile.mainLaneSouthZM, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+    { id: 'parking-c', type: 'parking', x: leftParkingX, y: 0, z: profile.mainLaneNorthZM, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+    { id: 'parking-d', type: 'parking', x: leftParkingX, y: 0, z: profile.mainLaneSouthZM, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+    { id: 'parking-e', type: 'parking', x: rightStagingX, y: 0, z: profile.mainLaneNorthZM, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+    { id: 'parking-f', type: 'parking', x: rightStagingX, y: 0, z: profile.mainLaneSouthZM, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+    { id: 'parking-g', type: 'parking', x: leftStagingX, y: 0, z: profile.mainLaneNorthZM, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+    { id: 'parking-h', type: 'parking', x: leftStagingX, y: 0, z: profile.mainLaneSouthZM, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
   ];
 
   mainXs.forEach((x, index) => {
@@ -440,6 +449,10 @@ function createDefaultLayout(profile: ShuttleLayoutGeometryProfile = DEFAULT_SHU
   addEdge('parking-b-main-south-right', 'parking-b', mainLaneNodeId('south', lastMainIndex), 'parking-approach-right-south');
   addEdge('parking-c-main-north-left', 'parking-c', mainLaneNodeId('north', 0), 'parking-approach-left-north');
   addEdge('parking-d-main-south-left', 'parking-d', mainLaneNodeId('south', 0), 'parking-approach-left-south');
+  addEdge('parking-e-parking-a', 'parking-e', 'parking-a', 'parking-staging-right-north');
+  addEdge('parking-f-parking-b', 'parking-f', 'parking-b', 'parking-staging-right-south');
+  addEdge('parking-g-parking-c', 'parking-g', 'parking-c', 'parking-staging-left-north');
+  addEdge('parking-h-parking-d', 'parking-h', 'parking-d', 'parking-staging-left-south');
 
   [
     { id: 'inbound-lift-top-01', targets: [mainLaneNodeId('north', 1), mainLaneNodeId('south', 1)] },
@@ -596,7 +609,7 @@ export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides
       emptySpeedMps: 2,
       loadedSpeedMps: 1.5,
       accelerationMps2: 1,
-      switchDirectionSec: 3,
+      switchDirectionSec: 0,
       liftTimeSec: 2,
       lowerTimeSec: 2,
       maxLoadKg: 1800,
@@ -616,7 +629,7 @@ export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides
       emptySpeedMps: 2,
       loadedSpeedMps: 1.5,
       accelerationMps2: 1,
-      switchDirectionSec: 3,
+      switchDirectionSec: 0,
       liftTimeSec: 2,
       lowerTimeSec: 2,
       loadedClearanceM: 0.2,
@@ -1436,10 +1449,11 @@ export class ShuttleSimCore {
       return null;
     }
     const side = task.kind === 'inbound' ? 'right' : 'left';
-    const hasVehicleInFifoNetwork = this.vehicles.some((vehicle) =>
+    const maxConcurrentFifoSideTasks = this.scenario.vehicles.count > 4 ? 2 : 1;
+    const activeSideVehicleCount = this.vehicles.filter((vehicle) =>
       vehicle.state !== 'idle' && this.vehicleBlocksFifoTask(vehicle, rowLabel, side)
-    );
-    return hasVehicleInFifoNetwork ? `fifo-${side}-network-busy` : null;
+    ).length;
+    return activeSideVehicleCount >= maxConcurrentFifoSideTasks ? `fifo-${side}-network-busy` : null;
   }
 
   private vehicleBlocksFifoTask(vehicle: VehicleState, taskRowLabel: string, taskSide: 'left' | 'right'): boolean {

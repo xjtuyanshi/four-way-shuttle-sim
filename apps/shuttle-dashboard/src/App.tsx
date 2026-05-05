@@ -100,6 +100,7 @@ type Phase0StressScenarioResult = {
 type Phase0ValidationResult = {
   checkedAt: string;
   scenarioId: string;
+  layoutCalibrationReadiness?: ShuttleStaticSceneCalibrationReadiness;
   deterministic: {
     seed: number;
     repeatCount: number;
@@ -180,7 +181,7 @@ const CONTROLLED_PARAMS = [
     label: 'Shuttle count',
     path: '/vehicles/count',
     min: 1,
-    max: 4,
+    max: 8,
     step: 1,
     unit: 'units'
   },

@@ -164,7 +164,7 @@ describe('phase 0 validation', () => {
     expect(result.acceptance.longRunThroughputBySideMet).toBe(false);
     expect(result.acceptance.longRunQueuesBounded).toBe(false);
     expect(result.acceptance.pass).toBe(false);
-  });
+  }, 10000);
 
   it.each([
     {

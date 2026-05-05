@@ -13,7 +13,7 @@
     "emptySpeedMps": 2,
     "loadedSpeedMps": 1.5,
     "accelerationMps2": 1,
-    "switchDirectionSec": 3,
+    "switchDirectionSec": 0,
     "liftTimeSec": 2,
     "lowerTimeSec": 2,
     "maxLoadKg": 1800,
@@ -85,6 +85,7 @@
           "confidence": "low"
         }
       ],
+      "blockedCells": [],
       "notes": [
         "Single-floor simulation only; lifts are dedicated inbound/outbound black-box ports.",
         "Storage cells are contiguous drivable track positions inside each island, not freestanding boxes.",
@@ -174,6 +175,50 @@
         "id": "parking-d",
         "type": "parking",
         "x": -2.4,
+        "y": 0,
+        "z": 0.8,
+        "noStop": false,
+        "noParking": false,
+        "capacity": 1,
+        "allowedDirections": []
+      },
+      {
+        "id": "parking-e",
+        "type": "parking",
+        "x": 45.3,
+        "y": 0,
+        "z": -0.8,
+        "noStop": false,
+        "noParking": false,
+        "capacity": 1,
+        "allowedDirections": []
+      },
+      {
+        "id": "parking-f",
+        "type": "parking",
+        "x": 45.3,
+        "y": 0,
+        "z": 0.8,
+        "noStop": false,
+        "noParking": false,
+        "capacity": 1,
+        "allowedDirections": []
+      },
+      {
+        "id": "parking-g",
+        "type": "parking",
+        "x": -4.8,
+        "y": 0,
+        "z": -0.8,
+        "noStop": false,
+        "noParking": false,
+        "capacity": 1,
+        "allowedDirections": []
+      },
+      {
+        "id": "parking-h",
+        "type": "parking",
+        "x": -4.8,
         "y": 0,
         "z": 0.8,
         "noStop": false,
@@ -5188,6 +5233,46 @@
         "noParking": true
       },
       {
+        "id": "parking-e-parking-a",
+        "from": "parking-e",
+        "to": "parking-a",
+        "lengthM": 2.4,
+        "directionMode": "twoWay",
+        "reservationType": "edge",
+        "conflictGroup": "parking-staging-right-north",
+        "noParking": true
+      },
+      {
+        "id": "parking-f-parking-b",
+        "from": "parking-f",
+        "to": "parking-b",
+        "lengthM": 2.4,
+        "directionMode": "twoWay",
+        "reservationType": "edge",
+        "conflictGroup": "parking-staging-right-south",
+        "noParking": true
+      },
+      {
+        "id": "parking-g-parking-c",
+        "from": "parking-g",
+        "to": "parking-c",
+        "lengthM": 2.4,
+        "directionMode": "twoWay",
+        "reservationType": "edge",
+        "conflictGroup": "parking-staging-left-north",
+        "noParking": true
+      },
+      {
+        "id": "parking-h-parking-d",
+        "from": "parking-h",
+        "to": "parking-d",
+        "lengthM": 2.4,
+        "directionMode": "twoWay",
+        "reservationType": "edge",
+        "conflictGroup": "parking-staging-left-south",
+        "noParking": true
+      },
+      {
         "id": "inbound-lift-top-01-main-north-01",
         "from": "inbound-lift-top-01",
         "to": "main-north-01",
@@ -9734,7 +9819,13 @@
         "type": "intersection",
         "nodeIds": [],
         "edgeIds": [
-          "main-north-00-main-south-00"
+          "left-row-08-main-north-00",
+          "main-north-00-main-north-01",
+          "main-north-00-main-south-00",
+          "main-south-00-left-row-09",
+          "main-south-00-main-south-01",
+          "parking-c-main-north-left",
+          "parking-d-main-south-left"
         ],
         "noStop": true,
         "noParking": true,
@@ -9746,7 +9837,15 @@
         "type": "intersection",
         "nodeIds": [],
         "edgeIds": [
-          "main-north-01-main-south-01"
+          "inbound-lift-top-01-main-north-01",
+          "inbound-lift-top-01-main-south-01",
+          "main-north-00-main-north-01",
+          "main-north-01-main-north-02",
+          "main-north-01-main-south-01",
+          "main-south-00-main-south-01",
+          "main-south-01-main-south-02",
+          "outbound-lift-bottom-01-main-north-01",
+          "outbound-lift-bottom-01-main-south-01"
         ],
         "noStop": true,
         "noParking": true,
@@ -9758,7 +9857,15 @@
         "type": "intersection",
         "nodeIds": [],
         "edgeIds": [
-          "main-north-02-main-south-02"
+          "inbound-lift-bottom-01-main-north-02",
+          "inbound-lift-bottom-01-main-south-02",
+          "main-north-01-main-north-02",
+          "main-north-02-main-north-03",
+          "main-north-02-main-south-02",
+          "main-south-01-main-south-02",
+          "main-south-02-main-south-03",
+          "outbound-lift-top-01-main-north-02",
+          "outbound-lift-top-01-main-south-02"
         ],
         "noStop": true,
         "noParking": true,
@@ -9770,7 +9877,15 @@
         "type": "intersection",
         "nodeIds": [],
         "edgeIds": [
-          "main-north-03-main-south-03"
+          "inbound-lift-top-02-main-north-03",
+          "inbound-lift-top-02-main-south-03",
+          "main-north-02-main-north-03",
+          "main-north-03-main-north-04",
+          "main-north-03-main-south-03",
+          "main-south-02-main-south-03",
+          "main-south-03-main-south-04",
+          "outbound-lift-bottom-02-main-north-03",
+          "outbound-lift-bottom-02-main-south-03"
         ],
         "noStop": true,
         "noParking": true,
@@ -9782,7 +9897,15 @@
         "type": "intersection",
         "nodeIds": [],
         "edgeIds": [
-          "main-north-04-main-south-04"
+          "inbound-lift-bottom-02-main-north-04",
+          "inbound-lift-bottom-02-main-south-04",
+          "main-north-03-main-north-04",
+          "main-north-04-main-north-05",
+          "main-north-04-main-south-04",
+          "main-south-03-main-south-04",
+          "main-south-04-main-south-05",
+          "outbound-lift-top-02-main-north-04",
+          "outbound-lift-top-02-main-south-04"
         ],
         "noStop": true,
         "noParking": true,
@@ -9794,12 +9917,124 @@
         "type": "intersection",
         "nodeIds": [],
         "edgeIds": [
-          "main-north-05-main-south-05"
+          "main-north-04-main-north-05",
+          "main-north-05-main-south-05",
+          "main-south-04-main-south-05",
+          "main-south-05-right-row-09",
+          "parking-a-main-north-right",
+          "parking-b-main-south-right",
+          "right-row-08-main-north-05"
         ],
         "noStop": true,
         "noParking": true,
         "capacity": 1,
         "conflictGroup": "intersection-main-portal-05"
+      },
+      {
+        "id": "zone-main-portal-node-00",
+        "type": "intersection",
+        "nodeIds": [
+          "main-north-00",
+          "main-south-00"
+        ],
+        "edgeIds": [
+          "main-north-00-main-south-00"
+        ],
+        "noStop": true,
+        "noParking": true,
+        "capacity": 1,
+        "conflictGroup": "intersection-main-portal-node-00"
+      },
+      {
+        "id": "zone-main-portal-node-01",
+        "type": "intersection",
+        "nodeIds": [
+          "main-north-01",
+          "main-south-01"
+        ],
+        "edgeIds": [
+          "inbound-lift-top-01-main-north-01",
+          "inbound-lift-top-01-main-south-01",
+          "main-north-01-main-south-01",
+          "outbound-lift-bottom-01-main-north-01",
+          "outbound-lift-bottom-01-main-south-01"
+        ],
+        "noStop": true,
+        "noParking": true,
+        "capacity": 1,
+        "conflictGroup": "intersection-main-portal-node-01"
+      },
+      {
+        "id": "zone-main-portal-node-02",
+        "type": "intersection",
+        "nodeIds": [
+          "main-north-02",
+          "main-south-02"
+        ],
+        "edgeIds": [
+          "inbound-lift-bottom-01-main-north-02",
+          "inbound-lift-bottom-01-main-south-02",
+          "main-north-02-main-south-02",
+          "outbound-lift-top-01-main-north-02",
+          "outbound-lift-top-01-main-south-02"
+        ],
+        "noStop": true,
+        "noParking": true,
+        "capacity": 1,
+        "conflictGroup": "intersection-main-portal-node-02"
+      },
+      {
+        "id": "zone-main-portal-node-03",
+        "type": "intersection",
+        "nodeIds": [
+          "main-north-03",
+          "main-south-03"
+        ],
+        "edgeIds": [
+          "inbound-lift-top-02-main-north-03",
+          "inbound-lift-top-02-main-south-03",
+          "main-north-03-main-south-03",
+          "outbound-lift-bottom-02-main-north-03",
+          "outbound-lift-bottom-02-main-south-03"
+        ],
+        "noStop": true,
+        "noParking": true,
+        "capacity": 1,
+        "conflictGroup": "intersection-main-portal-node-03"
+      },
+      {
+        "id": "zone-main-portal-node-04",
+        "type": "intersection",
+        "nodeIds": [
+          "main-north-04",
+          "main-south-04"
+        ],
+        "edgeIds": [
+          "inbound-lift-bottom-02-main-north-04",
+          "inbound-lift-bottom-02-main-south-04",
+          "main-north-04-main-south-04",
+          "outbound-lift-top-02-main-north-04",
+          "outbound-lift-top-02-main-south-04"
+        ],
+        "noStop": true,
+        "noParking": true,
+        "capacity": 1,
+        "conflictGroup": "intersection-main-portal-node-04"
+      },
+      {
+        "id": "zone-main-portal-node-05",
+        "type": "intersection",
+        "nodeIds": [
+          "main-north-05",
+          "main-south-05"
+        ],
+        "edgeIds": [
+          "main-north-05-main-south-05"
+        ],
+        "noStop": true,
+        "noParking": true,
+        "capacity": 1,
+        "conflictGroup": "intersection-main-portal-node-05"
       }
     ]
   },
@@ -9814,7 +10049,7 @@
     "emptySpeedMps": 2,
     "loadedSpeedMps": 1.5,
     "accelerationMps2": 1,
-    "switchDirectionSec": 3,
+    "switchDirectionSec": 0,
     "liftTimeSec": 2,
     "lowerTimeSec": 2,
     "loadedClearanceM": 0.2,

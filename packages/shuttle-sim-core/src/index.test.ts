@@ -150,6 +150,16 @@ describe('shuttle phase 0 SimCore', () => {
     ]);
     expect(parsed.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound')).toHaveLength(4);
     expect(parsed.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'outbound')).toHaveLength(4);
+    expect(parsed.layout.nodes.filter((node) => node.type === 'parking').map((node) => node.id).sort()).toEqual([
+      'parking-a',
+      'parking-b',
+      'parking-c',
+      'parking-d',
+      'parking-e',
+      'parking-f',
+      'parking-g',
+      'parking-h'
+    ]);
     expect(parsed.layout.zones.some((zone) => zone.noStop && zone.noParking)).toBe(true);
     expect(parsed.layout.calibrationProfile).toMatchObject({
       id: 'phase0-cad-assumption-v1',
@@ -176,6 +186,33 @@ describe('shuttle phase 0 SimCore', () => {
     const parsed = ShuttleSimStateSchema.parse({ ...state, traffic: legacyTraffic });
 
     expect(parsed.traffic.liftPorts).toEqual([]);
+  });
+
+  it('starts eight-shuttle smoke runs from distinct staged parking positions', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario({ vehicles: { count: 8 } }));
+    const state = sim.getState();
+    const debug = sim.getDebugState();
+
+    expect(state.vehicles.map((vehicle) => vehicle.currentNodeId).sort()).toEqual([
+      'parking-a',
+      'parking-b',
+      'parking-c',
+      'parking-d',
+      'parking-e',
+      'parking-f',
+      'parking-g',
+      'parking-h'
+    ]);
+    expect(debug.currentNodeOccupancy.map((occupancy) => occupancy.nodeId).sort()).toEqual([
+      'parking-a',
+      'parking-b',
+      'parking-c',
+      'parking-d',
+      'parking-e',
+      'parking-f',
+      'parking-g',
+      'parking-h'
+    ]);
   });
 
   it('keeps the default demo on orthogonal four-way shuttle aisles', () => {
@@ -294,17 +331,17 @@ describe('shuttle phase 0 SimCore', () => {
       storageCellCount: 384,
       blockedCellCount: 0,
       structuralCellCount: 0,
-      trackBedCount: 474,
+      trackBedCount: 478,
       storageLaneTrackCount: 400,
       sideAisleTrackCount: 42,
       crossAisleTrackCount: 12,
       inboundConnectorTrackCount: 8,
       outboundConnectorTrackCount: 8,
-      parkingConnectorTrackCount: 4,
+      parkingConnectorTrackCount: 8,
       diagonalTrackCount: 0,
       inboundLiftPadCount: 4,
       outboundLiftPadCount: 4,
-      parkingPadCount: 4,
+      parkingPadCount: 8,
       singleLevel: true,
       storageIslandCount: 8,
       denseStorageIslands: true,
@@ -420,7 +457,16 @@ describe('shuttle phase 0 SimCore', () => {
       'inbound-lift-top-02'
     ]);
     expect(contract.liftPads.filter((pad) => pad.category === 'outboundLift')).toHaveLength(4);
-    expect(contract.parkingPads.map((pad) => pad.id).sort()).toEqual(['parking-a', 'parking-b', 'parking-c', 'parking-d']);
+    expect(contract.parkingPads.map((pad) => pad.id).sort()).toEqual([
+      'parking-a',
+      'parking-b',
+      'parking-c',
+      'parking-d',
+      'parking-e',
+      'parking-f',
+      'parking-g',
+      'parking-h'
+    ]);
   });
 
   it('carries blocked and structural CAD reference cells into the static scene contract without routing them', () => {
@@ -555,13 +601,13 @@ describe('shuttle phase 0 SimCore', () => {
     ).toThrow(/edgeCapacity=1/);
   });
 
-  it('rejects scenarios without one parking node per vehicle for Phase 0', () => {
+  it('rejects scenarios beyond the staged parking positions for Phase 0', () => {
     expect(() =>
       ShuttleScenarioSchema.parse({
         ...createDefaultShuttleScenario(),
         vehicles: {
           ...createDefaultShuttleScenario().vehicles,
-          count: 5
+          count: 9
         }
       })
     ).toThrow(/one parking node per vehicle/);
@@ -1319,6 +1365,14 @@ describe('shuttle phase 0 SimCore', () => {
       x: 4,
       z: 4
     });
+  });
+
+  it('does not add direction-switch dwell to the default four-way shuttle demo', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario());
+    sim.runToEnd(180);
+
+    expect(sim.getState().vehicles.every((vehicle) => vehicle.yaw === 0)).toBe(true);
+    expect(sim.getEventLog().some((entry) => entry.eventType === 'direction-switch-started')).toBe(false);
   });
 
   it('adds direction-switch dwell for orthogonal moves without rotating the shuttle body', () => {

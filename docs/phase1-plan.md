@@ -62,12 +62,14 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 - Strengthened long-run by-side throughput acceptance from nonzero liveness to proportional floors. The default 18 inbound / 18 outbound PPH demand now requires at least 6 inbound PPH and 6 outbound PPH per long-run seed, while total throughput still has its separate 50% floor. These are regression-smoke floors until CAD/vendor/site calibration exists.
 - Added validation-owned bottleneck category aggregation for `storageInventory`, `fifoLane`, `sideAisleNetwork`, `liftPort`, `reservationControl`, and `other`, and surfaced the top long-run/stress class in the dashboard.
 - Added a static-scene calibration readiness gate that lists required CAD/vendor/site dimensions, separates missing dimensions from assumed or low-confidence values, and keeps industrial throughput claims blocked until the profile is fully verified. The dashboard and API validation report now surface the same gate beside Mac/UE and validation status.
+- Expanded the default single-level demo from four parking positions to eight one-capacity staged parking positions. The extra positions sit behind the direct main-lane parking pads so an 8-shuttle smoke run creates realistic staging-queue pressure without violating the Phase 0 capacity=1 reservation policy.
+- Set the default four-way shuttle direction-switch dwell to `0` so the visible demo models a body that never turns or rotates at right-angle moves. The parameter remains available for a future calibrated wheel-actuation timing study, but it is not part of the default demo behavior.
 
 ## Next TODO
 
 - Replace the assumption-grade `phase0-cad-assumption-v1` layout profile with CAD/vendor/site dimensions until the calibration readiness gate reports `readyForIndustrialThroughputClaims=true`: storage pitch, aisle widths, shuttle footprint, pallet/load envelope, lift pad envelope, roller-transfer envelope, parking pad envelope, and blocked/structural cells.
 - Keep the configurable layout profile as the calibration boundary; when CAD/vendor/site dimensions deliberately change the default scene, regenerate and review the golden static-scene fixture in the same commit.
-- Expand beyond 4 shuttles only after adding calibrated parking/charging/staging positions; Phase 0 still enforces one parking node per vehicle.
+- Replace the staged parking placeholder geometry with calibrated parking/charging/staging positions before using 8-shuttle output for industrial sizing. Phase 0 still enforces one parking node per vehicle.
 - Add true push-lane or multi-axis storage-grid mechanics only after the FIFO lane policy is explicitly modeled against the target physical layout.
 - Replace remaining Unreal placeholder geometry with calibrated meshes/materials once CAD or vendor dimensions are available; keep SimCore authoritative.
 - Run a 30-minute 1080p single-user Pixel Streaming soak only after the calibrated Unreal scene foundation is visually reviewed and the browser/API validation gate is green.
