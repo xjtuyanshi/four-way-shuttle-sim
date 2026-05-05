@@ -65,6 +65,7 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 - Expanded the default single-level demo from four parking positions to eight one-capacity staged parking positions. The extra positions sit behind the direct main-lane parking pads so an 8-shuttle smoke run creates realistic staging-queue pressure without violating the Phase 0 capacity=1 reservation policy.
 - Set the default four-way shuttle direction-switch dwell to `0` so the visible demo models a body that never turns or rotates at right-angle moves. The parameter remains available for a future calibrated wheel-actuation timing study, but it is not part of the default demo behavior.
 - Split pallet/load storage occupancy from shuttle node occupancy for storage cells. Beyond the eight dedicated pads, idle shuttles may now use storage cells as temporary under-load parking; inbound slot allocation skips cells currently occupied by a shuttle.
+- Harden storage-area traversal to row-horizontal movement only: storage-to-storage graph edges may not cross FIFO rows, and cross-row moves must route through side/main aisles. Task assignment now selects the nearest idle executable shuttle resource instead of letting the first idle vehicle claim the first queued task.
 
 ## Next TODO
 

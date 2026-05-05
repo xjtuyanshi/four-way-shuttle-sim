@@ -1386,39 +1386,92 @@ export class ShuttleSimCore {
   }
 
   private assignQueuedTasks(dtSec: number): void {
+    const idleVehicleIds = new Set(
+      this.vehicles
+        .filter((vehicle) => vehicle.state === 'idle')
+        .map((vehicle) => vehicle.id)
+    );
+
     for (const task of this.tasks.filter((candidate) => candidate.state === 'queued')) {
       const reason = this.taskAssignmentBlockReason(task);
       task.waitReason = reason;
       if (reason) {
         this.blockedTimeByReasonSec.set(reason, round((this.blockedTimeByReasonSec.get(reason) ?? 0) + dtSec));
+        continue;
       }
-    }
 
-    const idleVehicles = this.vehicles.filter((vehicle) => vehicle.state === 'idle');
-    for (const vehicle of idleVehicles) {
-      const task = this.tasks.find((candidate) => candidate.state === 'queued' && !this.taskAssignmentBlockReason(candidate));
-      if (!task) {
+      if (idleVehicleIds.size === 0) {
         return;
       }
 
-      const route = this.planRoute(vehicle.currentNodeId, task, this.parkingNodeFor(vehicle.id));
-      vehicle.taskId = task.id;
-      vehicle.routeNodeIds = route;
-      vehicle.routeIndex = 0;
-      vehicle.targetNodeId = route[1] ?? null;
-      vehicle.state = 'assigned';
-      vehicle.waitReason = null;
-      vehicle.blockingReservationId = null;
-      vehicle.blockingVehicleId = null;
-      vehicle.directionSwitchReadyNodeId = null;
-      task.state = 'assigned';
-      task.vehicleId = vehicle.id;
-      task.assignedAtSec = this.simTimeSec;
-      task.waitReason = null;
-      this.logEvent('task-assigned', vehicle.id, task.id, task.loadId, vehicle.currentNodeId, task.pickupNodeId, 'nearest-idle', this.vehiclePosition(vehicle), {
-        route: route.join('>')
-      });
+      const assignment = this.bestIdleVehicleForTask(task, idleVehicleIds);
+      if (!assignment) {
+        task.waitReason = 'route-unavailable';
+        this.blockedTimeByReasonSec.set('route-unavailable', round((this.blockedTimeByReasonSec.get('route-unavailable') ?? 0) + dtSec));
+        continue;
+      }
+
+      this.assignTaskToVehicle(assignment.vehicle, task, assignment.route);
+      idleVehicleIds.delete(assignment.vehicle.id);
     }
+  }
+
+  private bestIdleVehicleForTask(task: TaskStateRecord, idleVehicleIds: Set<string>): { vehicle: MutableVehicle; route: string[]; pickupDistanceM: number; totalDistanceM: number } | null {
+    let bestAssignment: { vehicle: MutableVehicle; route: string[]; pickupDistanceM: number; totalDistanceM: number } | null = null;
+    for (const vehicle of this.vehicles.filter((candidate) => idleVehicleIds.has(candidate.id))) {
+      try {
+        const route = this.planRoute(vehicle.currentNodeId, task, this.parkingNodeFor(vehicle.id));
+        const pickupDistanceM = this.routeDistanceM(route, task.pickupNodeId);
+        const totalDistanceM = this.routeDistanceM(route);
+        if (
+          !bestAssignment ||
+          pickupDistanceM < bestAssignment.pickupDistanceM ||
+          (pickupDistanceM === bestAssignment.pickupDistanceM && totalDistanceM < bestAssignment.totalDistanceM) ||
+          (pickupDistanceM === bestAssignment.pickupDistanceM && totalDistanceM === bestAssignment.totalDistanceM && vehicle.id.localeCompare(bestAssignment.vehicle.id) < 0)
+        ) {
+          bestAssignment = { vehicle, route, pickupDistanceM, totalDistanceM };
+        }
+      } catch {
+        continue;
+      }
+    }
+    return bestAssignment;
+  }
+
+  private assignTaskToVehicle(vehicle: MutableVehicle, task: TaskStateRecord, route: string[]): void {
+    vehicle.taskId = task.id;
+    vehicle.routeNodeIds = route;
+    vehicle.routeIndex = 0;
+    vehicle.targetNodeId = route[1] ?? null;
+    vehicle.state = 'assigned';
+    vehicle.waitReason = null;
+    vehicle.blockingReservationId = null;
+    vehicle.blockingVehicleId = null;
+    vehicle.directionSwitchReadyNodeId = null;
+    task.state = 'assigned';
+    task.vehicleId = vehicle.id;
+    task.assignedAtSec = this.simTimeSec;
+    task.waitReason = null;
+    this.logEvent('task-assigned', vehicle.id, task.id, task.loadId, vehicle.currentNodeId, task.pickupNodeId, 'nearest-available', this.vehiclePosition(vehicle), {
+      route: route.join('>')
+    });
+  }
+
+  private routeDistanceM(routeNodeIds: string[], stopAtNodeId?: string): number {
+    let distanceM = 0;
+    for (let index = 1; index < routeNodeIds.length; index += 1) {
+      const fromNodeId = routeNodeIds[index - 1]!;
+      const toNodeId = routeNodeIds[index]!;
+      const edge = this.traffic.findEdge(fromNodeId, toNodeId);
+      if (!edge) {
+        throw new Error(`No route edge between ${fromNodeId} and ${toNodeId}`);
+      }
+      distanceM += edge.lengthM;
+      if (toNodeId === stopAtNodeId) {
+        return distanceM;
+      }
+    }
+    return distanceM;
   }
 
   private taskAssignmentBlockReason(task: TaskStateRecord): string | null {
@@ -1605,6 +1658,9 @@ export class ShuttleSimCore {
   private neighbors(nodeId: string): Array<{ nodeId: string; lengthM: number }> {
     const neighbors: Array<{ nodeId: string; lengthM: number }> = [];
     for (const edge of this.scenario.layout.edges) {
+      if (!this.isAllowedStorageTraversalEdge(edge)) {
+        continue;
+      }
       if (edge.from === nodeId) {
         neighbors.push({ nodeId: edge.to, lengthM: edge.lengthM });
       }
@@ -1613,6 +1669,13 @@ export class ShuttleSimCore {
       }
     }
     return neighbors.sort((left, right) => left.nodeId.localeCompare(right.nodeId));
+  }
+
+  private isAllowedStorageTraversalEdge(edge: LayoutEdge): boolean {
+    if (!this.isStorageNode(edge.from) || !this.isStorageNode(edge.to)) {
+      return true;
+    }
+    return this.nodeStorageRowLabel(edge.from) === this.nodeStorageRowLabel(edge.to);
   }
 
   private parkingNodeFor(vehicleId: string): string {

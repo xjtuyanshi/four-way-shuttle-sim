@@ -193,6 +193,7 @@ export const ShuttleScenarioSchema = z.object({
     });
   }
   const storageRows = new Set<string>();
+  const storageRowForNodeId = (nodeId: string): string | null => /^storage-r(\d+)-c\d+$/.exec(nodeId)?.[1] ?? null;
   for (const node of scenario.layout.nodes.filter((candidate) => candidate.type === 'storage')) {
     const match = /^storage-r(\d+)-c(\d+)$/.exec(node.id);
     if (!match) {
@@ -335,6 +336,17 @@ export const ShuttleScenarioSchema = z.object({
           path: ['layout', 'edges', edge.id],
           message: `Edge ${edge.id} has identical from/to coordinates; custom layouts must define a physical track segment.`
         });
+      }
+      if (from.type === 'storage' && to.type === 'storage') {
+        const fromRow = storageRowForNodeId(from.id);
+        const toRow = storageRowForNodeId(to.id);
+        if (fromRow && toRow && fromRow !== toRow) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['layout', 'edges', edge.id],
+            message: `Edge ${edge.id} crosses storage rows; storage-area traversal must stay horizontal within one FIFO row and cross-row movement must use side/main aisles.`
+          });
+        }
       }
     }
   }

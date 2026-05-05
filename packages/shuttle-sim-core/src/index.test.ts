@@ -118,6 +118,21 @@ function addStoredLoads(sim: ShuttleSimCore, nodeIds: string[]) {
   });
 }
 
+function crossRowStorageHops(routeNodeIds: string[]): Array<[string, string]> {
+  const storageRow = (nodeId: string): string | null => /^storage-r(\d+)-c\d+$/.exec(nodeId)?.[1] ?? null;
+  const hops: Array<[string, string]> = [];
+  for (let index = 1; index < routeNodeIds.length; index += 1) {
+    const from = routeNodeIds[index - 1]!;
+    const to = routeNodeIds[index]!;
+    const fromRow = storageRow(from);
+    const toRow = storageRow(to);
+    if (fromRow && toRow && fromRow !== toRow) {
+      hops.push([from, to]);
+    }
+  }
+  return hops;
+}
+
 function verifiedCalibrationDimensions(): NonNullable<ShuttleScenario['layout']['calibrationProfile']>['dimensions'] {
   const currentAssumptionValues = new Map(
     createDefaultShuttleScenario().layout.calibrationProfile?.dimensions.map((dimension) => [dimension.key, dimension.valueM])
@@ -729,6 +744,31 @@ describe('shuttle phase 0 SimCore', () => {
     ).toThrow(/requires side access node left-row-01/);
   });
 
+  it('rejects storage-to-storage edges that cross FIFO rows', () => {
+    const scenario = createDefaultShuttleScenario();
+    expect(() =>
+      ShuttleScenarioSchema.parse({
+        ...scenario,
+        layout: {
+          ...scenario.layout,
+          edges: [
+            ...scenario.layout.edges,
+            {
+              id: 'storage-r01-c01-storage-r02-c01',
+              from: 'storage-r01-c01',
+              to: 'storage-r02-c01',
+              lengthM: 1.2,
+              directionMode: 'twoWay',
+              reservationType: 'edge',
+              conflictGroup: 'invalid-storage-cross-row',
+              noParking: true
+            }
+          ]
+        }
+      })
+    ).toThrow(/storage-area traversal must stay horizontal/);
+  });
+
   it('produces the same event log hash for the same seed', () => {
     const scenario = createDefaultShuttleScenario({ durationSec: 180, taskGeneration: { maxTasks: 8 } });
     const hashes = Array.from({ length: 3 }, () => {
@@ -1061,6 +1101,94 @@ describe('shuttle phase 0 SimCore', () => {
 
     expect(assignedVehicle?.routeNodeIds).toEqual(expect.arrayContaining(['inbound-lift-test', 'right-row-01', 'storage-r01-c02']));
     expect(assignedVehicle?.routeNodeIds).not.toContain('storage-r01-c01');
+  });
+
+  it('routes cross-row storage moves through side aisles instead of vertical storage hops', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario({
+      durationSec: 120,
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 4
+      }
+    }));
+    sim.setVehicleRouteForTest('SH-01', ['storage-r01-c01']);
+    sim.setVehicleRouteForTest('SH-02', ['parking-a', 'main-north-04']);
+    sim.addLoadForTest({ id: 'load-r02-c01', state: 'stored', nodeId: 'storage-r02-c01', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'outbound-r02-c01',
+      kind: 'outbound',
+      state: 'queued',
+      createdAtSec: 0,
+      assignedAtSec: null,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r02-c01',
+      dropoffNodeId: 'outbound-lift-top-01',
+      loadId: 'load-r02-c01',
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: null
+    });
+
+    sim.step(0.2);
+    const assignedVehicle = sim.getState().vehicles.find((vehicle) => vehicle.taskId === 'outbound-r02-c01');
+
+    expect(assignedVehicle?.id).toBe('SH-01');
+    expect(assignedVehicle?.routeNodeIds).toEqual(expect.arrayContaining(['left-row-01', 'left-row-02', 'storage-r02-c01']));
+    expect(crossRowStorageHops(assignedVehicle?.routeNodeIds ?? [])).toEqual([]);
+  });
+
+  it('assigns executable work to the nearest idle shuttle resource', () => {
+    const scenario = testScenario({
+      layout: {
+        units: 'meter',
+        calibrationProfile: null,
+        nodes: [
+          { id: 'parking-a', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'parking-b', type: 'parking', x: 9, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'inbound-lift-test', type: 'lift-blackbox', liftKind: 'inbound', x: 10, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'right-row-01', type: 'intersection', x: 11, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'storage-r01-c01', type: 'storage', x: 12, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'left-row-01', type: 'intersection', x: 13, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] }
+        ],
+        edges: [
+          { id: 'parking-a-inbound-lift-test', from: 'parking-a', to: 'inbound-lift-test', lengthM: 10, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'far-resource', noParking: true },
+          { id: 'parking-b-inbound-lift-test', from: 'parking-b', to: 'inbound-lift-test', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'near-resource', noParking: true },
+          { id: 'inbound-lift-test-right-row-01', from: 'inbound-lift-test', to: 'right-row-01', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'lift-row', noParking: true },
+          { id: 'right-row-01-storage-r01-c01', from: 'right-row-01', to: 'storage-r01-c01', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'fifo-lane-01', noParking: true },
+          { id: 'storage-r01-c01-left-row-01', from: 'storage-r01-c01', to: 'left-row-01', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'fifo-lane-01', noParking: true }
+        ],
+        zones: []
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({ id: 'load-near', state: 'waiting', nodeId: 'inbound-lift-test', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'task-near',
+      kind: 'inbound',
+      state: 'queued',
+      createdAtSec: 0,
+      assignedAtSec: null,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'inbound-lift-test',
+      dropoffNodeId: 'storage-r01-c01',
+      loadId: 'load-near',
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: null
+    });
+
+    sim.step(0.2);
+
+    expect(sim.getState().tasks.find((task) => task.id === 'task-near')).toMatchObject({
+      state: 'assigned',
+      vehicleId: 'SH-02'
+    });
+    expect(sim.getEventLog().find((entry) => entry.eventType === 'task-assigned' && entry.taskId === 'task-near')?.reason).toBe('nearest-available');
   });
 
   it('does not treat future queued inbound slots as physical storage obstacles', () => {
