@@ -599,6 +599,53 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-02')?.currentNodeId).toBe('main-south-04');
   });
 
+  it('serializes lift connector crossings through the main-aisle portal zone', () => {
+    const scenario = createDefaultShuttleScenario({
+      durationSec: 20,
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2
+      },
+      physicsParams: {
+        emptySpeedMps: 2.6,
+        loadedSpeedMps: 2.2,
+        accelerationMps2: 2,
+        switchDirectionSec: 0,
+        liftTimeSec: 0.5,
+        lowerTimeSec: 0.5,
+        loadedClearanceM: 0.2,
+        reservationClearanceSec: 0.1
+      }
+    });
+    const portalZone = scenario.layout.zones.find((zone) => zone.id === 'zone-main-portal-02');
+    expect(portalZone).toMatchObject({
+      nodeIds: []
+    });
+    expect(portalZone?.edgeIds).toEqual(expect.arrayContaining([
+      'outbound-lift-top-01-main-south-02',
+      'main-north-02-main-north-03'
+    ]));
+
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['main-south-02', 'outbound-lift-top-01']);
+    sim.setVehicleRouteForTest('SH-02', ['main-north-03', 'main-north-02']);
+    sim.step(0.2);
+
+    const state = sim.getState();
+    expect(state.reservations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ vehicleId: 'SH-01', resourceType: 'zone', resourceId: 'zone-main-portal-02' })
+    ]));
+    expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-02')).toMatchObject({
+      state: 'waiting-blocked',
+      waitReason: 'zone-reserved',
+      currentNodeId: 'main-north-03'
+    });
+    expect(sim.getDebugState().currentNodeOccupancy).toContainEqual({ nodeId: 'main-north-03', vehicleId: 'SH-02' });
+  });
+
   it('defers outbound work instead of creating phantom pallets when contiguous lane-fill storage is empty', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       durationSec: 10,

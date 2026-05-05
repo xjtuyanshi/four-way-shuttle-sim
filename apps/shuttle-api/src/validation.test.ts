@@ -66,8 +66,10 @@ describe('phase 0 validation', () => {
     const result = validatePhase0Scenario(createDefaultShuttleScenario({ durationSec: 120 }), {
       durationSec: 120,
       longRunDurationSec: 600,
+      stressDurationSec: 120,
       repeatCount: 3,
-      sweepSeeds: [20260502, 20260503]
+      sweepSeeds: [20260502, 20260503],
+      stressSeeds: [20260502]
     });
 
     expect(result.deterministic.pass).toBe(true);
@@ -89,6 +91,20 @@ describe('phase 0 validation', () => {
     expect(result.acceptance.longRunThroughputFloorMet).toBe(true);
     expect(result.acceptance.longRunQueuesBounded).toBe(true);
     expect(result.acceptance.noLongRunPhysicalSafetyViolations).toBe(true);
+    expect(result.stress.scenarios.map((scenario) => scenario.id)).toEqual([
+      'balanced-high-load',
+      'inbound-only-saturation',
+      'outbound-empty-store',
+      'outbound-preloaded-pressure',
+      'near-full-inbound-pressure'
+    ]);
+    expect(result.stress.scenarios.every((scenario) => scenario.runs.length === 1)).toBe(true);
+    expect(result.stress.scenarios.every((scenario) => scenario.observedBottleneckReasons.length > 0)).toBe(true);
+    expect(result.stress.noStressDeadlocks).toBe(true);
+    expect(result.stress.noStressPhysicalSafetyViolations).toBe(true);
+    expect(result.stress.noStressReservationCoverageViolations).toBe(true);
+    expect(result.stress.expectedBottlenecksObserved).toBe(true);
+    expect(result.acceptance.stressPass).toBe(true);
     expect(result.acceptance.pass).toBe(true);
   }, 40000);
 
@@ -98,6 +114,7 @@ describe('phase 0 validation', () => {
       longRunDurationSec: 240,
       repeatCount: 1,
       sweepSeeds: [20260502],
+      includeStress: false,
       longRunThresholds: {
         minTotalPph: 999,
         maxQueuedTasks: 0,

@@ -115,14 +115,18 @@ app.post('/api/shuttle/validatePhase0', async (request: Request, response: Respo
   try {
     const durationSec = Number.isFinite(Number(request.body?.durationSec)) ? Number(request.body.durationSec) : undefined;
     const longRunDurationSec = Number.isFinite(Number(request.body?.longRunDurationSec)) ? Number(request.body.longRunDurationSec) : undefined;
+    const stressDurationSec = Number.isFinite(Number(request.body?.stressDurationSec)) ? Number(request.body.stressDurationSec) : undefined;
     const repeatCount = Number.isFinite(Number(request.body?.repeatCount)) ? Number(request.body.repeatCount) : undefined;
     const sweepSeeds = Array.isArray(request.body?.sweepSeeds)
       ? request.body.sweepSeeds.map(Number).filter((value: number) => Number.isInteger(value) && value >= 0)
       : undefined;
+    const stressSeeds = Array.isArray(request.body?.stressSeeds)
+      ? request.body.stressSeeds.map(Number).filter((value: number) => Number.isInteger(value) && value >= 0)
+      : undefined;
     response.json({
       ok: true,
       prerequisites: await collectPrerequisites(),
-      validation: validatePhase0Scenario(sim.getScenario(), { durationSec, longRunDurationSec, repeatCount, sweepSeeds })
+      validation: validatePhase0Scenario(sim.getScenario(), { durationSec, longRunDurationSec, stressDurationSec, repeatCount, sweepSeeds, stressSeeds })
     });
   } catch (error) {
     next(error);

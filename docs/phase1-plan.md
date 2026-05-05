@@ -55,13 +55,16 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 - Added `config/shuttle/static-scene-contract.golden.json` as the default static-scene regression fixture. SimCore and dashboard tests compare the full contract against it, and the Unreal smoke path checks item-level parity against the same fixture.
 - Added explicit `layoutCalibrationProfile.blockedCells` metadata and static-scene `blockedCells` parity so CAD-visible blocked/structural cells can be represented without pretending they are storage nodes.
 - Added targeted congestion regression coverage for a near-full storage grid, four-vehicle mixed lift/FIFO pressure, inbound-only pressure, and outbound-only pressure. These tests assert positive throughput where applicable plus no deadlocks, livelocks, or physical safety failures.
+- Added a validation-owned stress suite covering balanced 7200/7200 PPH surge, inbound-only saturation, outbound on empty store, preloaded outbound pressure, and near-full inbound pressure. The suite reports requested versus achieved PPH, queue high water, stress pass/fail, and observed bottleneck reasons.
+- The stress suite exposed a real portal conflict between lift connector crossings and the main aisle. Default layout portal zones now include lift connector edges plus adjacent main-lane edge segments, and a regression test asserts that connector crossings serialize with main-lane portal traffic.
 - Verified the local Unreal path through setup, source bridge smoke, live bridge smoke, staged Mac runtime generation, and browser Pixel Streaming smoke evidence. This proves the local runtime scaffold, not a final signed/notarized production package.
 
 ## Next TODO
 
-- Track the current public `main` ChatGPT Pro follow-up and fold in only concrete blockers; the previous verdict was merge now with no must-fix.
+- Track the current public `main` ChatGPT Pro follow-up and fold in only concrete blockers. The next review request must explicitly ask for software, mechanical/manufacturing, and IE/operations findings against the stress-suite output.
 - Replace the assumption-grade `phase0-cad-assumption-v1` layout profile with CAD/vendor/site dimensions before making stronger throughput claims: storage pitch, aisle widths, shuttle footprint, pallet/load envelope, lift pad envelope, roller-transfer envelope, and blocked/structural cells.
 - Keep the configurable layout profile as the calibration boundary; when CAD/vendor/site dimensions deliberately change the default scene, regenerate and review the golden static-scene fixture in the same commit.
+- Expand beyond 4 shuttles only after adding calibrated parking/charging/staging positions; Phase 0 still enforces one parking node per vehicle.
 - Add true push-lane or multi-axis storage-grid mechanics only after the FIFO lane policy is explicitly modeled against the target physical layout.
 - Replace remaining Unreal placeholder geometry with calibrated meshes/materials once CAD or vendor dimensions are available; keep SimCore authoritative.
 - Run a 30-minute 1080p single-user Pixel Streaming soak only after the calibrated Unreal scene foundation is visually reviewed and the browser/API validation gate is green.

@@ -182,11 +182,21 @@ The browser demo has been adjusted toward the user's four-way shuttle reference:
 - Runtime playback speed supports `1x`, `2x`, `4x`, and `10x`.
 - Fast playback is internally substepped at `scenario.timeStepSec`; the API broadcasts the final state after the accumulated live interval instead of advancing the simulation in one large `10x` jump.
 - The checked-in `config/shuttle/phase0-scenario.json` has been synced to the same current default dense-layout scenario so `loadScenario` and reviewers do not see the old sparse demo.
+- The validation gate now includes a stress suite, not only deterministic smoke:
+  - balanced 7200/7200 PPH empty-start surge
+  - inbound-only saturation
+  - outbound requested against an empty store
+  - outbound preloaded pressure
+  - near-full inbound pressure
+- A new regression found and fixed an engineering-relevant portal conflict: lift connector edges crossing the main aisle now share the corresponding portal zone with adjacent main-lane edge segments, so a shuttle cannot cross vertically through a main-lane vehicle path.
 
 Current branch files that matter for this alignment:
 
 - `packages/shuttle-sim-core/src/index.ts`
 - `packages/shuttle-sim-core/src/index.test.ts`
+- `apps/shuttle-api/src/validation.ts`
+- `apps/shuttle-api/src/validation.test.ts`
+- `apps/shuttle-dashboard/src/App.tsx`
 - `apps/shuttle-dashboard/src/ShuttleScene3D.tsx`
 - `config/shuttle/phase0-scenario.json`
 - `docs/layout-reference.md`
@@ -206,6 +216,8 @@ This pass closes the latest Pro "merge after fixes" blockers and follow-up reali
 - Browser/Unreal visuals use purple dense pallet-cell islands and yellow aisle tracks, matching the single-level four-way shuttle layout direction.
 - Static-scene storage-policy wording is now part of the SimCore contract and Unreal smoke parity, not only dashboard prose.
 - Targeted congestion tests now cover near-full inbound, four-vehicle mixed pressure, inbound-only pressure, and outbound-only pressure.
+- `pnpm shuttle:validate` now runs a pressure suite with expected bottleneck assertions. Acceptance fails if stress runs create deadlocks, physical safety violations, reservation coverage violations, or if expected bottleneck reasons such as `storage-empty`, `storage-full`, `fifo-*`, lift-busy, or `zone-reserved` do not appear.
+- Dashboard validation output now surfaces the stress suite status, stress scenario pass count, stress queue high water, and observed bottleneck reasons.
 
 ## Verification Already Run
 
@@ -214,7 +226,7 @@ All passed locally after the latest merge-blocker fixes and current-main hardeni
 ```bash
 pnpm test:shuttle
 pnpm typecheck
-pnpm test  # 46 tests
+pnpm test  # 52 tests
 pnpm build
 pnpm shuttle:validate
 pnpm shuttle:ws-smoke
@@ -239,11 +251,22 @@ longRunQueuesBounded=true
 noLongRunDeadlocks=true
 noLongRunPhysicalSafetyViolations=true
 noLongRunReservationCoverageViolations=true
+stressPass=true
+noStressDeadlocks=true
+noStressPhysicalSafetyViolations=true
+noStressReservationCoverageViolations=true
+expectedStressBottlenecksObserved=true
+positiveStressThroughputWhereRequired=true
 totalPphMean=15
 longRun.totalPphMean=18
 longRun.maxQueuedTasks=2
-longRun.maxWaitingVehicles=0
+longRun.maxWaitingVehicles=1
 longRun.maxLiftPortQueueLength=1
+stress.durationSec=180
+stress.seeds=20260502,20260513
+stress.scenarios=balanced-high-load,inbound-only-saturation,outbound-empty-store,outbound-preloaded-pressure,near-full-inbound-pressure
+stress.maxQueuedTasks=79
+stress.observedBottlenecks include storage-empty, storage-full, fifo-lane-busy, fifo-left/right-network-busy, inbound/outbound-lift-busy, zone-reserved
 maxObservedSpeedMps=2
 maxObservedAccelerationMps2=1
 minVehicleSeparationM=1.6001

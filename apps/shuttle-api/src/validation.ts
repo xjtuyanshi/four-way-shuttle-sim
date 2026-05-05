@@ -1,5 +1,5 @@
 import type { Reservation, ShuttleScenario, ShuttleSimState, VehicleState } from '@four-way-shuttle/schemas';
-import { ShuttleSimCore, hashEventLog, type ShuttleSimDebugState } from '@four-way-shuttle/sim-core';
+import { ShuttleSimCore, createDefaultShuttleScenario, hashEventLog, type ShuttleSimDebugState } from '@four-way-shuttle/sim-core';
 
 export type PhysicalViolationCode =
   | 'unreservedEdgeOccupancy'
@@ -50,6 +50,38 @@ export type Phase0ValidationRun = {
   physicalViolationExamples: PhysicalViolationExample[];
 };
 
+export type Phase0StressRun = Phase0ValidationRun & {
+  stressScenarioId: string;
+  label: string;
+  requestedInboundPph: number;
+  requestedOutboundPph: number;
+  requestedTotalPph: number;
+  achievedTotalRatio: number | null;
+  expectedBottleneckReasonPrefixes: string[];
+  observedBottleneckReasons: string[];
+  expectedBottleneckObserved: boolean;
+};
+
+export type Phase0StressScenarioResult = {
+  id: string;
+  label: string;
+  description: string;
+  durationSec: number;
+  seeds: number[];
+  requestedInboundPph: number;
+  requestedOutboundPph: number;
+  requestedTotalPph: number;
+  expectedBottleneckReasonPrefixes: string[];
+  requiresPositiveThroughput: boolean;
+  runs: Phase0StressRun[];
+  totalPphMean: number;
+  maxQueuedTasks: number;
+  maxWaitingVehicles: number;
+  maxLiftPortQueueLength: number;
+  observedBottleneckReasons: string[];
+  pass: boolean;
+};
+
 export type LongRunAcceptanceThresholds = {
   minTotalPph: number;
   maxQueuedTasks: number;
@@ -85,6 +117,17 @@ export type Phase0ValidationResult = {
     maxWaitingVehicles: number;
     maxLiftPortQueueLength: number;
   };
+  stress: {
+    durationSec: number;
+    seeds: number[];
+    scenarios: Phase0StressScenarioResult[];
+    pass: boolean;
+    noStressDeadlocks: boolean;
+    noStressPhysicalSafetyViolations: boolean;
+    noStressReservationCoverageViolations: boolean;
+    expectedBottlenecksObserved: boolean;
+    positiveThroughputWhereRequired: boolean;
+  };
   acceptance: {
     sameSeedEventHashStable: boolean;
     noDeadlocksInSweep: boolean;
@@ -98,6 +141,12 @@ export type Phase0ValidationResult = {
     noLongRunDeadlocks: boolean;
     noLongRunPhysicalSafetyViolations: boolean;
     noLongRunReservationCoverageViolations: boolean;
+    stressPass: boolean;
+    noStressDeadlocks: boolean;
+    noStressPhysicalSafetyViolations: boolean;
+    noStressReservationCoverageViolations: boolean;
+    expectedStressBottlenecksObserved: boolean;
+    positiveStressThroughputWhereRequired: boolean;
     pass: boolean;
   };
 };
@@ -107,6 +156,9 @@ type Phase0ValidationOptions = {
   longRunDurationSec?: number;
   repeatCount?: number;
   sweepSeeds?: number[];
+  stressDurationSec?: number;
+  stressSeeds?: number[];
+  includeStress?: boolean;
   longRunThresholds?: Partial<LongRunAcceptanceThresholds>;
 };
 
@@ -132,6 +184,13 @@ const VIOLATION_CODES: PhysicalViolationCode[] = [
 
 const POSITION_TOLERANCE_M = 0.35;
 const EXAMPLE_LIMIT = 20;
+const RESERVATION_COVERAGE_CODES: PhysicalViolationCode[] = [
+  'unreservedEdgeOccupancy',
+  'unreservedNodeOccupancy',
+  'unreservedZoneOccupancy',
+  'nodeOccupancyMismatch',
+  'edgeOccupancyMismatch'
+];
 
 function defaultLongRunThresholds(scenario: ShuttleScenario): LongRunAcceptanceThresholds {
   const requestedPph = scenario.taskGeneration.inboundRatePerHour + scenario.taskGeneration.outboundRatePerHour;
@@ -151,6 +210,158 @@ function resolveLongRunThresholds(
     ...defaultLongRunThresholds(scenario),
     ...overrides
   };
+}
+
+function scenarioWithOperationalStressParams(
+  base: ShuttleScenario,
+  overrides: Partial<Omit<ShuttleScenario, 'vehicles' | 'taskGeneration' | 'physicsParams' | 'trafficPolicy'>> & {
+    vehicles?: Partial<ShuttleScenario['vehicles']>;
+    taskGeneration?: Partial<ShuttleScenario['taskGeneration']>;
+    physicsParams?: Partial<ShuttleScenario['physicsParams']>;
+    trafficPolicy?: Partial<ShuttleScenario['trafficPolicy']>;
+  }
+): ShuttleScenario {
+  return createDefaultShuttleScenario({
+    ...base,
+    ...overrides,
+    vehicles: { ...base.vehicles, ...overrides.vehicles },
+    taskGeneration: { ...base.taskGeneration, ...overrides.taskGeneration },
+    physicsParams: { ...base.physicsParams, ...overrides.physicsParams },
+    trafficPolicy: { ...base.trafficPolicy, ...overrides.trafficPolicy }
+  });
+}
+
+function defaultStressPhysics(scenario: ShuttleScenario): Partial<ShuttleScenario['physicsParams']> {
+  return {
+    emptySpeedMps: Math.max(scenario.physicsParams.emptySpeedMps, 2.6),
+    loadedSpeedMps: Math.max(scenario.physicsParams.loadedSpeedMps, 2.2),
+    accelerationMps2: Math.max(scenario.physicsParams.accelerationMps2, 2),
+    liftTimeSec: Math.min(scenario.physicsParams.liftTimeSec, 0.5),
+    lowerTimeSec: Math.min(scenario.physicsParams.lowerTimeSec, 0.5),
+    reservationClearanceSec: Math.min(scenario.physicsParams.reservationClearanceSec, 0.1)
+  };
+}
+
+function storageNodeIds(scenario: ShuttleScenario): string[] {
+  return scenario.layout.nodes
+    .filter((node) => node.type === 'storage')
+    .sort((left, right) => left.z - right.z || left.x - right.x || left.id.localeCompare(right.id))
+    .map((node) => node.id);
+}
+
+type Phase0StressScenarioSpec = {
+  id: string;
+  label: string;
+  description: string;
+  scenario: ShuttleScenario;
+  initialStoredNodeIds: string[];
+  expectedBottleneckReasonPrefixes: string[];
+  requiresPositiveThroughput: boolean;
+};
+
+function buildStressScenarioSpecs(baseScenario: ShuttleScenario): Phase0StressScenarioSpec[] {
+  const stressPhysics = defaultStressPhysics(baseScenario);
+  const allStorageNodeIds = storageNodeIds(baseScenario);
+  const preloadOutletNodes = allStorageNodeIds.slice(0, 48);
+  const nearFullStoredNodes = allStorageNodeIds.slice(0, Math.max(0, allStorageNodeIds.length - 4));
+  const common = {
+    vehicles: { count: Math.min(4, baseScenario.vehicles.count < 4 ? 4 : baseScenario.vehicles.count) },
+    physicsParams: stressPhysics,
+    trafficPolicy: { deadlockDetectSec: 5 }
+  };
+
+  return [
+    {
+      id: 'balanced-high-load',
+      label: 'Balanced high-load surge',
+      description: 'Empty-start surge with inbound and outbound requests far above physical capacity; expected to expose storage-empty, lift, and FIFO bottlenecks without deadlock or unsafe reservations.',
+      scenario: scenarioWithOperationalStressParams(baseScenario, {
+        ...common,
+        taskGeneration: {
+          inboundRatePerHour: 7200,
+          outboundRatePerHour: 7200,
+          inboundOutboundMix: 0.5,
+          arrivalDistribution: 'seeded-exponential',
+          maxTasks: 80
+        }
+      }),
+      initialStoredNodeIds: [],
+      expectedBottleneckReasonPrefixes: ['storage-empty', 'fifo-', 'inbound-lift-busy:', 'outbound-lift-busy:'],
+      requiresPositiveThroughput: true
+    },
+    {
+      id: 'inbound-only-saturation',
+      label: 'Inbound-only saturation',
+      description: 'All demand enters from dedicated inbound lifts so storage-row and lift-port queues must absorb the pressure without overbooking the dense FIFO grid.',
+      scenario: scenarioWithOperationalStressParams(baseScenario, {
+        ...common,
+        taskGeneration: {
+          inboundRatePerHour: 7200,
+          outboundRatePerHour: 0,
+          inboundOutboundMix: 1,
+          arrivalDistribution: 'deterministic',
+          maxTasks: 80
+        }
+      }),
+      initialStoredNodeIds: [],
+      expectedBottleneckReasonPrefixes: ['fifo-', 'inbound-lift-busy:'],
+      requiresPositiveThroughput: true
+    },
+    {
+      id: 'outbound-empty-store',
+      label: 'Outbound on empty store',
+      description: 'Outbound requests against an empty dense store must defer as storage-empty instead of creating phantom pallets or unsafe vehicle work.',
+      scenario: scenarioWithOperationalStressParams(baseScenario, {
+        ...common,
+        taskGeneration: {
+          inboundRatePerHour: 0,
+          outboundRatePerHour: 7200,
+          inboundOutboundMix: 0,
+          arrivalDistribution: 'deterministic',
+          maxTasks: 80
+        }
+      }),
+      initialStoredNodeIds: [],
+      expectedBottleneckReasonPrefixes: ['storage-empty'],
+      requiresPositiveThroughput: false
+    },
+    {
+      id: 'outbound-preloaded-pressure',
+      label: 'Outbound preloaded pressure',
+      description: 'Preloaded outlet-side pallets exercise retrieval, left-side FIFO access, and outbound lift queues under high outbound demand.',
+      scenario: scenarioWithOperationalStressParams(baseScenario, {
+        ...common,
+        taskGeneration: {
+          inboundRatePerHour: 0,
+          outboundRatePerHour: 7200,
+          inboundOutboundMix: 0,
+          arrivalDistribution: 'seeded-exponential',
+          maxTasks: 80
+        }
+      }),
+      initialStoredNodeIds: preloadOutletNodes,
+      expectedBottleneckReasonPrefixes: ['fifo-', 'outbound-lift-busy:'],
+      requiresPositiveThroughput: true
+    },
+    {
+      id: 'near-full-inbound-pressure',
+      label: 'Near-full inbound pressure',
+      description: 'Nearly full storage leaves only the infeed-side tail cells open, so inbound work must reserve the last FIFO slots then report storage-full without double-booking cells.',
+      scenario: scenarioWithOperationalStressParams(baseScenario, {
+        ...common,
+        taskGeneration: {
+          inboundRatePerHour: 7200,
+          outboundRatePerHour: 0,
+          inboundOutboundMix: 1,
+          arrivalDistribution: 'deterministic',
+          maxTasks: 80
+        }
+      }),
+      initialStoredNodeIds: nearFullStoredNodes,
+      expectedBottleneckReasonPrefixes: ['storage-full'],
+      requiresPositiveThroughput: false
+    }
+  ];
 }
 
 function round(value: number, decimals = 4): number {
@@ -522,6 +733,177 @@ function runOnce(scenario: ShuttleScenario, seed: number, durationSec: number): 
   };
 }
 
+function addStressStoredLoads(sim: ShuttleSimCore, nodeIds: string[]): void {
+  nodeIds.forEach((nodeId, index) => {
+    sim.addLoadForTest({
+      id: `stress-load-${String(index + 1).padStart(4, '0')}`,
+      state: 'stored',
+      nodeId,
+      vehicleId: null,
+      weightKg: 100
+    });
+  });
+}
+
+function observedBottleneckReasons(run: Phase0ValidationRun): string[] {
+  return Object.entries(run.blockedTimeByReasonSec)
+    .filter(([, blockedSec]) => blockedSec > 0)
+    .map(([reason]) => reason)
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function hasExpectedBottleneck(run: Phase0ValidationRun, expectedPrefixes: string[]): boolean {
+  if (expectedPrefixes.length === 0) {
+    return true;
+  }
+  const observed = observedBottleneckReasons(run);
+  return expectedPrefixes.some((prefix) => observed.some((reason) => reason.startsWith(prefix)));
+}
+
+function hasReservationCoverageViolation(run: Phase0ValidationRun): boolean {
+  return RESERVATION_COVERAGE_CODES.some((code) => run.physicalViolationsByCode[code] > 0);
+}
+
+function runStressOnce(
+  spec: Phase0StressScenarioSpec,
+  seed: number,
+  durationSec: number
+): Phase0StressRun {
+  const scenario = { ...spec.scenario, seed, durationSec };
+  const sim = new ShuttleSimCore(scenario);
+  addStressStoredLoads(sim, spec.initialStoredNodeIds);
+  sim.start();
+  let maxObservedSpeedMps = 0;
+  let maxObservedAccelerationMps2 = 0;
+  let minVehicleSeparationM: number | null = null;
+  let previousSpeeds = new Map<string, number>();
+  let maxQueuedTasks = 0;
+  let maxWaitingVehicles = 0;
+  let maxLiftPortQueueLength = 0;
+  const physicalViolationsByCode = emptyViolationCounts();
+  const physicalViolationExamples: PhysicalViolationExample[] = [];
+
+  while (sim.getState().status === 'running') {
+    const state = sim.step(scenario.timeStepSec);
+    const physical = inspectState(
+      scenario,
+      state,
+      sim.getDebugState(),
+      previousSpeeds,
+      physicalViolationsByCode,
+      physicalViolationExamples
+    );
+    maxObservedSpeedMps = Math.max(maxObservedSpeedMps, physical.maxObservedSpeedMps);
+    maxObservedAccelerationMps2 = Math.max(maxObservedAccelerationMps2, physical.maxObservedAccelerationMps2);
+    maxQueuedTasks = Math.max(maxQueuedTasks, state.kpis.queuedTasks);
+    maxWaitingVehicles = Math.max(maxWaitingVehicles, state.traffic.waitingVehicles.length);
+    maxLiftPortQueueLength = Math.max(maxLiftPortQueueLength, 0, ...state.traffic.liftPorts.map((port) => port.queueLength));
+    previousSpeeds = new Map(state.vehicles.map((vehicle) => [vehicle.id, vehicle.speedMps]));
+    minVehicleSeparationM =
+      physical.minVehicleSeparationM === null
+        ? minVehicleSeparationM
+        : minVehicleSeparationM === null
+          ? physical.minVehicleSeparationM
+          : Math.min(minVehicleSeparationM, physical.minVehicleSeparationM);
+  }
+
+  const state = sim.getState();
+  const eventLog = sim.getEventLog();
+  const physicalViolationCount = Object.values(physicalViolationsByCode).reduce((sum, value) => sum + value, 0);
+  const requestedTotalPph = scenario.taskGeneration.inboundRatePerHour + scenario.taskGeneration.outboundRatePerHour;
+  const baseRun: Phase0ValidationRun = {
+    seed,
+    durationSec,
+    status: state.status,
+    eventLogHash: hashEventLog(eventLog),
+    eventCount: eventLog.length,
+    completedInbound: state.kpis.completedInbound,
+    completedOutbound: state.kpis.completedOutbound,
+    totalPph: state.kpis.totalPph,
+    inboundPph: state.kpis.inboundPph,
+    outboundPph: state.kpis.outboundPph,
+    queuedTasks: state.kpis.queuedTasks,
+    maxQueuedTasks,
+    maxWaitingVehicles,
+    maxLiftPortQueueLength,
+    blockedTimeByReasonSec: state.kpis.blockedTimeByReasonSec,
+    reservationConflictCount: state.kpis.reservationConflictCount,
+    deadlockCount: state.kpis.deadlockCount,
+    maxObservedSpeedMps: round(maxObservedSpeedMps),
+    maxObservedAccelerationMps2: round(maxObservedAccelerationMps2),
+    minVehicleSeparationM: minVehicleSeparationM === null ? null : round(minVehicleSeparationM),
+    physicalViolationCount,
+    physicalViolationsByCode,
+    physicalViolationExamples
+  };
+
+  const observed = observedBottleneckReasons(baseRun);
+  return {
+    ...baseRun,
+    stressScenarioId: spec.id,
+    label: spec.label,
+    requestedInboundPph: scenario.taskGeneration.inboundRatePerHour,
+    requestedOutboundPph: scenario.taskGeneration.outboundRatePerHour,
+    requestedTotalPph,
+    achievedTotalRatio: requestedTotalPph > 0 ? round(state.kpis.totalPph / requestedTotalPph, 6) : null,
+    expectedBottleneckReasonPrefixes: spec.expectedBottleneckReasonPrefixes,
+    observedBottleneckReasons: observed,
+    expectedBottleneckObserved: hasExpectedBottleneck(baseRun, spec.expectedBottleneckReasonPrefixes)
+  };
+}
+
+function summarizeStressScenario(
+  spec: Phase0StressScenarioSpec,
+  seeds: number[],
+  durationSec: number
+): Phase0StressScenarioResult {
+  const runs = seeds.map((seed) => runStressOnce(spec, seed, durationSec));
+  const totalPphValues = runs.map((run) => run.totalPph);
+  const observed = [...new Set(runs.flatMap((run) => run.observedBottleneckReasons))].sort((left, right) => left.localeCompare(right));
+  const pass = runs.every((run) =>
+    run.eventCount > 0 &&
+    run.deadlockCount === 0 &&
+    run.physicalViolationCount === 0 &&
+    !hasReservationCoverageViolation(run) &&
+    run.expectedBottleneckObserved &&
+    (!spec.requiresPositiveThroughput || run.completedInbound + run.completedOutbound > 0)
+  );
+
+  return {
+    id: spec.id,
+    label: spec.label,
+    description: spec.description,
+    durationSec,
+    seeds,
+    requestedInboundPph: spec.scenario.taskGeneration.inboundRatePerHour,
+    requestedOutboundPph: spec.scenario.taskGeneration.outboundRatePerHour,
+    requestedTotalPph: spec.scenario.taskGeneration.inboundRatePerHour + spec.scenario.taskGeneration.outboundRatePerHour,
+    expectedBottleneckReasonPrefixes: spec.expectedBottleneckReasonPrefixes,
+    requiresPositiveThroughput: spec.requiresPositiveThroughput,
+    runs,
+    totalPphMean: round(totalPphValues.reduce((sum, value) => sum + value, 0) / Math.max(1, totalPphValues.length)),
+    maxQueuedTasks: Math.max(0, ...runs.map((run) => run.maxQueuedTasks)),
+    maxWaitingVehicles: Math.max(0, ...runs.map((run) => run.maxWaitingVehicles)),
+    maxLiftPortQueueLength: Math.max(0, ...runs.map((run) => run.maxLiftPortQueueLength)),
+    observedBottleneckReasons: observed,
+    pass
+  };
+}
+
+function emptyStressResult(durationSec: number, seeds: number[]): Phase0ValidationResult['stress'] {
+  return {
+    durationSec,
+    seeds,
+    scenarios: [],
+    pass: true,
+    noStressDeadlocks: true,
+    noStressPhysicalSafetyViolations: true,
+    noStressReservationCoverageViolations: true,
+    expectedBottlenecksObserved: true,
+    positiveThroughputWhereRequired: true
+  };
+}
+
 export function validatePhase0Scenario(
   scenario: ShuttleScenario,
   options: Phase0ValidationOptions = {}
@@ -530,13 +912,55 @@ export function validatePhase0Scenario(
   const longRunDurationSec = options.longRunDurationSec ?? 600;
   const repeatCount = options.repeatCount ?? 3;
   const sweepSeeds = options.sweepSeeds ?? [scenario.seed, scenario.seed + 1, scenario.seed + 2];
+  const stressDurationSec = options.stressDurationSec ?? Math.min(180, scenario.durationSec);
+  const stressSeeds = options.stressSeeds ?? [scenario.seed, scenario.seed + 11];
   const longRunThresholds = resolveLongRunThresholds(scenario, options.longRunThresholds);
 
   const repeatRuns = Array.from({ length: repeatCount }, () => runOnce(scenario, scenario.seed, durationSec));
   const hashes = repeatRuns.map((run) => run.eventLogHash);
   const seedSweepRuns = sweepSeeds.map((seed) => runOnce(scenario, seed, durationSec));
   const longRunRuns = sweepSeeds.map((seed) => runOnce(scenario, seed, longRunDurationSec));
-  const allRuns = [...repeatRuns, ...seedSweepRuns, ...longRunRuns];
+  const stress = options.includeStress === false
+    ? emptyStressResult(stressDurationSec, stressSeeds)
+    : (() => {
+      const scenarios = buildStressScenarioSpecs(scenario).map((spec) =>
+        summarizeStressScenario(spec, stressSeeds, stressDurationSec)
+      );
+      const stressRuns = scenarios.flatMap((stressScenario) => stressScenario.runs);
+      const noStressDeadlocks = stressRuns.every((run) => run.deadlockCount === 0);
+      const noStressPhysicalSafetyViolations = stressRuns.every((run) => run.physicalViolationCount === 0);
+      const noStressReservationCoverageViolations = stressRuns.every((run) => !hasReservationCoverageViolation(run));
+      const expectedBottlenecksObserved = scenarios.every((stressScenario) =>
+        stressScenario.runs.every((run) => run.expectedBottleneckObserved)
+      );
+      const positiveThroughputWhereRequired = scenarios.every((stressScenario) =>
+        !stressScenario.requiresPositiveThroughput ||
+        stressScenario.runs.every((run) => run.completedInbound + run.completedOutbound > 0)
+      );
+      return {
+        durationSec: stressDurationSec,
+        seeds: stressSeeds,
+        scenarios,
+        pass:
+          scenarios.every((stressScenario) => stressScenario.pass) &&
+          noStressDeadlocks &&
+          noStressPhysicalSafetyViolations &&
+          noStressReservationCoverageViolations &&
+          expectedBottlenecksObserved &&
+          positiveThroughputWhereRequired,
+        noStressDeadlocks,
+        noStressPhysicalSafetyViolations,
+        noStressReservationCoverageViolations,
+        expectedBottlenecksObserved,
+        positiveThroughputWhereRequired
+      };
+    })();
+  const allRuns = [
+    ...repeatRuns,
+    ...seedSweepRuns,
+    ...longRunRuns,
+    ...stress.scenarios.flatMap((stressScenario) => stressScenario.runs)
+  ];
   const totalPphValues = seedSweepRuns.map((run) => run.totalPph);
   const longRunTotalPphValues = longRunRuns.map((run) => run.totalPph);
   const totalPphMin = Math.min(...totalPphValues);
@@ -546,15 +970,7 @@ export function validatePhase0Scenario(
   const eventLogsPresent = [...repeatRuns, ...seedSweepRuns].every((run) => run.eventCount > 0);
   const noPhysicalSafetyViolations = allRuns.every((run) => run.physicalViolationCount === 0);
   const noReservationCoverageViolations = allRuns.every((run) =>
-    (
-      [
-        'unreservedEdgeOccupancy',
-        'unreservedNodeOccupancy',
-        'unreservedZoneOccupancy',
-        'nodeOccupancyMismatch',
-        'edgeOccupancyMismatch'
-      ] as PhysicalViolationCode[]
-    ).every((code) => run.physicalViolationsByCode[code] === 0)
+    RESERVATION_COVERAGE_CODES.every((code) => run.physicalViolationsByCode[code] === 0)
   );
   const longRunEventLogsPresent = longRunRuns.every((run) => run.eventCount > 0);
   const longRunThroughputPositive = longRunRuns.every((run) => run.completedInbound + run.completedOutbound > 0 && run.totalPph > 0);
@@ -570,15 +986,7 @@ export function validatePhase0Scenario(
   const noLongRunDeadlocks = longRunRuns.every((run) => run.deadlockCount === 0);
   const noLongRunPhysicalSafetyViolations = longRunRuns.every((run) => run.physicalViolationCount === 0);
   const noLongRunReservationCoverageViolations = longRunRuns.every((run) =>
-    (
-      [
-        'unreservedEdgeOccupancy',
-        'unreservedNodeOccupancy',
-        'unreservedZoneOccupancy',
-        'nodeOccupancyMismatch',
-        'edgeOccupancyMismatch'
-      ] as PhysicalViolationCode[]
-    ).every((code) => run.physicalViolationsByCode[code] === 0)
+    RESERVATION_COVERAGE_CODES.every((code) => run.physicalViolationsByCode[code] === 0)
   );
 
   return {
@@ -609,6 +1017,7 @@ export function validatePhase0Scenario(
       maxWaitingVehicles: Math.max(0, ...longRunRuns.map((run) => run.maxWaitingVehicles)),
       maxLiftPortQueueLength: Math.max(0, ...longRunRuns.map((run) => run.maxLiftPortQueueLength))
     },
+    stress,
     acceptance: {
       sameSeedEventHashStable,
       noDeadlocksInSweep,
@@ -622,6 +1031,12 @@ export function validatePhase0Scenario(
       noLongRunDeadlocks,
       noLongRunPhysicalSafetyViolations,
       noLongRunReservationCoverageViolations,
+      stressPass: stress.pass,
+      noStressDeadlocks: stress.noStressDeadlocks,
+      noStressPhysicalSafetyViolations: stress.noStressPhysicalSafetyViolations,
+      noStressReservationCoverageViolations: stress.noStressReservationCoverageViolations,
+      expectedStressBottlenecksObserved: stress.expectedBottlenecksObserved,
+      positiveStressThroughputWhereRequired: stress.positiveThroughputWhereRequired,
       pass:
         sameSeedEventHashStable &&
         noDeadlocksInSweep &&
@@ -634,7 +1049,8 @@ export function validatePhase0Scenario(
         longRunQueuesBounded &&
         noLongRunDeadlocks &&
         noLongRunPhysicalSafetyViolations &&
-        noLongRunReservationCoverageViolations
+        noLongRunReservationCoverageViolations &&
+        stress.pass
     }
   };
 }

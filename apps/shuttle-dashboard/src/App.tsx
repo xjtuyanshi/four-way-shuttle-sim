@@ -75,6 +75,21 @@ type Phase0ValidationRun = {
   physicalViolationCount: number;
 };
 
+type Phase0StressScenarioResult = {
+  id: string;
+  label: string;
+  durationSec: number;
+  seeds: number[];
+  requestedTotalPph: number;
+  requiresPositiveThroughput: boolean;
+  totalPphMean: number;
+  maxQueuedTasks: number;
+  maxWaitingVehicles: number;
+  maxLiftPortQueueLength: number;
+  observedBottleneckReasons: string[];
+  pass: boolean;
+};
+
 type Phase0ValidationResult = {
   checkedAt: string;
   scenarioId: string;
@@ -108,6 +123,17 @@ type Phase0ValidationResult = {
     maxWaitingVehicles: number;
     maxLiftPortQueueLength: number;
   };
+  stress?: {
+    durationSec: number;
+    seeds: number[];
+    scenarios: Phase0StressScenarioResult[];
+    pass: boolean;
+    noStressDeadlocks: boolean;
+    noStressPhysicalSafetyViolations: boolean;
+    noStressReservationCoverageViolations: boolean;
+    expectedBottlenecksObserved: boolean;
+    positiveThroughputWhereRequired: boolean;
+  };
   acceptance: {
     sameSeedEventHashStable: boolean;
     noDeadlocksInSweep: boolean;
@@ -121,6 +147,12 @@ type Phase0ValidationResult = {
     noLongRunDeadlocks?: boolean;
     noLongRunPhysicalSafetyViolations?: boolean;
     noLongRunReservationCoverageViolations?: boolean;
+    stressPass?: boolean;
+    noStressDeadlocks?: boolean;
+    noStressPhysicalSafetyViolations?: boolean;
+    noStressReservationCoverageViolations?: boolean;
+    expectedStressBottlenecksObserved?: boolean;
+    positiveStressThroughputWhereRequired?: boolean;
     pass: boolean;
   };
 };
@@ -170,7 +202,7 @@ const CONTROLLED_PARAMS = [
     path: '/taskGeneration/inboundRatePerHour',
     min: 0,
     max: 7200,
-    step: 60,
+    step: 1,
     unit: 'PPH'
   },
   {
@@ -178,7 +210,7 @@ const CONTROLLED_PARAMS = [
     path: '/taskGeneration/outboundRatePerHour',
     min: 0,
     max: 7200,
-    step: 60,
+    step: 1,
     unit: 'PPH'
   }
 ] as const;
@@ -776,6 +808,13 @@ function ValidationPanel({
     : 0;
   const longRun = validation?.longRun ?? null;
   const longRunThresholds = longRun?.thresholds ?? null;
+  const stress = validation?.stress ?? null;
+  const stressScenarioCount = stress?.scenarios.length ?? 0;
+  const stressPassCount = stress?.scenarios.filter((scenario) => scenario.pass).length ?? 0;
+  const stressWorstQueue = stress ? Math.max(0, ...stress.scenarios.map((scenario) => scenario.maxQueuedTasks)) : 0;
+  const stressBottlenecks = stress
+    ? [...new Set(stress.scenarios.flatMap((scenario) => scenario.observedBottleneckReasons))].slice(0, 4)
+    : [];
   const longRunStatus = (value: boolean | undefined, okLabel: string, blockedLabel: string): string => {
     if (!longRun || value === undefined) return '--';
     return value ? okLabel : blockedLabel;
@@ -865,9 +904,41 @@ function ValidationPanel({
             <span>Long-run coverage</span>
             <strong>{longRunStatus(validation.acceptance.noLongRunReservationCoverageViolations, 'clear', 'violations')}</strong>
           </div>
+          <div className="validation-divider">
+            <span>Stress suite</span>
+            <strong className={stress?.pass ? 'ready' : 'blocked'}>{stress ? (stress.pass ? 'clear' : 'check') : '--'}</strong>
+          </div>
+          <div>
+            <span>Stress scenarios</span>
+            <strong>{stress ? `${stressPassCount}/${stressScenarioCount} pass` : '--'}</strong>
+          </div>
+          <div>
+            <span>Stress safety</span>
+            <strong>{stress ? (stress.noStressPhysicalSafetyViolations ? 'clear' : 'violations') : '--'}</strong>
+          </div>
+          <div>
+            <span>Stress coverage</span>
+            <strong>{stress ? (stress.noStressReservationCoverageViolations ? 'clear' : 'violations') : '--'}</strong>
+          </div>
+          <div>
+            <span>Stress deadlocks</span>
+            <strong>{stress ? (stress.noStressDeadlocks ? 'clear' : 'blocked') : '--'}</strong>
+          </div>
+          <div>
+            <span>Stress bottlenecks</span>
+            <strong>{stress ? (stress.expectedBottlenecksObserved ? 'observed' : 'missing') : '--'}</strong>
+          </div>
+          <div>
+            <span>Stress queue high water</span>
+            <strong>{stress ? `${stressWorstQueue} tasks` : '--'}</strong>
+          </div>
+          <div>
+            <span>Stress reasons</span>
+            <strong>{stressBottlenecks.length > 0 ? stressBottlenecks.join(', ') : '--'}</strong>
+          </div>
         </div>
       ) : (
-        <p className="muted">Run the deterministic, seed-sweep, and long-run gate before a Pixel Streaming test.</p>
+        <p className="muted">Run deterministic, seed-sweep, long-run, and stress gates before a Pixel Streaming test.</p>
       )}
     </section>
   );

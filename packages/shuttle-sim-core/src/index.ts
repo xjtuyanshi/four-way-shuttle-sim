@@ -526,16 +526,34 @@ function createDefaultLayout(profile: ShuttleLayoutGeometryProfile = DEFAULT_SHU
   }
 
   const zones: LayoutZone[] = [
-    ...mainXs.map((_, index) => ({
-      id: `zone-main-portal-${String(index).padStart(2, '0')}`,
-      type: 'intersection' as const,
-      nodeIds: [],
-      edgeIds: [`${mainLaneNodeId('north', index)}-${mainLaneNodeId('south', index)}`],
-      noStop: true,
-      noParking: true,
-      capacity: 1,
-      conflictGroup: `intersection-main-portal-${String(index).padStart(2, '0')}`
-    }))
+    ...mainXs.map((_, index) => {
+      const portalNodeIds = [mainLaneNodeId('north', index), mainLaneNodeId('south', index)];
+      const portalNodeIdSet = new Set(portalNodeIds);
+      const portalEdgeIds = edges
+        .filter((edge) => portalNodeIdSet.has(edge.from) || portalNodeIdSet.has(edge.to))
+        .filter((edge) => {
+          const otherNodeId = portalNodeIdSet.has(edge.from) ? edge.to : edge.from;
+          const otherNode = nodesById.get(otherNodeId);
+          return (
+            otherNode?.type === 'lift-blackbox' ||
+            otherNodeId.startsWith('main-north-') ||
+            otherNodeId.startsWith('main-south-') ||
+            edge.id === `${mainLaneNodeId('north', index)}-${mainLaneNodeId('south', index)}`
+          );
+        })
+        .map((edge) => edge.id)
+        .sort((left, right) => left.localeCompare(right));
+      return {
+        id: `zone-main-portal-${String(index).padStart(2, '0')}`,
+        type: 'intersection' as const,
+        nodeIds: [],
+        edgeIds: portalEdgeIds,
+        noStop: true,
+        noParking: true,
+        capacity: 1,
+        conflictGroup: `intersection-main-portal-${String(index).padStart(2, '0')}`
+      };
+    })
   ];
 
   return { units: 'meter', calibrationProfile: profile.calibrationProfile, nodes, edges, zones };

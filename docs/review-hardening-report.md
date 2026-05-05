@@ -184,16 +184,36 @@ noPhysicalSafetyViolations=true
 noReservationCoverageViolations=true
 longRunEventLogsPresent=true
 longRunThroughputPositive=true
+longRunThroughputFloorMet=true
 longRunQueuesBounded=true
 noLongRunDeadlocks=true
 noLongRunPhysicalSafetyViolations=true
 noLongRunReservationCoverageViolations=true
+stressPass=true
+noStressDeadlocks=true
+noStressPhysicalSafetyViolations=true
+noStressReservationCoverageViolations=true
+expectedStressBottlenecksObserved=true
+positiveStressThroughputWhereRequired=true
 longRun.totalPphMean=18
 longRun.maxQueuedTasks=2
-longRun.maxWaitingVehicles=0
+longRun.maxWaitingVehicles=1
 longRun.maxLiftPortQueueLength=1
+stress.durationSec=180
+stress.scenarios=balanced-high-load,inbound-only-saturation,outbound-empty-store,outbound-preloaded-pressure,near-full-inbound-pressure
+stress.maxQueuedTasks=79
 physicalViolationCount=0
 ```
+
+Current stress coverage is validation-owned rather than visual-only. The suite intentionally overloads the model with 7200 PPH request rates and checks that overload produces explicit bottleneck reasons instead of unsafe motion:
+
+- empty-start balanced high load: `storage-empty`, lift-busy, FIFO network/lane waits
+- inbound-only saturation: inbound lift and FIFO waits
+- empty-store outbound: `storage-empty`, zero phantom tasks
+- preloaded outbound pressure: outbound lift/FIFO waits plus `zone-reserved`
+- near-full inbound pressure: `storage-full` after the last FIFO slots are allocated
+
+One bug was found by this stress suite and fixed in `packages/shuttle-sim-core/src/index.ts`: lift connector edges now share portal zones with adjacent main-lane edge segments, preventing a shuttle from crossing vertically through an occupied main-aisle portal.
 
 Browser smoke:
 
