@@ -1,5 +1,12 @@
 import type { Reservation, ShuttleScenario, ShuttleSimState, VehicleState } from '@four-way-shuttle/schemas';
-import { ShuttleSimCore, createDefaultShuttleScenario, hashEventLog, type ShuttleSimDebugState } from '@four-way-shuttle/sim-core';
+import {
+  ShuttleSimCore,
+  createDefaultShuttleScenario,
+  hashEventLog,
+  summarizeScenarioStaticSceneContract,
+  type ShuttleSimDebugState,
+  type ShuttleStaticSceneCalibrationReadiness
+} from '@four-way-shuttle/sim-core';
 
 export type PhysicalViolationCode =
   | 'unreservedEdgeOccupancy'
@@ -107,6 +114,7 @@ export type LongRunAcceptanceThresholds = {
 export type Phase0ValidationResult = {
   checkedAt: string;
   scenarioId: string;
+  layoutCalibrationReadiness: ShuttleStaticSceneCalibrationReadiness;
   deterministic: {
     seed: number;
     repeatCount: number;
@@ -998,6 +1006,7 @@ export function validatePhase0Scenario(
   const stressDurationSec = options.stressDurationSec ?? Math.min(180, scenario.durationSec);
   const stressSeeds = options.stressSeeds ?? [scenario.seed, scenario.seed + 11];
   const longRunThresholds = resolveLongRunThresholds(scenario, options.longRunThresholds);
+  const layoutCalibrationReadiness = summarizeScenarioStaticSceneContract(scenario).calibrationReadiness;
 
   const repeatRuns = Array.from({ length: repeatCount }, () => runOnce(scenario, scenario.seed, durationSec));
   const hashes = repeatRuns.map((run) => run.eventLogHash);
@@ -1081,6 +1090,7 @@ export function validatePhase0Scenario(
   return {
     checkedAt: new Date().toISOString(),
     scenarioId: scenario.id,
+    layoutCalibrationReadiness,
     deterministic: {
       seed: scenario.seed,
       repeatCount,

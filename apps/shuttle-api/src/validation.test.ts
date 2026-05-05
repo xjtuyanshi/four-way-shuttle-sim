@@ -88,6 +88,13 @@ describe('phase 0 validation', () => {
     });
 
     expect(result.deterministic.pass).toBe(true);
+    expect(result.layoutCalibrationReadiness).toMatchObject({
+      status: 'assumption',
+      readyForIndustrialThroughputClaims: false
+    });
+    expect(result.layoutCalibrationReadiness.requiredDimensionKeys).toHaveLength(20);
+    expect(result.layoutCalibrationReadiness.missingDimensionKeys).toContain('palletLength');
+    expect(result.layoutCalibrationReadiness.assumedDimensionKeys).toContain('storageCellPitchX');
     expect(new Set(result.deterministic.hashes).size).toBe(1);
     expect(result.seedSweep.runs).toHaveLength(1);
     expect(result.acceptance.noPhysicalSafetyViolations).toBe(true);
