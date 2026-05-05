@@ -378,7 +378,7 @@ function buildStressScenarioSpecs(baseScenario: ShuttleScenario): Phase0StressSc
     {
       id: 'inbound-only-saturation',
       label: 'Inbound-only saturation',
-      description: 'All demand enters from dedicated inbound lifts so storage-row and lift-port queues must absorb the pressure without overbooking the dense FIFO grid.',
+      description: 'All demand enters from dedicated inbound lifts so lift-port queues and reservation control must absorb the pressure without overbooking the dense FIFO grid.',
       scenario: scenarioWithOperationalStressParams(baseScenario, {
         ...common,
         taskGeneration: {
@@ -390,7 +390,7 @@ function buildStressScenarioSpecs(baseScenario: ShuttleScenario): Phase0StressSc
         }
       }),
       initialStoredNodeIds: [],
-      expectedBottleneckReasonPrefixes: ['fifo-', 'inbound-lift-busy:'],
+      expectedBottleneckReasonPrefixes: ['inbound-lift-busy:'],
       requiresPositiveThroughput: true
     },
     {

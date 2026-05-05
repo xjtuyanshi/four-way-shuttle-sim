@@ -3,7 +3,7 @@
   "id": "shuttle-phase0-balanced",
   "name": "Phase 0 Balanced Shuttle Smoke",
   "seed": 20260502,
-  "durationSec": 600,
+  "durationSec": 7200,
   "timeStepSec": 0.2,
   "vehicles": {
     "count": 2,

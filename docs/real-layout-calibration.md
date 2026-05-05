@@ -36,6 +36,8 @@ The static-scene contract also reports `calibrationReadiness`. That gate keeps `
 - Treat storage cells as track/parking-capable positions, not static obstacles. A pallet stored on a cell occupies load inventory, while a shuttle can still occupy the same node underneath it; only another shuttle blocks that node for temporary parking.
 - Keep all vehicle motion orthogonal. No diagonal shortcut edges may be introduced to match the picture.
 - Keep storage-area traversal row-horizontal only. Shuttles may move left/right through cells in the same FIFO row, but any vertical row change must use the side/main aisle network rather than cutting through the dense storage block.
+- Treat the right-side row spine as the inbound-side feed direction in Phase 0. Outbound use of the left FIFO network is serialized conservatively until calibrated two-vehicle passing or escape positions are modeled.
+- Treat `maxTasks` as an active backlog cap, not a lifetime run cap. The default smoke scenario runs for 7200 simulated seconds so 10x playback can be observed without the demo ending after roughly one real minute.
 - Keep the visible default shuttle body orientation fixed. It may translate along X or Z and reverse directly out of storage/lane nodes, but it must not visually turn at right-angle moves.
 - Keep FIFO as an inventory policy. Storage cells are positions on the shuttle track grid, while inbound/outbound sequencing remains controlled by SimCore tasks and reservations.
 - Keep visual storage cell footprints equal to the calibrated storage pitch inside each dense island so adjacent cells read as a contiguous grid, not as sparse boxes.

@@ -36,13 +36,13 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
   - stored pallet `nodeId` changes only through explicit vehicle/lift transfer, so the simulator no longer performs hidden row compaction after an outbound pickup.
 - Exposed `storageNodeOccupancy` in debug state for tests, and added regression coverage for empty-storage deferral plus FIFO fill/drain behavior.
 - Surfaced FIFO row inventory in the dashboard, including per-cell stored/reserved/empty state and cumulative `storage-empty` / `storage-full` wait time.
-- Added a high-pressure inbound regression test that fills or reserves every FIFO storage cell, then verifies new inbound work is deferred with `storage-full` instead of overbooking the storage grid.
+- Added high-pressure inbound regression tests: one fills or reserves every FIFO storage cell and verifies `storage-full`; another runs 7200 inbound PPH with 12 shuttles for 180 simulated seconds and verifies the sim keeps running, uses at least 10 shuttles, maintains at least 8 active tasks, and reports no deadlock or physical safety failure.
 - Replaced rack-like storage bay visuals with flat track-cell visuals so storage locations read as drivable grid positions, and added runtime playback speed control (`1x`, `2x`, `4x`, `10x`) through the API/dashboard.
 - Added a CAD-style generated floor texture for the 3D view so the visual background comes from meter-based SimCore nodes/edges instead of a decorative scene; references and dimensional assumptions are tracked in `docs/layout-reference.md`.
 - Replaced the sparse 2x3 storage demo with a 16x24 multi-bank storage matrix so each storage island reads as a dense block of adjacent drivable cells.
 - Hardened the browser visual twin toward an engineering rack view: continuous storage rack block, cross-track cell rails, side-aisle rail beds, roller conveyors at inbound/outbound, parking pads, dedicated single-level black-box lift ports for inbound/outbound, and a cleaner CAD floor without oversized explanatory labels.
 - Added lift-port resource diagnostics: dedicated inbound/outbound ports now expose active task, queue length, waiting task ids, and utilization so lift bottlenecks can be reviewed from an IE/operations perspective.
-- Made storage-cell pass-through explicit: occupied storage cells are blocked for routing unless that cell is the current task endpoint.
+- Made storage-cell pass-through explicit: stored pallets occupy inventory but are not physical routing obstacles, so a shuttle can travel underneath stored loads on the same horizontal row; shuttle node occupancy remains the physical blocker.
 - Changed live playback speed to substep internally at `scenario.timeStepSec`, so `10x` playback does not skip the same motion/reservation checks used by validation.
 - Added same-row multi-cycle outbound regression coverage so FIFO draining cannot reintroduce hidden pallet compaction.
 - Tightened safety validation to use oriented rectangular shuttle footprints plus configured clearance; center-to-center separation remains diagnostic only.
@@ -66,6 +66,7 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 - Set the default four-way shuttle direction-switch dwell to `0` so the visible demo models a body that never turns or rotates at right-angle moves. The parameter remains available for a future calibrated wheel-actuation timing study, but it is not part of the default demo behavior.
 - Split pallet/load storage occupancy from shuttle node occupancy for storage cells. Beyond the eight dedicated pads, idle shuttles may now use storage cells as temporary under-load parking; inbound slot allocation skips cells currently occupied by a shuttle.
 - Harden storage-area traversal to row-horizontal movement only: storage-to-storage graph edges may not cross FIFO rows, and cross-row moves must route through side/main aisles. Task assignment now selects the nearest idle executable shuttle resource instead of letting the first idle vehicle claim the first queued task.
+- Reworked pressure behavior after the 7200 inbound / 0 outbound / 12-shuttle stress failure: `maxTasks` is now an active backlog cap, the default demo duration is 7200 simulated seconds, inbound storage allocation spreads work across FIFO rows, right-side row-spine movement is constrained to the inbound feed direction, and outbound left-FIFO work is serialized until calibrated passing/escape logic exists.
 
 ## Next TODO
 

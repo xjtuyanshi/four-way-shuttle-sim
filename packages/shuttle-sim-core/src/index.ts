@@ -497,7 +497,12 @@ function createDefaultLayout(profile: ShuttleLayoutGeometryProfile = DEFAULT_SHU
   for (let index = 1; index < rightSpineNodeIds.length; index += 1) {
     const from = rightSpineNodeIds[index - 1]!;
     const to = rightSpineNodeIds[index]!;
-    addEdge(`${from}-${to}`, from, to, `right-upright-${String(index).padStart(2, '0')}`);
+    const mainNorthIndex = rightSpineNodeIds.indexOf(mainLaneNodeId('north', lastMainIndex));
+    const mainSouthIndex = rightSpineNodeIds.indexOf(mainLaneNodeId('south', lastMainIndex));
+    const directionFrom = index <= mainNorthIndex ? to : from;
+    const directionTo = index <= mainNorthIndex ? from : to;
+    const directionMode = index === mainSouthIndex ? 'twoWay' : 'oneWay';
+    addEdge(`${from}-${to}`, directionFrom, directionTo, `right-upright-${String(index).padStart(2, '0')}`, directionMode);
   }
 
   for (let rowIndex = 0; rowIndex < rowZs.length; rowIndex += 1) {
@@ -542,7 +547,53 @@ function createDefaultLayout(profile: ShuttleLayoutGeometryProfile = DEFAULT_SHU
     });
   }
 
+  const liftStorageCrossingZones: LayoutZone[] = [];
+  const liftConnectorEdges = edges.filter((edge) => {
+    const fromNode = nodesById.get(edge.from);
+    const toNode = nodesById.get(edge.to);
+    return (
+      (fromNode?.type === 'lift-blackbox' && toNode?.id.startsWith('main-')) ||
+      (toNode?.type === 'lift-blackbox' && fromNode?.id.startsWith('main-'))
+    );
+  });
+  const fifoLaneEdges = edges.filter((edge) => edge.conflictGroup?.startsWith('fifo-lane'));
+  for (const connectorEdge of liftConnectorEdges) {
+    const connectorFrom = nodesById.get(connectorEdge.from)!;
+    const connectorTo = nodesById.get(connectorEdge.to)!;
+    if (connectorFrom.x !== connectorTo.x) {
+      continue;
+    }
+    const connectorX = connectorFrom.x;
+    const connectorMinZ = Math.min(connectorFrom.z, connectorTo.z);
+    const connectorMaxZ = Math.max(connectorFrom.z, connectorTo.z);
+    for (const fifoEdge of fifoLaneEdges) {
+      const fifoFrom = nodesById.get(fifoEdge.from)!;
+      const fifoTo = nodesById.get(fifoEdge.to)!;
+      if (fifoFrom.z !== fifoTo.z) {
+        continue;
+      }
+      const fifoMinX = Math.min(fifoFrom.x, fifoTo.x);
+      const fifoMaxX = Math.max(fifoFrom.x, fifoTo.x);
+      const crosses = connectorX >= fifoMinX && connectorX <= fifoMaxX && fifoFrom.z >= connectorMinZ && fifoFrom.z <= connectorMaxZ;
+      if (!crosses) {
+        continue;
+      }
+      const index = liftStorageCrossingZones.length + 1;
+      liftStorageCrossingZones.push({
+        id: `zone-lift-storage-cross-${String(index).padStart(3, '0')}`,
+        type: 'intersection' as const,
+        nodeIds: [],
+        edgeIds: [connectorEdge.id, fifoEdge.id].sort((left, right) => left.localeCompare(right)),
+        noStop: true,
+        noParking: true,
+        capacity: 1,
+        conflictGroup: `intersection-lift-storage-cross-${String(index).padStart(3, '0')}`
+      });
+    }
+  }
+
   const zones: LayoutZone[] = [
+    ...liftStorageCrossingZones,
     ...mainXs.map((_, index) => {
       const portalNodeIds = [mainLaneNodeId('north', index), mainLaneNodeId('south', index)];
       const portalNodeIdSet = new Set(portalNodeIds);
@@ -599,7 +650,7 @@ export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides
     id: 'shuttle-phase0-balanced',
     name: 'Phase 0 Balanced Shuttle Smoke',
     seed: 20260502,
-    durationSec: 600,
+    durationSec: 7200,
     timeStepSec: 0.2,
     vehicles: {
       count: 2,
@@ -820,6 +871,8 @@ export class ShuttleSimCore {
   private replanCount = 0;
   private deadlockCount = 0;
   private livelockCount = 0;
+  private deadlockCandidateSignature: string | null = null;
+  private deadlockCandidateSinceSec: number | null = null;
   private blockedTimeByReasonSec = new Map<string, number>();
   private deferredTaskReasons: Record<'inbound' | 'outbound', string | null> = { inbound: null, outbound: null };
   private liftPortBusyTimeSec = new Map<string, number>();
@@ -864,6 +917,8 @@ export class ShuttleSimCore {
     this.replanCount = 0;
     this.deadlockCount = 0;
     this.livelockCount = 0;
+    this.deadlockCandidateSignature = null;
+    this.deadlockCandidateSinceSec = null;
     this.blockedTimeByReasonSec = new Map();
     this.deferredTaskReasons = { inbound: null, outbound: null };
     this.liftPortBusyTimeSec = new Map();
@@ -1146,11 +1201,11 @@ export class ShuttleSimCore {
   }
 
   private generateDueTasks(dtSec: number): void {
-    if (this.tasks.length >= this.scenario.taskGeneration.maxTasks) {
+    if (this.activeTaskCount() >= this.scenario.taskGeneration.maxTasks) {
       return;
     }
 
-    while (this.simTimeSec >= this.nextInboundSec && this.tasks.length < this.scenario.taskGeneration.maxTasks) {
+    while (this.simTimeSec >= this.nextInboundSec && this.activeTaskCount() < this.scenario.taskGeneration.maxTasks) {
       const result = this.createTask('inbound');
       if (!result.created) {
         this.deferTask('inbound', result.reason, dtSec);
@@ -1161,7 +1216,7 @@ export class ShuttleSimCore {
       this.nextInboundSec += this.nextArrivalInterval('inbound');
     }
 
-    while (this.simTimeSec >= this.nextOutboundSec && this.tasks.length < this.scenario.taskGeneration.maxTasks) {
+    while (this.simTimeSec >= this.nextOutboundSec && this.activeTaskCount() < this.scenario.taskGeneration.maxTasks) {
       const result = this.createTask('outbound');
       if (!result.created) {
         this.deferTask('outbound', result.reason, dtSec);
@@ -1171,6 +1226,14 @@ export class ShuttleSimCore {
       this.deferredTaskReasons.outbound = null;
       this.nextOutboundSec += this.nextArrivalInterval('outbound');
     }
+  }
+
+  private activeTaskCount(): number {
+    return this.tasks.filter((task) => task.state !== 'completed' && task.state !== 'failed').length;
+  }
+
+  private hasQueuedTaskBacklog(): boolean {
+    return this.tasks.some((task) => task.state === 'queued');
   }
 
   private nextArrivalInterval(kind: 'inbound' | 'outbound'): number {
@@ -1268,22 +1331,30 @@ export class ShuttleSimCore {
   }
 
   private isLiftPortBusyForAssignment(kind: 'inbound' | 'outbound', liftNodeId: string): boolean {
-    return this.tasks.some((task) => this.isTaskUsingLiftPortResource(task, kind, liftNodeId));
+    return this.isLiftPortPhysicallyOccupied(liftNodeId) || this.tasks.some((task) =>
+      task.kind === kind &&
+      task.state !== 'queued' &&
+      task.state !== 'completed' &&
+      task.state !== 'failed' &&
+      this.taskLiftPortNodeId(task) === liftNodeId &&
+      this.taskStillConsumesLiftAssignmentSlot(task, kind, liftNodeId)
+    );
   }
 
-  private isTaskUsingLiftPortResource(task: TaskStateRecord, kind: 'inbound' | 'outbound', liftNodeId: string): boolean {
-    if (task.kind !== kind || task.state === 'queued' || task.state === 'completed' || task.state === 'failed') {
-      return false;
-    }
-    const taskLiftPortId = this.taskLiftPortNodeId(task);
-    if (taskLiftPortId !== liftNodeId) {
-      return false;
-    }
-    if (kind === 'outbound') {
+  private isLiftPortPhysicallyOccupied(liftNodeId: string): boolean {
+    return this.vehicles.some((vehicle) => vehicle.currentNodeId === liftNodeId || vehicle.targetNodeId === liftNodeId);
+  }
+
+  private taskStillConsumesLiftAssignmentSlot(task: TaskStateRecord, kind: 'inbound' | 'outbound', liftNodeId: string): boolean {
+    const vehicle = task.vehicleId ? this.vehicles.find((candidate) => candidate.id === task.vehicleId) : null;
+    if (vehicle && (vehicle.currentNodeId === liftNodeId || vehicle.targetNodeId === liftNodeId)) {
       return true;
     }
-    const load = this.loads.find((candidate) => candidate.id === task.loadId);
-    return load?.state === 'waiting' && load.nodeId === liftNodeId;
+    if (kind === 'inbound') {
+      const load = this.loads.find((candidate) => candidate.id === task.loadId);
+      return task.state === 'assigned' || (load?.state === 'waiting' && load.nodeId === liftNodeId);
+    }
+    return true;
   }
 
   private deferTask(kind: 'inbound' | 'outbound', reason: string, dtSec: number): void {
@@ -1346,7 +1417,9 @@ export class ShuttleSimCore {
     }
 
     const occupancy = this.storageNodeLoadOccupancy(true);
-    for (const lane of lanes) {
+    const candidates: Array<{ nodeId: string; activeRowTaskCount: number; roundRobinDistance: number }> = [];
+    for (let laneIndex = 0; laneIndex < lanes.length; laneIndex += 1) {
+      const lane = lanes[laneIndex]!;
       const firstEmptyIndex = lane.findIndex((node) => !occupancy.has(node.id) && !this.currentNodeOccupancy.has(node.id));
       if (firstEmptyIndex < 0) {
         continue;
@@ -1357,10 +1430,29 @@ export class ShuttleSimCore {
       const occupiedTowardOutfeed = lane.slice(0, firstEmptyIndex).every((leftSideNode) => occupancy.has(leftSideNode.id));
       const emptyTowardInfeed = lane.slice(firstEmptyIndex + 1).every((rightSideNode) => !occupancy.has(rightSideNode.id));
       if (occupiedTowardOutfeed && emptyTowardInfeed) {
-        return { nodeId: lane[firstEmptyIndex]!.id, loadId: '' };
+        const nodeId = lane[firstEmptyIndex]!.id;
+        const rowLabel = this.nodeStorageRowLabel(nodeId);
+        candidates.push({
+          nodeId,
+          activeRowTaskCount: rowLabel ? this.activeStorageRowTaskCount(rowLabel) : 0,
+          roundRobinDistance: (laneIndex - (this.taskSequence % lanes.length) + lanes.length) % lanes.length
+        });
       }
     }
-    return null;
+    const bestCandidate = candidates.sort((left, right) =>
+      left.activeRowTaskCount - right.activeRowTaskCount ||
+      left.roundRobinDistance - right.roundRobinDistance ||
+      left.nodeId.localeCompare(right.nodeId)
+    )[0];
+    return bestCandidate ? { nodeId: bestCandidate.nodeId, loadId: '' } : null;
+  }
+
+  private activeStorageRowTaskCount(rowLabel: string): number {
+    return this.tasks.filter((task) =>
+      task.state !== 'completed' &&
+      task.state !== 'failed' &&
+      this.taskStorageRowLabel(task) === rowLabel
+    ).length;
   }
 
   private selectOutboundLoad(): { nodeId: string; loadId: string } | null {
@@ -1419,6 +1511,13 @@ export class ShuttleSimCore {
   private bestIdleVehicleForTask(task: TaskStateRecord, idleVehicleIds: Set<string>): { vehicle: MutableVehicle; route: string[]; pickupDistanceM: number; totalDistanceM: number } | null {
     let bestAssignment: { vehicle: MutableVehicle; route: string[]; pickupDistanceM: number; totalDistanceM: number } | null = null;
     for (const vehicle of this.vehicles.filter((candidate) => idleVehicleIds.has(candidate.id))) {
+      if (
+        task.kind === 'inbound' &&
+        this.scenario.taskGeneration.outboundRatePerHour > 0 &&
+        this.isStorageNode(vehicle.currentNodeId)
+      ) {
+        continue;
+      }
       try {
         const route = this.planRoute(vehicle.currentNodeId, task, this.parkingNodeFor(vehicle.id));
         const pickupDistanceM = this.routeDistanceM(route, task.pickupNodeId);
@@ -1497,33 +1596,15 @@ export class ShuttleSimCore {
   }
 
   private fifoNetworkBlockReason(task: TaskStateRecord): string | null {
-    const rowLabel = this.taskStorageRowLabel(task);
-    if (!rowLabel) {
+    if (task.kind !== 'outbound') {
       return null;
     }
-    const side = task.kind === 'inbound' ? 'right' : 'left';
-    const maxConcurrentFifoSideTasks = this.scenario.vehicles.count > 4 ? 2 : 1;
-    const activeSideVehicleCount = this.vehicles.filter((vehicle) =>
-      vehicle.state !== 'idle' && this.vehicleBlocksFifoTask(vehicle, rowLabel, side)
-    ).length;
-    return activeSideVehicleCount >= maxConcurrentFifoSideTasks ? `fifo-${side}-network-busy` : null;
-  }
-
-  private vehicleBlocksFifoTask(vehicle: VehicleState, taskRowLabel: string, taskSide: 'left' | 'right'): boolean {
-    const nodeBlocks = (nodeId: string | null): boolean => {
-      if (!nodeId) {
-        return false;
-      }
-      const storageRow = this.nodeStorageRowLabel(nodeId);
-      if (storageRow === taskRowLabel) {
-        return true;
-      }
-      return this.nodeFifoSide(nodeId) === taskSide;
-    };
-    if (nodeBlocks(vehicle.currentNodeId) || nodeBlocks(vehicle.targetNodeId)) {
-      return true;
-    }
-    return vehicle.routeNodeIds.slice(Math.max(0, vehicle.routeIndex)).some((nodeId) => nodeBlocks(nodeId));
+    const hasActiveOutboundFifoTask = this.tasks.some((candidate) =>
+      candidate.id !== task.id &&
+      candidate.kind === 'outbound' &&
+      (candidate.state === 'assigned' || candidate.state === 'in-progress')
+    );
+    return hasActiveOutboundFifoTask ? 'fifo-left-network-busy' : null;
   }
 
   private taskStorageRowLabel(task: TaskStateRecord): string | null {
@@ -1531,10 +1612,15 @@ export class ShuttleSimCore {
     return this.nodeStorageRowLabel(storageNodeId);
   }
 
+  private storageGridPosition(nodeId: string): { row: number; column: number } | null {
+    const match = /^storage-r(\d+)-c(\d+)$/.exec(nodeId);
+    return match ? { row: Number(match[1]), column: Number(match[2]) } : null;
+  }
+
   private nodeStorageRowLabel(nodeId: string): string | null {
-    const match = /^storage-r(\d+)-c\d+$/.exec(nodeId);
-    if (match) {
-      return `r${match[1]}`;
+    const storagePosition = this.storageGridPosition(nodeId);
+    if (storagePosition) {
+      return `r${String(storagePosition.row).padStart(2, '0')}`;
     }
     const sideMatch = /^(?:left|right)-row-(\d+)$/.exec(nodeId);
     if (sideMatch) {
@@ -1543,16 +1629,13 @@ export class ShuttleSimCore {
     return null;
   }
 
-  private nodeFifoSide(nodeId: string): 'left' | 'right' | null {
-    const sideMatch = /^(left|right)-row-\d+$/.exec(nodeId);
-    return sideMatch ? sideMatch[1] as 'left' | 'right' : null;
-  }
-
   private planRoute(currentNodeId: string, task: TaskStateRecord, parkingNodeId: string): string[] {
     const route: string[] = [currentNodeId];
     const storageEntrySideNodeId = task.kind === 'inbound' ? this.storageSideNodeId(task.dropoffNodeId, 'right') : this.storageSideNodeId(task.pickupNodeId, 'left');
+    const currentStorageExitNodeId = task.kind === 'inbound' && this.isStorageNode(currentNodeId) ? this.storageSideNodeId(currentNodeId, 'left') : null;
+    const inboundDropoffExitNodeId = task.kind === 'inbound' ? this.storageSideNodeId(task.dropoffNodeId, 'left') : null;
     const targets = task.kind === 'inbound'
-      ? [task.pickupNodeId, storageEntrySideNodeId, task.dropoffNodeId, storageEntrySideNodeId, parkingNodeId]
+      ? [currentStorageExitNodeId, task.pickupNodeId, storageEntrySideNodeId, task.dropoffNodeId, inboundDropoffExitNodeId, parkingNodeId]
       : [storageEntrySideNodeId, task.pickupNodeId, storageEntrySideNodeId, task.dropoffNodeId, parkingNodeId];
     for (const target of targets) {
       if (!target || target === route[route.length - 1]) {
@@ -1581,13 +1664,15 @@ export class ShuttleSimCore {
     const blockedNodeIds = new Set<string>();
     const fromRowLabel = this.nodeStorageRowLabel(fromNodeId);
     const targetRowLabel = this.nodeStorageRowLabel(targetNodeId);
-    const allowStorageTransitRow = (
-      fromRowLabel &&
-      fromRowLabel === targetRowLabel &&
-      (this.isStorageNode(fromNodeId) || this.isStorageNode(targetNodeId))
-    )
-      ? fromRowLabel
-      : null;
+    const fromIsStorage = this.isStorageNode(fromNodeId);
+    const targetIsStorage = this.isStorageNode(targetNodeId);
+    const allowStorageTransitRow = fromIsStorage && targetIsStorage
+      ? (fromRowLabel === targetRowLabel ? fromRowLabel : null)
+      : fromIsStorage
+        ? fromRowLabel
+        : targetIsStorage
+          ? targetRowLabel
+          : null;
 
     for (const nodeId of storageNodeIds) {
       if (!allowedNodeIds.has(nodeId) && this.nodeStorageRowLabel(nodeId) !== allowStorageTransitRow) {
@@ -1595,23 +1680,6 @@ export class ShuttleSimCore {
       }
     }
 
-    for (const nodeId of this.storageNodeLoadOccupancy(false).keys()) {
-      if (storageNodeIds.has(nodeId) && !allowedNodeIds.has(nodeId)) {
-        blockedNodeIds.add(nodeId);
-      }
-    }
-    for (const task of this.tasks) {
-      if (
-        task.kind === 'inbound' &&
-        task.state !== 'queued' &&
-        task.state !== 'completed' &&
-        task.state !== 'failed' &&
-        storageNodeIds.has(task.dropoffNodeId) &&
-        !allowedNodeIds.has(task.dropoffNodeId)
-      ) {
-        blockedNodeIds.add(task.dropoffNodeId);
-      }
-    }
     return blockedNodeIds;
   }
 
@@ -1699,7 +1767,15 @@ export class ShuttleSimCore {
       .sort((left, right) => left.id.localeCompare(right.id));
     const temporaryStorageParking = this.scenario.layout.nodes
       .filter(isParkableStorage)
-      .sort((left, right) => right.z - left.z || right.x - left.x || left.id.localeCompare(right.id));
+      .sort((left, right) => {
+        const leftPosition = this.storageGridPosition(left.id);
+        const rightPosition = this.storageGridPosition(right.id);
+        return (
+          (rightPosition?.column ?? 0) - (leftPosition?.column ?? 0) ||
+          (rightPosition?.row ?? 0) - (leftPosition?.row ?? 0) ||
+          left.id.localeCompare(right.id)
+        );
+      });
     return [...dedicatedParking, ...temporaryStorageParking];
   }
 
@@ -1836,6 +1912,17 @@ export class ShuttleSimCore {
         kind: task.kind
       });
       vehicle.taskId = null;
+      if (this.hasQueuedTaskBacklog()) {
+        vehicle.state = 'idle';
+        vehicle.routeNodeIds = [vehicle.currentNodeId];
+        vehicle.routeIndex = 0;
+        vehicle.targetNodeId = null;
+        vehicle.waitReason = null;
+        vehicle.blockingReservationId = null;
+        vehicle.blockingVehicleId = null;
+        vehicle.directionSwitchReadyNodeId = null;
+        return;
+      }
       vehicle.state = 'assigned';
       return;
     }
@@ -2088,17 +2175,21 @@ export class ShuttleSimCore {
   private updateDeadlockSmokeCounters(): void {
     const deadlockCandidateVehicleIds = this.deadlockCandidateVehicleIds();
     if (deadlockCandidateVehicleIds.length < 2) {
+      this.deadlockCandidateSignature = null;
+      this.deadlockCandidateSinceSec = null;
       return;
     }
-    const waitingVehicles = this.vehicles.filter((vehicle) => deadlockCandidateVehicleIds.includes(vehicle.id) && vehicle.waitingSinceSec !== null);
-    const oldestWait = Math.min(...waitingVehicles.map((vehicle) => vehicle.waitingSinceSec ?? this.simTimeSec));
-    if (this.simTimeSec - oldestWait >= this.scenario.trafficPolicy.deadlockDetectSec) {
+    const signature = deadlockCandidateVehicleIds.join(',');
+    if (signature !== this.deadlockCandidateSignature) {
+      this.deadlockCandidateSignature = signature;
+      this.deadlockCandidateSinceSec = this.simTimeSec;
+      return;
+    }
+    if (this.deadlockCandidateSinceSec !== null && this.simTimeSec - this.deadlockCandidateSinceSec >= this.scenario.trafficPolicy.deadlockDetectSec) {
       this.deadlockCount += 1;
-      for (const vehicle of waitingVehicles) {
-        vehicle.waitingSinceSec = this.simTimeSec;
-      }
+      this.deadlockCandidateSinceSec = this.simTimeSec;
       this.logEvent('deadlock-detected', null, null, null, null, null, 'phase0-smoke-detector', null, {
-        waitingVehicles: deadlockCandidateVehicleIds.join(',')
+        waitingVehicles: signature
       });
     }
   }
@@ -2160,7 +2251,13 @@ export class ShuttleSimCore {
         .map((task) => task.id)
         .sort();
       const activeTask = this.tasks
-        .filter((task) => this.isTaskUsingLiftPortResource(task, port.kind, port.nodeId))
+        .filter((task) =>
+          task.kind === port.kind &&
+          task.state !== 'queued' &&
+          task.state !== 'completed' &&
+          task.state !== 'failed' &&
+          this.taskLiftPortNodeId(task) === port.nodeId
+        )
         .sort((left, right) => left.id.localeCompare(right.id))[0];
       return {
         nodeId: port.nodeId,
