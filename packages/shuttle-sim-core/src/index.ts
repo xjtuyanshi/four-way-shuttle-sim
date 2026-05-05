@@ -389,7 +389,7 @@ function createDefaultLayout(profile: ShuttleLayoutGeometryProfile = DEFAULT_SHU
         y: 0,
         z,
         noStop: false,
-        noParking: true,
+        noParking: false,
         capacity: 1,
         allowedDirections: []
       });
@@ -874,9 +874,9 @@ export class ShuttleSimCore {
     this.nextInboundSec = this.scenario.taskGeneration.inboundRatePerHour > 0 ? 0 : Infinity;
     this.nextOutboundSec = this.intervalForRate(this.scenario.taskGeneration.outboundRatePerHour) / 2;
 
-    const parkingNodes = this.scenario.layout.nodes.filter((node) => node.type === 'parking');
+    const parkingNodes = this.parkableNodeCandidates();
     this.vehicles = Array.from({ length: this.scenario.vehicles.count }, (_, index) => {
-      const parking = parkingNodes[index % Math.max(1, parkingNodes.length)] ?? this.scenario.layout.nodes[0]!;
+      const parking = parkingNodes[index] ?? this.scenario.layout.nodes[0]!;
       return {
         id: `SH-${String(index + 1).padStart(2, '0')}`,
         state: 'idle',
@@ -1347,7 +1347,7 @@ export class ShuttleSimCore {
 
     const occupancy = this.storageNodeLoadOccupancy(true);
     for (const lane of lanes) {
-      const firstEmptyIndex = lane.findIndex((node) => !occupancy.has(node.id));
+      const firstEmptyIndex = lane.findIndex((node) => !occupancy.has(node.id) && !this.currentNodeOccupancy.has(node.id));
       if (firstEmptyIndex < 0) {
         continue;
       }
@@ -1616,9 +1616,9 @@ export class ShuttleSimCore {
   }
 
   private parkingNodeFor(vehicleId: string): string {
-    const parkingNodes = this.scenario.layout.nodes.filter((node) => node.type === 'parking');
+    const parkingNodes = this.parkableNodeCandidates();
     if (parkingNodes.length === 0) {
-      const fallbackNode = this.scenario.layout.nodes.find((node) => !node.noParking) ?? this.scenario.layout.nodes[0];
+      const fallbackNode = this.scenario.layout.nodes.find((node) => !node.noParking && !node.noStop) ?? this.scenario.layout.nodes[0];
       if (!fallbackNode) {
         throw new Error('Scenario has no nodes available for vehicle parking.');
       }
@@ -1626,6 +1626,18 @@ export class ShuttleSimCore {
     }
     const vehicleNumber = Number(vehicleId.replace(/\D+/g, '')) || 1;
     return parkingNodes[(vehicleNumber - 1) % parkingNodes.length]!.id;
+  }
+
+  private parkableNodeCandidates(): ShuttleScenario['layout']['nodes'] {
+    const isParkableStorage = (node: ShuttleScenario['layout']['nodes'][number]): boolean =>
+      node.type === 'storage' && !node.noStop && !node.noParking;
+    const dedicatedParking = this.scenario.layout.nodes
+      .filter((node) => node.type === 'parking' && !node.noStop && !node.noParking)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const temporaryStorageParking = this.scenario.layout.nodes
+      .filter(isParkableStorage)
+      .sort((left, right) => right.z - left.z || right.x - left.x || left.id.localeCompare(right.id));
+    return [...dedicatedParking, ...temporaryStorageParking];
   }
 
   private zonesForNode(nodeId: string): ShuttleScenario['layout']['zones'] {

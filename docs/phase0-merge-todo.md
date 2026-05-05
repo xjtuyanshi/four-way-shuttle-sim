@@ -53,7 +53,7 @@ Scope: keep the current public `main` merge-ready without adding product feature
 ## Merge-Blocking TODO
 
 - Keep `currentNodeOccupancy` and reservation coverage as the authoritative traffic-control invariant.
-- Keep one parking node per vehicle for Phase 0 reset ownership.
+- Keep one parkable non-aisle node per vehicle for Phase 0 reset ownership; storage cells can satisfy this when used as under-load shuttle parking.
 - Keep duplicate node ids rejected before reset occupancy is initialized.
 - Keep dashboard stream reducers covered by tests so incremental `vehicleState` / `kpiUpdate` messages refresh the UI.
 - Keep Phase 0 reservation capacities fixed at `1`; defer multi-capacity counting to Phase 1.

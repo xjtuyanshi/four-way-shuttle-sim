@@ -180,12 +180,16 @@ export const ShuttleScenarioSchema = z.object({
       message: `Duplicate node id ${nodeId}`
     });
   }
-  const parkingNodes = scenario.layout.nodes.filter((node) => node.type === 'parking');
-  if (parkingNodes.length < scenario.vehicles.count) {
+  const parkableNonAisleNodes = scenario.layout.nodes.filter((node) =>
+    !node.noStop &&
+    !node.noParking &&
+    (node.type === 'parking' || node.type === 'storage' || node.type === 'charger')
+  );
+  if (parkableNonAisleNodes.length < scenario.vehicles.count) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['vehicles', 'count'],
-      message: 'Phase 0 requires at least one parking node per vehicle because node capacity is fixed at 1.'
+      message: 'Phase 0 requires at least one parkable non-aisle node per vehicle; storage cells may be used as under-load temporary parking when node capacity is fixed at 1.'
     });
   }
   const storageRows = new Set<string>();

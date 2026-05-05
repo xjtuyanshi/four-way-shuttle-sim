@@ -120,7 +120,7 @@ Phase 0 enforces:
 - `trafficPolicy.zoneCapacity = 1`
 - node layout `capacity = 1`
 - zone layout `capacity = 1`
-- at least one parking node per vehicle
+- at least one parkable non-aisle node per vehicle
 - unique node ids before reset occupancy is initialized
 
 Multi-capacity reservation accounting is explicitly deferred to Phase 1.

@@ -81,7 +81,7 @@ The Phase 0 traffic model includes the data structure needed for the harder Phas
 - wait reason codes
 - deadlock/livelock counters and detector placeholders
 
-Phase 0 enforces edge, node, and zone reservation capacity as `1`. It also requires at least one parking node per vehicle so reset can initialize one authoritative current-node occupant per shuttle. Storage nodes must use `storage-rNN-cNN` ids and each storage row must expose `left-row-NN` and `right-row-NN` side access nodes until explicit row/column metadata is added. Multi-capacity reservation accounting is intentionally deferred to Phase 1.
+Phase 0 enforces edge, node, and zone reservation capacity as `1`. It also requires at least one parkable non-aisle node per vehicle so reset can initialize one authoritative current-node occupant per shuttle. Dedicated parking pads are preferred first; storage cells may also be used as temporary under-load shuttle parking because pallet/load occupancy and shuttle node occupancy are separate invariants. Storage nodes must use `storage-rNN-cNN` ids and each storage row must expose `left-row-NN` and `right-row-NN` side access nodes until explicit row/column metadata is added. Multi-capacity reservation accounting is intentionally deferred to Phase 1.
 
 This is still a smoke implementation. It validates deterministic blocking and wait reason logging; it is not the final multi-agent traffic controller.
 

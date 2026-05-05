@@ -181,7 +181,7 @@ const CONTROLLED_PARAMS = [
     label: 'Shuttle count',
     path: '/vehicles/count',
     min: 1,
-    max: 8,
+    max: 32,
     step: 1,
     unit: 'units'
   },

@@ -215,6 +215,64 @@ describe('shuttle phase 0 SimCore', () => {
     ]);
   });
 
+  it('uses storage cells as under-load temporary parking beyond dedicated pads', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario({ vehicles: { count: 12 } }));
+    const state = sim.getState();
+    const storageParkedVehicle = state.vehicles.find((vehicle) => vehicle.id === 'SH-09');
+
+    expect(storageParkedVehicle?.currentNodeId).toMatch(/^storage-r\d+-c\d+$/);
+    sim.addLoadForTest({
+      id: 'load-above-sh-09',
+      state: 'stored',
+      nodeId: storageParkedVehicle!.currentNodeId,
+      vehicleId: null,
+      weightKg: 100
+    });
+
+    const debug = sim.getDebugState();
+    expect(debug.currentNodeOccupancy).toContainEqual({
+      nodeId: storageParkedVehicle!.currentNodeId,
+      vehicleId: 'SH-09'
+    });
+    expect(debug.storageNodeOccupancy).toContainEqual({
+      nodeId: storageParkedVehicle!.currentNodeId,
+      loadId: 'load-above-sh-09'
+    });
+  });
+
+  it('does not allocate inbound dropoff cells currently occupied by parked shuttles', () => {
+    const scenario = createDefaultShuttleScenario({
+      vehicles: { count: 9 },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    const parkedStorageNodeId = sim.getState().vehicles.find((vehicle) => vehicle.id === 'SH-09')?.currentNodeId;
+    for (const node of scenario.layout.nodes.filter((candidate) => candidate.type === 'storage' && candidate.id !== parkedStorageNodeId)) {
+      sim.addLoadForTest({
+        id: `load-${node.id}`,
+        state: 'stored',
+        nodeId: node.id,
+        vehicleId: null,
+        weightKg: 100
+      });
+    }
+
+    sim.start();
+    for (let index = 0; index < 5 && !(sim.getState().kpis.blockedTimeByReasonSec['storage-full'] > 0); index += 1) {
+      sim.step(0.2);
+    }
+
+    expect(parkedStorageNodeId).toMatch(/^storage-r\d+-c\d+$/);
+    expect(sim.getState().tasks.some((task) => task.dropoffNodeId === parkedStorageNodeId)).toBe(false);
+    expect(sim.getState().kpis.blockedTimeByReasonSec['storage-full']).toBeGreaterThan(0);
+  });
+
   it('keeps the default demo on orthogonal four-way shuttle aisles', () => {
     const scenario = createDefaultShuttleScenario();
     const nodes = new Map(scenario.layout.nodes.map((node) => [node.id, node]));
@@ -601,16 +659,17 @@ describe('shuttle phase 0 SimCore', () => {
     ).toThrow(/edgeCapacity=1/);
   });
 
-  it('rejects scenarios beyond the staged parking positions for Phase 0', () => {
+  it('rejects scenarios without one parkable non-aisle node per vehicle for Phase 0', () => {
+    const base = createDefaultShuttleScenario();
     expect(() =>
-      ShuttleScenarioSchema.parse({
-        ...createDefaultShuttleScenario(),
-        vehicles: {
-          ...createDefaultShuttleScenario().vehicles,
-          count: 9
+      createDefaultShuttleScenario({
+        vehicles: { count: 9 },
+        layout: {
+          ...base.layout,
+          nodes: base.layout.nodes.map((node) => node.type === 'storage' ? { ...node, noParking: true } : node)
         }
       })
-    ).toThrow(/one parking node per vehicle/);
+    ).toThrow(/parkable non-aisle node per vehicle/);
   });
 
   it('rejects duplicate node ids before reset occupancy is initialized', () => {

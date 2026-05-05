@@ -33,6 +33,7 @@ The static-scene contract also reports `calibrationReadiness`. That gate keeps `
 - Draw lift ports as yellow transfer stations with rollers and posts. Do not draw gray boxes in the middle of the storage area unless they represent a specific blocked/structural CAD cell.
 - Encode confirmed blocked/structural cells as `layoutCalibrationProfile.blockedCells`; these are visual/reference cells only unless later routing work explicitly turns them into graph obstacles.
 - Treat the current eight parking/staging pads as a smoke-test placeholder. They are one-capacity parking nodes so vehicle-count testing can reach 8, but their exact charging/staging coordinates remain unverified until CAD/vendor/site data is available.
+- Treat storage cells as track/parking-capable positions, not static obstacles. A pallet stored on a cell occupies load inventory, while a shuttle can still occupy the same node underneath it; only another shuttle blocks that node for temporary parking.
 - Keep all vehicle motion orthogonal. No diagonal shortcut edges may be introduced to match the picture.
 - Keep the visible default shuttle body orientation fixed. It may translate along X or Z and reverse directly out of storage/lane nodes, but it must not visually turn at right-angle moves.
 - Keep FIFO as an inventory policy. Storage cells are positions on the shuttle track grid, while inbound/outbound sequencing remains controlled by SimCore tasks and reservations.
