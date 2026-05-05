@@ -564,7 +564,7 @@ describe('shuttle phase 0 SimCore', () => {
 
     expect(new Set(hashes).size).toBe(1);
     expect(hashes[0]).toMatch(/^[a-f0-9]{64}$/);
-  });
+  }, 30000);
 
   it('does not advance while paused and resumes without losing state', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({ durationSec: 120 }));

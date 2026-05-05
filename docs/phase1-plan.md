@@ -60,6 +60,7 @@ Build on the merged Phase 0 hardening without changing the SimCore authority mod
 - Verified the local Unreal path through setup, source bridge smoke, live bridge smoke, staged Mac runtime generation, and browser Pixel Streaming smoke evidence. This proves the local runtime scaffold, not a final signed/notarized production package.
 - Added schema validation for external/custom layout inputs: every node must stay on the single simulated floor, every edge must be an orthogonal X/Z track segment, zero-length edges are rejected, and zones cannot reference missing nodes or edges.
 - Strengthened long-run by-side throughput acceptance from nonzero liveness to proportional floors. The default 18 inbound / 18 outbound PPH demand now requires at least 6 inbound PPH and 6 outbound PPH per long-run seed, while total throughput still has its separate 50% floor. These are regression-smoke floors until CAD/vendor/site calibration exists.
+- Added validation-owned bottleneck category aggregation for `storageInventory`, `fifoLane`, `sideAisleNetwork`, `liftPort`, `reservationControl`, and `other`, and surfaced the top long-run/stress class in the dashboard.
 
 ## Next TODO
 

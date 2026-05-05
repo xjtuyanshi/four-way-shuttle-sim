@@ -51,6 +51,8 @@ type PlaybackSpeedResponse = {
   speed: number;
 };
 
+type BottleneckBreakdown = Record<string, number>;
+
 type Phase0ValidationRun = {
   seed: number;
   durationSec: number;
@@ -67,6 +69,7 @@ type Phase0ValidationRun = {
   maxWaitingVehicles: number;
   maxLiftPortQueueLength: number;
   blockedTimeByReasonSec: Record<string, number>;
+  blockedTimeByCategorySec?: BottleneckBreakdown;
   reservationConflictCount: number;
   deadlockCount: number;
   maxObservedSpeedMps: number;
@@ -87,6 +90,7 @@ type Phase0StressScenarioResult = {
   maxWaitingVehicles: number;
   maxLiftPortQueueLength: number;
   observedBottleneckReasons: string[];
+  blockedTimeByCategorySec?: BottleneckBreakdown;
   pass: boolean;
 };
 
@@ -114,6 +118,8 @@ type Phase0ValidationResult = {
     runs: Phase0ValidationRun[];
     thresholds?: {
       minTotalPph: number;
+      minInboundPph?: number;
+      minOutboundPph?: number;
       maxQueuedTasks: number;
       maxWaitingVehicles: number;
       maxLiftPortQueueLength: number;
@@ -122,6 +128,7 @@ type Phase0ValidationResult = {
     maxQueuedTasks: number;
     maxWaitingVehicles: number;
     maxLiftPortQueueLength: number;
+    blockedTimeByCategorySec?: BottleneckBreakdown;
   };
   stress?: {
     durationSec: number;
@@ -133,6 +140,7 @@ type Phase0ValidationResult = {
     noStressReservationCoverageViolations: boolean;
     expectedBottlenecksObserved: boolean;
     positiveThroughputWhereRequired: boolean;
+    blockedTimeByCategorySec?: BottleneckBreakdown;
   };
   acceptance: {
     sameSeedEventHashStable: boolean;
@@ -239,6 +247,31 @@ function formatClock(totalSeconds: number): string {
 
 function formatNumber(value: number, digits = 1): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(digits);
+}
+
+const BOTTLENECK_LABELS: Record<string, string> = {
+  storageInventory: 'storage',
+  fifoLane: 'FIFO lane',
+  sideAisleNetwork: 'side aisle',
+  liftPort: 'lift',
+  reservationControl: 'reservation',
+  other: 'other'
+};
+
+function topBottleneckCategory(breakdown: BottleneckBreakdown | null | undefined): { category: string; seconds: number } | null {
+  let top: { category: string; seconds: number } | null = null;
+  for (const [category, seconds] of Object.entries(breakdown ?? {})) {
+    if (seconds <= 0) continue;
+    if (!top || seconds > top.seconds) {
+      top = { category, seconds };
+    }
+  }
+  return top;
+}
+
+function formatBottleneckCategory(top: { category: string; seconds: number } | null): string {
+  if (!top) return '--';
+  return `${BOTTLENECK_LABELS[top.category] ?? top.category} ${formatNumber(top.seconds, 1)}s`;
 }
 
 function getPointerValue(source: unknown, pointer: string): unknown {
@@ -815,6 +848,8 @@ function ValidationPanel({
   const stressBottlenecks = stress
     ? [...new Set(stress.scenarios.flatMap((scenario) => scenario.observedBottleneckReasons))].slice(0, 4)
     : [];
+  const longRunTopBottleneck = topBottleneckCategory(longRun?.blockedTimeByCategorySec);
+  const stressTopBottleneck = topBottleneckCategory(stress?.blockedTimeByCategorySec);
   const longRunStatus = (value: boolean | undefined, okLabel: string, blockedLabel: string): string => {
     if (!longRun || value === undefined) return '--';
     return value ? okLabel : blockedLabel;
@@ -881,6 +916,18 @@ function ValidationPanel({
             </strong>
           </div>
           <div>
+            <span>Long-run by side</span>
+            <strong>
+              {longRunThresholds
+                ? `${formatNumber(longRunThresholds.minInboundPph ?? 0, 1)} / ${formatNumber(longRunThresholds.minOutboundPph ?? 0, 1)} min`
+                : '--'}
+            </strong>
+          </div>
+          <div>
+            <span>Long-run bottleneck</span>
+            <strong>{formatBottleneckCategory(longRunTopBottleneck)}</strong>
+          </div>
+          <div>
             <span>Queue high water</span>
             <strong>{longRun ? `${longRun.maxQueuedTasks} / ${longRunThresholds?.maxQueuedTasks ?? '--'} tasks` : '--'}</strong>
           </div>
@@ -931,6 +978,10 @@ function ValidationPanel({
           <div>
             <span>Stress queue high water</span>
             <strong>{stress ? `${stressWorstQueue} tasks` : '--'}</strong>
+          </div>
+          <div>
+            <span>Stress bottleneck class</span>
+            <strong>{formatBottleneckCategory(stressTopBottleneck)}</strong>
           </div>
           <div>
             <span>Stress reasons</span>

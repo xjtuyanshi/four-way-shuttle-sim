@@ -24,6 +24,16 @@ export type PhysicalViolationExample = {
   message: string;
 };
 
+export type BottleneckCategory =
+  | 'storageInventory'
+  | 'fifoLane'
+  | 'sideAisleNetwork'
+  | 'liftPort'
+  | 'reservationControl'
+  | 'other';
+
+export type BottleneckBreakdown = Record<BottleneckCategory, number>;
+
 export type Phase0ValidationRun = {
   seed: number;
   durationSec: number;
@@ -40,6 +50,7 @@ export type Phase0ValidationRun = {
   maxWaitingVehicles: number;
   maxLiftPortQueueLength: number;
   blockedTimeByReasonSec: Record<string, number>;
+  blockedTimeByCategorySec: BottleneckBreakdown;
   reservationConflictCount: number;
   deadlockCount: number;
   maxObservedSpeedMps: number;
@@ -80,6 +91,7 @@ export type Phase0StressScenarioResult = {
   maxWaitingVehicles: number;
   maxLiftPortQueueLength: number;
   observedBottleneckReasons: string[];
+  blockedTimeByCategorySec: BottleneckBreakdown;
   pass: boolean;
 };
 
@@ -119,6 +131,7 @@ export type Phase0ValidationResult = {
     maxQueuedTasks: number;
     maxWaitingVehicles: number;
     maxLiftPortQueueLength: number;
+    blockedTimeByCategorySec: BottleneckBreakdown;
   };
   stress: {
     durationSec: number;
@@ -130,6 +143,7 @@ export type Phase0ValidationResult = {
     noStressReservationCoverageViolations: boolean;
     expectedBottlenecksObserved: boolean;
     positiveThroughputWhereRequired: boolean;
+    blockedTimeByCategorySec: BottleneckBreakdown;
   };
   acceptance: {
     sameSeedEventHashStable: boolean;
@@ -197,9 +211,61 @@ const RESERVATION_COVERAGE_CODES: PhysicalViolationCode[] = [
 ];
 const LONG_RUN_TOTAL_THROUGHPUT_FLOOR_RATIO = 0.5;
 const LONG_RUN_SIDE_THROUGHPUT_FLOOR_RATIO = 1 / 3;
+const BOTTLENECK_CATEGORIES: BottleneckCategory[] = [
+  'storageInventory',
+  'fifoLane',
+  'sideAisleNetwork',
+  'liftPort',
+  'reservationControl',
+  'other'
+];
 
 function sideThroughputFloor(requestedPph: number): number {
   return requestedPph > 0 ? round(Math.max(1, requestedPph * LONG_RUN_SIDE_THROUGHPUT_FLOOR_RATIO), 1) : 0;
+}
+
+function emptyBottleneckBreakdown(): BottleneckBreakdown {
+  return Object.fromEntries(BOTTLENECK_CATEGORIES.map((category) => [category, 0])) as BottleneckBreakdown;
+}
+
+function bottleneckCategoryForReason(reason: string): BottleneckCategory {
+  if (reason === 'storage-empty' || reason === 'storage-full') return 'storageInventory';
+  if (reason.startsWith('fifo-lane-busy:')) return 'fifoLane';
+  if (reason === 'fifo-left-network-busy' || reason === 'fifo-right-network-busy') return 'sideAisleNetwork';
+  if (reason.startsWith('inbound-lift-busy:') || reason.startsWith('outbound-lift-busy:')) return 'liftPort';
+  if (
+    reason === 'edge-reserved' ||
+    reason === 'node-reserved' ||
+    reason === 'zone-reserved' ||
+    reason === 'opposite-direction'
+  ) {
+    return 'reservationControl';
+  }
+  return 'other';
+}
+
+function categorizeBlockedTimeByReason(blockedTimeByReasonSec: Record<string, number>): BottleneckBreakdown {
+  const breakdown = emptyBottleneckBreakdown();
+  for (const [reason, blockedSec] of Object.entries(blockedTimeByReasonSec)) {
+    breakdown[bottleneckCategoryForReason(reason)] += blockedSec;
+  }
+  for (const category of BOTTLENECK_CATEGORIES) {
+    breakdown[category] = round(breakdown[category], 1);
+  }
+  return breakdown;
+}
+
+function aggregateBottleneckBreakdowns(runs: Array<{ blockedTimeByCategorySec: BottleneckBreakdown }>): BottleneckBreakdown {
+  const breakdown = emptyBottleneckBreakdown();
+  for (const run of runs) {
+    for (const category of BOTTLENECK_CATEGORIES) {
+      breakdown[category] += run.blockedTimeByCategorySec[category];
+    }
+  }
+  for (const category of BOTTLENECK_CATEGORIES) {
+    breakdown[category] = round(breakdown[category], 1);
+  }
+  return breakdown;
 }
 
 function defaultLongRunThresholds(scenario: ShuttleScenario): LongRunAcceptanceThresholds {
@@ -736,6 +802,7 @@ function runOnce(scenario: ShuttleScenario, seed: number, durationSec: number): 
     maxWaitingVehicles,
     maxLiftPortQueueLength,
     blockedTimeByReasonSec: state.kpis.blockedTimeByReasonSec,
+    blockedTimeByCategorySec: categorizeBlockedTimeByReason(state.kpis.blockedTimeByReasonSec),
     reservationConflictCount: state.kpis.reservationConflictCount,
     deadlockCount: state.kpis.deadlockCount,
     maxObservedSpeedMps: round(maxObservedSpeedMps),
@@ -838,6 +905,7 @@ function runStressOnce(
     maxWaitingVehicles,
     maxLiftPortQueueLength,
     blockedTimeByReasonSec: state.kpis.blockedTimeByReasonSec,
+    blockedTimeByCategorySec: categorizeBlockedTimeByReason(state.kpis.blockedTimeByReasonSec),
     reservationConflictCount: state.kpis.reservationConflictCount,
     deadlockCount: state.kpis.deadlockCount,
     maxObservedSpeedMps: round(maxObservedSpeedMps),
@@ -899,6 +967,7 @@ function summarizeStressScenario(
     maxWaitingVehicles: Math.max(0, ...runs.map((run) => run.maxWaitingVehicles)),
     maxLiftPortQueueLength: Math.max(0, ...runs.map((run) => run.maxLiftPortQueueLength)),
     observedBottleneckReasons: observed,
+    blockedTimeByCategorySec: aggregateBottleneckBreakdowns(runs),
     pass
   };
 }
@@ -913,7 +982,8 @@ function emptyStressResult(durationSec: number, seeds: number[]): Phase0Validati
     noStressPhysicalSafetyViolations: true,
     noStressReservationCoverageViolations: true,
     expectedBottlenecksObserved: true,
-    positiveThroughputWhereRequired: true
+    positiveThroughputWhereRequired: true,
+    blockedTimeByCategorySec: emptyBottleneckBreakdown()
   };
 }
 
@@ -963,9 +1033,10 @@ export function validatePhase0Scenario(
           positiveThroughputWhereRequired,
         noStressDeadlocks,
         noStressPhysicalSafetyViolations,
-        noStressReservationCoverageViolations,
-        expectedBottlenecksObserved,
-        positiveThroughputWhereRequired
+          noStressReservationCoverageViolations,
+          expectedBottlenecksObserved,
+          positiveThroughputWhereRequired,
+          blockedTimeByCategorySec: aggregateBottleneckBreakdowns(stressRuns)
       };
     })();
   const allRuns = [
@@ -1033,7 +1104,8 @@ export function validatePhase0Scenario(
       totalPphMean: round(longRunTotalPphValues.reduce((sum, value) => sum + value, 0) / Math.max(1, longRunTotalPphValues.length)),
       maxQueuedTasks: Math.max(0, ...longRunRuns.map((run) => run.maxQueuedTasks)),
       maxWaitingVehicles: Math.max(0, ...longRunRuns.map((run) => run.maxWaitingVehicles)),
-      maxLiftPortQueueLength: Math.max(0, ...longRunRuns.map((run) => run.maxLiftPortQueueLength))
+      maxLiftPortQueueLength: Math.max(0, ...longRunRuns.map((run) => run.maxLiftPortQueueLength)),
+      blockedTimeByCategorySec: aggregateBottleneckBreakdowns(longRunRuns)
     },
     stress,
     acceptance: {

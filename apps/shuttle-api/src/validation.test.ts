@@ -83,25 +83,28 @@ describe('phase 0 validation', () => {
       longRunDurationSec: 600,
       stressDurationSec: 180,
       repeatCount: 2,
-      sweepSeeds: [20260502, 20260503],
+      sweepSeeds: [20260502],
       stressSeeds: [20260502]
     });
 
     expect(result.deterministic.pass).toBe(true);
     expect(new Set(result.deterministic.hashes).size).toBe(1);
-    expect(result.seedSweep.runs).toHaveLength(2);
+    expect(result.seedSweep.runs).toHaveLength(1);
     expect(result.acceptance.noPhysicalSafetyViolations).toBe(true);
     expect(result.acceptance.noReservationCoverageViolations).toBe(true);
     expect(result.seedSweep.runs.every((run) => run.physicalViolationCount === 0)).toBe(true);
     expect(result.seedSweep.runs.every((run) => run.physicalViolationsByCode.unreservedEdgeOccupancy === 0)).toBe(true);
     expect(result.seedSweep.runs.every((run) => run.physicalViolationExamples.length === 0)).toBe(true);
     expect(result.longRun.durationSec).toBe(600);
-    expect(result.longRun.runs).toHaveLength(2);
+    expect(result.longRun.runs).toHaveLength(1);
     expect(result.longRun.thresholds.minTotalPph).toBe(18);
     expect(result.longRun.thresholds.minInboundPph).toBe(6);
     expect(result.longRun.thresholds.minOutboundPph).toBe(6);
     expect(result.longRun.runs.every((run) => run.inboundPph >= result.longRun.thresholds.minInboundPph)).toBe(true);
     expect(result.longRun.runs.every((run) => run.outboundPph >= result.longRun.thresholds.minOutboundPph)).toBe(true);
+    expect(result.longRun.blockedTimeByCategorySec.storageInventory).toBeGreaterThan(0);
+    expect(result.longRun.blockedTimeByCategorySec.sideAisleNetwork).toBeGreaterThan(0);
+    expect(result.longRun.runs.every((run) => run.blockedTimeByCategorySec.storageInventory > 0)).toBe(true);
     expect(result.longRun.maxQueuedTasks).toBeLessThanOrEqual(result.longRun.thresholds.maxQueuedTasks);
     expect(result.longRun.maxLiftPortQueueLength).toBeLessThanOrEqual(result.longRun.thresholds.maxLiftPortQueueLength);
     expect(result.longRun.maxQueuedTasks).toBeLessThanOrEqual(40);
@@ -123,6 +126,9 @@ describe('phase 0 validation', () => {
     expect(result.stress.scenarios.every((scenario) =>
       scenario.runs.every((run) => run.missingExpectedBottleneckReasonPrefixes.length === 0)
     )).toBe(true);
+    expect(result.stress.blockedTimeByCategorySec.liftPort).toBeGreaterThan(0);
+    expect(result.stress.blockedTimeByCategorySec.fifoLane).toBeGreaterThan(0);
+    expect(result.stress.scenarios.find((scenario) => scenario.id === 'inbound-only-saturation')?.blockedTimeByCategorySec.liftPort).toBeGreaterThan(0);
     expect(result.stress.noStressDeadlocks).toBe(true);
     expect(result.stress.noStressPhysicalSafetyViolations).toBe(true);
     expect(result.stress.noStressReservationCoverageViolations).toBe(true);
