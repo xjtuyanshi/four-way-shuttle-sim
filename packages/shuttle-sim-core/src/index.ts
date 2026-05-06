@@ -422,17 +422,15 @@ function createDefaultLayout(profile: ShuttleLayoutGeometryProfile = DEFAULT_SHU
   for (let index = 1; index < mainXs.length; index += 1) {
     addEdge(
       `${mainLaneNodeId('north', index - 1)}-${mainLaneNodeId('north', index)}`,
-      mainLaneNodeId('north', index),
       mainLaneNodeId('north', index - 1),
-      `main-lane-north-${String(index).padStart(2, '0')}`,
-      'oneWay'
+      mainLaneNodeId('north', index),
+      `main-lane-north-${String(index).padStart(2, '0')}`
     );
     addEdge(
       `${mainLaneNodeId('south', index - 1)}-${mainLaneNodeId('south', index)}`,
       mainLaneNodeId('south', index - 1),
       mainLaneNodeId('south', index),
-      `main-lane-south-${String(index).padStart(2, '0')}`,
-      'oneWay'
+      `main-lane-south-${String(index).padStart(2, '0')}`
     );
   }
   for (let index = 1; index < mainXs.length - 1; index += 1) {
@@ -497,12 +495,7 @@ function createDefaultLayout(profile: ShuttleLayoutGeometryProfile = DEFAULT_SHU
   for (let index = 1; index < rightSpineNodeIds.length; index += 1) {
     const from = rightSpineNodeIds[index - 1]!;
     const to = rightSpineNodeIds[index]!;
-    const mainNorthIndex = rightSpineNodeIds.indexOf(mainLaneNodeId('north', lastMainIndex));
-    const mainSouthIndex = rightSpineNodeIds.indexOf(mainLaneNodeId('south', lastMainIndex));
-    const directionFrom = index <= mainNorthIndex ? to : from;
-    const directionTo = index <= mainNorthIndex ? from : to;
-    const directionMode = index === mainSouthIndex ? 'twoWay' : 'oneWay';
-    addEdge(`${from}-${to}`, directionFrom, directionTo, `right-upright-${String(index).padStart(2, '0')}`, directionMode);
+    addEdge(`${from}-${to}`, from, to, `right-upright-${String(index).padStart(2, '0')}`);
   }
 
   for (let rowIndex = 0; rowIndex < rowZs.length; rowIndex += 1) {
@@ -1587,6 +1580,68 @@ export class ShuttleSimCore {
     return this.liftPortBlockReason(task) ?? this.fifoLaneBlockReason(task) ?? this.fifoNetworkBlockReason(task);
   }
 
+  private tryInsertHeadOnYieldRoute(vehicle: MutableVehicle, targetNodeId: string, blockingVehicleId: string): boolean {
+    const blocker = this.vehicles.find((candidate) => candidate.id === blockingVehicleId);
+    if (!blocker || blocker.currentNodeId !== targetNodeId || blocker.targetNodeId !== vehicle.currentNodeId) {
+      return false;
+    }
+    if (vehicle.id.localeCompare(blockingVehicleId) < 0) {
+      return false;
+    }
+
+    const fromNodeId = vehicle.currentNodeId;
+    const currentRoutePrefix = vehicle.routeNodeIds.slice(0, vehicle.routeIndex + 1);
+    const currentRouteSuffix = vehicle.routeNodeIds.slice(vehicle.routeIndex + 2);
+    const candidates = this.neighbors(fromNodeId)
+      .filter((neighbor) => neighbor.nodeId !== targetNodeId)
+      .filter((neighbor) => !this.currentNodeOccupancy.has(neighbor.nodeId))
+      .filter((neighbor) => {
+        const node = this.scenario.layout.nodes.find((candidate) => candidate.id === neighbor.nodeId);
+        return node?.type !== 'storage' && node?.type !== 'lift-blackbox';
+      })
+      .sort((left, right) => left.lengthM - right.lengthM || left.nodeId.localeCompare(right.nodeId));
+
+    let bestRoute: string[] | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    for (const candidate of candidates) {
+      const blockedNodeIds = this.blockedStorageTransitNodeIds(candidate.nodeId, targetNodeId);
+      blockedNodeIds.add(fromNodeId);
+      try {
+        const segment = this.shortestPath(candidate.nodeId, targetNodeId, blockedNodeIds);
+        if (segment.includes(fromNodeId)) {
+          continue;
+        }
+        const detour = [...currentRoutePrefix, candidate.nodeId, ...segment.slice(1), ...currentRouteSuffix];
+        const distance = this.routeDistanceM(detour.slice(vehicle.routeIndex));
+        if (distance < bestDistance) {
+          bestRoute = detour;
+          bestDistance = distance;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    if (!bestRoute) {
+      return false;
+    }
+
+    vehicle.routeNodeIds = bestRoute;
+    vehicle.targetNodeId = bestRoute[vehicle.routeIndex + 1] ?? null;
+    vehicle.waitReason = null;
+    vehicle.blockingReservationId = null;
+    vehicle.blockingVehicleId = null;
+    vehicle.waitingSinceSec = null;
+    this.replanCount += 1;
+    this.logEvent('route-replanned', vehicle.id, vehicle.taskId, null, fromNodeId, vehicle.targetNodeId, 'head-on-yield-detour', this.vehiclePosition(vehicle), {
+      blockingVehicleId,
+      originalTargetNodeId: targetNodeId,
+      route: bestRoute.join('>')
+    });
+    return true;
+  }
+
   private liftPortBlockReason(task: TaskStateRecord): string | null {
     const liftNodeId = this.taskLiftPortNodeId(task);
     return liftNodeId && this.isLiftPortBusyForAssignment(task.kind, liftNodeId) ? `${task.kind}-lift-busy:${liftNodeId}` : null;
@@ -2133,6 +2188,10 @@ export class ShuttleSimCore {
 
     const occupiedTargetId = this.currentNodeOccupancy.get(toNodeId);
     if (occupiedTargetId && occupiedTargetId !== vehicle.id) {
+      if (this.tryInsertHeadOnYieldRoute(vehicle, toNodeId, occupiedTargetId)) {
+        this.startNextLeg(vehicle, dtSec);
+        return;
+      }
       const waitReason = this.liftPortWaitReason(toNodeId) ?? 'node-occupied';
       const shouldLogWait = this.shouldLogVehicleWait(vehicle, toNodeId, waitReason, null, occupiedTargetId);
       this.reservationConflictCount += 1;

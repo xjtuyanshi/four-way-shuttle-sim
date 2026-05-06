@@ -133,6 +133,13 @@ function crossRowStorageHops(routeNodeIds: string[]): Array<[string, string]> {
   return hops;
 }
 
+function storageRowsInRoute(routeNodeIds: string[]): string[] {
+  return [...new Set(routeNodeIds.flatMap((nodeId) => {
+    const match = /^storage-r(\d+)-c\d+$/.exec(nodeId);
+    return match ? [match[1]!] : [];
+  }))];
+}
+
 function verifiedCalibrationDimensions(): NonNullable<ShuttleScenario['layout']['calibrationProfile']>['dimensions'] {
   const currentAssumptionValues = new Map(
     createDefaultShuttleScenario().layout.calibrationProfile?.dimensions.map((dimension) => [dimension.key, dimension.valueM])
@@ -319,6 +326,10 @@ describe('shuttle phase 0 SimCore', () => {
     const storageRowGaps = storageRows.slice(1).map((z, index) => z - storageRows[index]!);
     const mainNorthNodes = scenario.layout.nodes.filter((node) => node.id.startsWith('main-north-')).sort((left, right) => left.x - right.x);
     const mainSouthNodes = scenario.layout.nodes.filter((node) => node.id.startsWith('main-south-')).sort((left, right) => left.x - right.x);
+    const mainLaneEdges = scenario.layout.edges.filter((edge) =>
+      edge.conflictGroup?.startsWith('main-lane-north') || edge.conflictGroup?.startsWith('main-lane-south')
+    );
+    const rightUprightEdges = scenario.layout.edges.filter((edge) => edge.conflictGroup?.startsWith('right-upright'));
 
     expect(scenario.layout.nodes.every((node) => node.y === 0)).toBe(true);
     expect(storageRows).toHaveLength(16);
@@ -333,6 +344,10 @@ describe('shuttle phase 0 SimCore', () => {
     expect(mainNorthNodes).toHaveLength(6);
     expect(mainSouthNodes).toHaveLength(6);
     expect(mainNorthNodes.every((node, index) => node.x === mainSouthNodes[index]!.x)).toBe(true);
+    expect(mainLaneEdges).toHaveLength(10);
+    expect(mainLaneEdges.every((edge) => edge.directionMode === 'twoWay')).toBe(true);
+    expect(rightUprightEdges.length).toBeGreaterThan(0);
+    expect(rightUprightEdges.every((edge) => edge.directionMode === 'twoWay')).toBe(true);
     expect(mainNorthNodes.every((node) => node.z < 0)).toBe(true);
     expect(mainSouthNodes.every((node) => node.z > 0)).toBe(true);
     expect(Math.max(...storageXs)).toBeLessThan(Math.max(...mainNorthNodes.map((node) => node.x)));
@@ -840,7 +855,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.traffic.liftPorts.some((port) => port.kind === 'inbound' && port.utilization > 0)).toBe(true);
   });
 
-  it('lets opposite one-way main lanes pass without portal-zone deadlock in the default layout', () => {
+  it('lets opposite main-lane traffic pass without portal-zone deadlock in the default layout', () => {
     const scenario = createDefaultShuttleScenario({
       durationSec: 30,
       taskGeneration: {
@@ -874,6 +889,49 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.vehicles.every((vehicle) => vehicle.waitReason !== 'zone-reserved')).toBe(true);
     expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-01')?.currentNodeId).toBe('main-north-01');
     expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-02')?.currentNodeId).toBe('main-south-04');
+  });
+
+  it('reroutes head-on main-lane swaps through the parallel bidirectional aisle', () => {
+    const scenario = createDefaultShuttleScenario({
+      durationSec: 60,
+      vehicles: {
+        count: 2
+      },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      physicsParams: {
+        emptySpeedMps: 4,
+        loadedSpeedMps: 3,
+        accelerationMps2: 4,
+        switchDirectionSec: 0,
+        liftTimeSec: 0.1,
+        lowerTimeSec: 0.1,
+        loadedClearanceM: 0.2,
+        reservationClearanceSec: 0.05
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['main-north-04', 'main-north-05']);
+    sim.setVehicleRouteForTest('SH-02', ['main-north-05', 'main-north-04']);
+
+    for (let index = 0; index < 80; index += 1) {
+      sim.step(0.2);
+    }
+
+    const state = sim.getState();
+    expect(state.kpis.deadlockCount).toBe(0);
+    expect(state.kpis.replanCount).toBe(1);
+    expect(sim.getEventLog()).toContainEqual(expect.objectContaining({
+      eventType: 'route-replanned',
+      reason: 'head-on-yield-detour'
+    }));
+    expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-01')?.currentNodeId).toBe('main-north-05');
+    expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-02')?.currentNodeId).toBe('main-north-04');
   });
 
   it('serializes lift connector crossings through the main-aisle portal zone', () => {
@@ -1230,6 +1288,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(assignedVehicle?.id).toBe('SH-01');
     expect(assignedVehicle?.routeNodeIds).toEqual(expect.arrayContaining(['left-row-01', 'left-row-02', 'storage-r02-c01']));
     expect(crossRowStorageHops(assignedVehicle?.routeNodeIds ?? [])).toEqual([]);
+    expect(storageRowsInRoute(assignedVehicle?.routeNodeIds ?? [])).toEqual(['01', '02']);
   });
 
   it('assigns executable work to the nearest idle shuttle resource', () => {
