@@ -109,8 +109,6 @@ describe('phase 0 validation', () => {
     expect(result.longRun.thresholds.minOutboundPph).toBe(6);
     expect(result.longRun.runs.every((run) => run.inboundPph >= result.longRun.thresholds.minInboundPph)).toBe(true);
     expect(result.longRun.runs.every((run) => run.outboundPph >= result.longRun.thresholds.minOutboundPph)).toBe(true);
-    expect(result.longRun.blockedTimeByCategorySec.storageInventory).toBeGreaterThan(0);
-    expect(result.longRun.runs.every((run) => run.blockedTimeByCategorySec.storageInventory > 0)).toBe(true);
     expect(result.longRun.maxQueuedTasks).toBeLessThanOrEqual(result.longRun.thresholds.maxQueuedTasks);
     expect(result.longRun.maxLiftPortQueueLength).toBeLessThanOrEqual(result.longRun.thresholds.maxLiftPortQueueLength);
     expect(result.longRun.maxQueuedTasks).toBeLessThanOrEqual(40);

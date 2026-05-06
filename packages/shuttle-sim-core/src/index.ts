@@ -1674,6 +1674,20 @@ export class ShuttleSimCore {
     if (!rowLabel) {
       return null;
     }
+    const taskColumn = this.taskStorageColumn(task);
+    if (taskColumn !== null) {
+      const hasUnfinishedPredecessor = this.tasks.some((candidate) =>
+        candidate.id !== task.id &&
+        candidate.kind === task.kind &&
+        candidate.state !== 'completed' &&
+        candidate.state !== 'failed' &&
+        this.taskStorageRowLabel(candidate) === rowLabel &&
+        (this.taskStorageColumn(candidate) ?? Number.POSITIVE_INFINITY) < taskColumn
+      );
+      if (hasUnfinishedPredecessor) {
+        return `fifo-predecessor-pending:${rowLabel}`;
+      }
+    }
     const hasActiveSameLaneTask = this.tasks.some((candidate) =>
       candidate.id !== task.id &&
       (candidate.state === 'assigned' || candidate.state === 'in-progress') &&
@@ -1699,6 +1713,11 @@ export class ShuttleSimCore {
     return this.nodeStorageRowLabel(storageNodeId);
   }
 
+  private taskStorageColumn(task: TaskStateRecord): number | null {
+    const storageNodeId = task.kind === 'inbound' ? task.dropoffNodeId : task.pickupNodeId;
+    return this.storageGridPosition(storageNodeId)?.column ?? null;
+  }
+
   private storageGridPosition(nodeId: string): { row: number; column: number } | null {
     const match = /^storage-r(\d+)-c(\d+)$/.exec(nodeId);
     return match ? { row: Number(match[1]), column: Number(match[2]) } : null;
@@ -1720,10 +1739,9 @@ export class ShuttleSimCore {
     const route: string[] = [currentNodeId];
     const storageEntrySideNodeId = task.kind === 'inbound' ? this.storageSideNodeId(task.dropoffNodeId, 'right') : this.storageSideNodeId(task.pickupNodeId, 'left');
     const currentStorageExitNodeId = task.kind === 'inbound' && this.isStorageNode(currentNodeId) ? this.nearestStorageSideNodeId(currentNodeId) : null;
-    const inboundDropoffExitNodeId = task.kind === 'inbound' ? this.storageSideNodeId(task.dropoffNodeId, 'right') : null;
     const alreadyAtOutboundPickup = task.kind === 'outbound' && currentNodeId === task.pickupNodeId;
     const targets = task.kind === 'inbound'
-      ? [currentStorageExitNodeId, task.pickupNodeId, storageEntrySideNodeId, task.dropoffNodeId, inboundDropoffExitNodeId, parkingNodeId]
+      ? [currentStorageExitNodeId, task.pickupNodeId, storageEntrySideNodeId, task.dropoffNodeId]
       : alreadyAtOutboundPickup
         ? [task.dropoffNodeId, parkingNodeId]
         : [storageEntrySideNodeId, task.pickupNodeId, storageEntrySideNodeId, task.dropoffNodeId, parkingNodeId];
@@ -1732,7 +1750,8 @@ export class ShuttleSimCore {
         continue;
       }
       const fromNodeId = route[route.length - 1]!;
-      const blockedStorageNodeIds = this.blockedStorageTransitNodeIds(fromNodeId, target);
+      const blockStoredLoads = route.includes(task.pickupNodeId) && target !== task.pickupNodeId;
+      const blockedStorageNodeIds = this.blockedStorageTransitNodeIds(fromNodeId, target, { blockStoredLoads });
       const segment = this.shortestPath(fromNodeId, target, blockedStorageNodeIds);
       route.push(...segment.slice(1));
     }
@@ -1762,7 +1781,11 @@ export class ShuttleSimCore {
     return this.storageSideNodeId(storageNodeId, preferredSide) ?? this.storageSideNodeId(storageNodeId, preferredSide === 'left' ? 'right' : 'left');
   }
 
-  private blockedStorageTransitNodeIds(fromNodeId: string, targetNodeId: string): Set<string> {
+  private blockedStorageTransitNodeIds(
+    fromNodeId: string,
+    targetNodeId: string,
+    options: { blockStoredLoads?: boolean } = {}
+  ): Set<string> {
     const storageNodeIds = new Set(this.scenario.layout.nodes.filter((node) => node.type === 'storage').map((node) => node.id));
     const allowedNodeIds = new Set([fromNodeId, targetNodeId]);
     const blockedNodeIds = new Set<string>();
@@ -1781,6 +1804,14 @@ export class ShuttleSimCore {
     for (const nodeId of storageNodeIds) {
       if (!allowedNodeIds.has(nodeId) && this.nodeStorageRowLabel(nodeId) !== allowStorageTransitRow) {
         blockedNodeIds.add(nodeId);
+      }
+    }
+
+    if (options.blockStoredLoads) {
+      for (const [nodeId] of this.storageNodeLoadOccupancy(false)) {
+        if (!allowedNodeIds.has(nodeId)) {
+          blockedNodeIds.add(nodeId);
+        }
       }
     }
 
@@ -2299,7 +2330,7 @@ export class ShuttleSimCore {
     task: TaskStateRecord | null
   ): boolean {
     const axis = this.axisForEdge(edge);
-    if (!axis || vehicle.lastMovementAxis !== axis || this.mustStopAtNode(vehicle, task, toNodeId)) {
+    if (!axis || this.mustStopAtNode(vehicle, task, toNodeId)) {
       return false;
     }
     const nextNodeId = vehicle.routeNodeIds[vehicle.routeIndex + 2];

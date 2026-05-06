@@ -238,7 +238,7 @@ function emptyBottleneckBreakdown(): BottleneckBreakdown {
 
 function bottleneckCategoryForReason(reason: string): BottleneckCategory {
   if (reason === 'storage-empty' || reason === 'storage-full') return 'storageInventory';
-  if (reason.startsWith('fifo-lane-busy:')) return 'fifoLane';
+  if (reason.startsWith('fifo-lane-busy:') || reason.startsWith('fifo-predecessor-pending:')) return 'fifoLane';
   if (reason === 'fifo-left-network-busy' || reason === 'fifo-right-network-busy') return 'sideAisleNetwork';
   if (
     reason.startsWith('inbound-lift-busy:') ||

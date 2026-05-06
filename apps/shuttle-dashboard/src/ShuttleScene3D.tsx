@@ -895,6 +895,22 @@ function createLoadMesh(load: LoadStateRecord, node: ShuttleNode, index: number)
   return loadMesh;
 }
 
+function createPendingInboundLoadMesh(taskId: string, node: ShuttleNode): THREE.Group {
+  const loadMesh = createPalletLoadObject(1.04, 0.88, 0xb98a4a);
+  loadMesh.position.set(node.x, 0.13, node.z);
+  loadMesh.userData.loadId = taskId;
+  loadMesh.traverse((child) => {
+    if (child instanceof THREE.Mesh) {
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      for (const childMaterial of materials) {
+        childMaterial.transparent = true;
+        childMaterial.opacity = 0.58;
+      }
+    }
+  });
+  return loadMesh;
+}
+
 function updateDynamicScene(
   runtime: SceneRuntime,
   scenario: ShuttleScenario,
@@ -926,12 +942,27 @@ function updateDynamicScene(
   clearGroup(runtime.loadGroup);
   if (layers.loads) {
     const loads = (state?.loads ?? []).filter((load) => load.nodeId && load.state !== 'carried');
+    const occupiedLoadNodeIds = new Set(loads.flatMap((load) => load.nodeId ? [load.nodeId] : []));
     loads.forEach((load, index) => {
       const node = load.nodeId ? runtime.nodeById.get(load.nodeId) : null;
       if (node) {
         runtime.loadGroup.add(createLoadMesh(load, node, index));
       }
     });
+    for (const task of state?.tasks ?? []) {
+      if (
+        task.kind !== 'inbound' ||
+        task.state === 'completed' ||
+        task.state === 'failed' ||
+        occupiedLoadNodeIds.has(task.dropoffNodeId)
+      ) {
+        continue;
+      }
+      const node = runtime.nodeById.get(task.dropoffNodeId);
+      if (node?.type === 'storage') {
+        runtime.loadGroup.add(createPendingInboundLoadMesh(task.id, node));
+      }
+    }
   }
 
   clearGroup(runtime.reservationGroup);

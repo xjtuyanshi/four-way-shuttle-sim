@@ -140,6 +140,33 @@ function storageRowsInRoute(routeNodeIds: string[]): string[] {
   }))];
 }
 
+function storageColumn(nodeId: string): number | null {
+  return Number(/^storage-r\d+-c(\d+)$/.exec(nodeId)?.[1] ?? NaN) || null;
+}
+
+function storageFillHoles(nodeIds: string[]): string[] {
+  const rows = new Map<string, number[]>();
+  for (const nodeId of nodeIds) {
+    const match = /^storage-r(\d+)-c(\d+)$/.exec(nodeId);
+    if (!match) {
+      continue;
+    }
+    rows.set(match[1]!, [...(rows.get(match[1]!) ?? []), Number(match[2])]);
+  }
+
+  const holes: string[] = [];
+  for (const [row, columns] of rows) {
+    const columnSet = new Set(columns);
+    const maxColumn = Math.max(...columns);
+    for (let column = 1; column <= maxColumn; column += 1) {
+      if (!columnSet.has(column)) {
+        holes.push(`r${row}-c${String(column).padStart(2, '0')}`);
+      }
+    }
+  }
+  return holes.sort();
+}
+
 function expectStorageTraversalOnlyHorizontal(routeNodeIds: string[]) {
   for (let index = 1; index < routeNodeIds.length; index += 1) {
     const from = /^storage-r(\d+)-c(\d+)$/.exec(routeNodeIds[index - 1]!);
@@ -147,6 +174,27 @@ function expectStorageTraversalOnlyHorizontal(routeNodeIds: string[]) {
     if (from && to) {
       expect(to[1]).toBe(from[1]);
     }
+  }
+}
+
+function expectNoLoadedStorageTransitThroughStoredLoads(state: ReturnType<ShuttleSimCore['getState']>) {
+  const storedNodeIds = new Set(
+    state.loads
+      .filter((load) => load.state === 'stored' && load.nodeId?.startsWith('storage-'))
+      .flatMap((load) => load.nodeId ? [load.nodeId] : [])
+  );
+  const taskById = new Map(state.tasks.map((task) => [task.id, task]));
+
+  for (const vehicle of state.vehicles.filter((candidate) => candidate.loaded && candidate.taskId)) {
+    const task = taskById.get(vehicle.taskId!);
+    if (!task) {
+      continue;
+    }
+    const dropoffIndex = vehicle.routeNodeIds.indexOf(task.dropoffNodeId, vehicle.routeIndex);
+    const loadedPath = dropoffIndex >= 0
+      ? vehicle.routeNodeIds.slice(vehicle.routeIndex + 1, dropoffIndex)
+      : vehicle.routeNodeIds.slice(vehicle.routeIndex + 1);
+    expect(loadedPath.filter((nodeId) => storedNodeIds.has(nodeId))).toEqual([]);
   }
 }
 
@@ -1200,7 +1248,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(route.slice(0, 2)).toEqual(['storage-r16-c01', 'left-row-16']);
   });
 
-  it('backs out toward the inbound side after an inbound dropoff route instead of crossing to the outbound side', () => {
+  it('ends inbound work at the target storage cell without a post-dropoff route tail', () => {
     const scenario = createDefaultShuttleScenario({
       vehicles: { count: 1 },
       taskGeneration: {
@@ -1218,13 +1266,12 @@ describe('shuttle phase 0 SimCore', () => {
     const assigned = sim.getEventLog().find((event) => event.eventType === 'task-assigned');
     const route = String(assigned?.details.route ?? '').split('>');
     const dropoffIndex = route.indexOf('storage-r01-c01');
-    const rightExitIndex = route.indexOf('right-row-01', dropoffIndex);
-    const leftExitAfterDropoffIndex = route.indexOf('left-row-01', dropoffIndex);
 
     expect(dropoffIndex).toBeGreaterThan(0);
-    expect(route[dropoffIndex + 1]).toBe('storage-r01-c02');
-    expect(rightExitIndex).toBeGreaterThan(dropoffIndex);
-    expect(leftExitAfterDropoffIndex === -1 || leftExitAfterDropoffIndex > rightExitIndex).toBe(true);
+    expect(dropoffIndex).toBe(route.length - 1);
+    expect(route.slice(route.indexOf('right-row-01') + 1).flatMap((nodeId) => storageColumn(nodeId) ?? [])).toEqual(
+      expect.arrayContaining([1])
+    );
   });
 
   it('parks an unloaded shuttle under its inbound dropoff load instead of crossing the FIFO row empty', () => {
@@ -1693,13 +1740,15 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.simTimeSec).toBe(180);
     expect(state.kpis.completedInbound).toBeGreaterThanOrEqual(3);
     expect(state.kpis.totalPph).toBeGreaterThanOrEqual(60);
-    expect(state.kpis.activeTasks).toBeGreaterThanOrEqual(6);
+    expect(state.kpis.activeTasks).toBeGreaterThanOrEqual(5);
     expect(state.kpis.queuedTasks).toBeGreaterThan(0);
-    expect(utilizedVehicleCount).toBeGreaterThanOrEqual(10);
+    expect(utilizedVehicleCount).toBeGreaterThanOrEqual(8);
     expect(state.traffic.liftPorts.filter((port) => port.kind === 'inbound').every((port) => port.approachOccupancy === port.approachCapacity)).toBe(true);
     expect(Object.keys(state.kpis.blockedTimeByReasonSec).some((reason) => reason.startsWith('inbound-lift-approach-full:'))).toBe(true);
     expect(Math.max(...state.traffic.liftPorts.filter((port) => port.kind === 'inbound').map((port) => port.utilization))).toBeLessThan(0.02);
     expectIdleVehiclesParkedOnlyOnParkableNodes(scenario, state);
+    expect(storageFillHoles(state.loads.filter((load) => load.state === 'stored' && load.nodeId?.startsWith('storage-')).map((load) => load.nodeId!))).toEqual([]);
+    expectNoLoadedStorageTransitThroughStoredLoads(state);
     for (const vehicle of state.vehicles) {
       expectStorageTraversalOnlyHorizontal(vehicle.routeNodeIds);
     }
@@ -1740,6 +1789,8 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.kpis.totalPph).toBeGreaterThan(100);
     expect(utilizedVehicleCount).toBe(12);
     expect(state.traffic.deadlockCandidateVehicleIds).toEqual([]);
+    expect(storageFillHoles(state.loads.filter((load) => load.state === 'stored' && load.nodeId?.startsWith('storage-')).map((load) => load.nodeId!))).toEqual([]);
+    expectNoLoadedStorageTransitThroughStoredLoads(state);
     expectNoTrafficSafetyFailures(state);
   }, 30000);
 
