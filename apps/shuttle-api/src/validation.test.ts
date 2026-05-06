@@ -153,6 +153,8 @@ describe('phase 0 validation', () => {
       includeStress: false,
       longRunThresholds: {
         minTotalPph: 999,
+        minInboundPph: 999,
+        minOutboundPph: 999,
         maxQueuedTasks: 0,
         maxWaitingVehicles: 0,
         maxLiftPortQueueLength: 0

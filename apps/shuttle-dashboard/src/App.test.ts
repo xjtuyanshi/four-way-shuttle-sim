@@ -3,7 +3,13 @@ import { createDefaultShuttleScenario, summarizeScenarioStaticSceneContract } fr
 import { describe, expect, it } from 'vitest';
 
 import goldenStaticSceneContract from '../../../config/shuttle/static-scene-contract.golden.json';
-import { mergeKpiUpdate, mergeVehicleStateUpdate, shouldResetAfterParamUpdate, shouldResumeAfterParamUpdate } from './App.js';
+import {
+  mergeKpiUpdate,
+  mergeVehicleStateUpdate,
+  shouldResetAfterParamUpdate,
+  shouldResumeAfterParamUpdate,
+  summarizeResourceUtilization
+} from './App.js';
 import { resolveCadDimensionAnnotations, resolveDashboardStaticSceneContract } from './ShuttleScene3D.js';
 
 function vehicle(overrides: Partial<VehicleState> & { id: string }): VehicleState {
@@ -130,6 +136,99 @@ describe('dashboard parameter controls', () => {
 
     expect(shouldResetAfterParamUpdate('/physicsParams/loadedSpeedMps', 'completed')).toBe(true);
     expect(shouldResumeAfterParamUpdate('/physicsParams/loadedSpeedMps', 'completed')).toBe(true);
+  });
+});
+
+describe('dashboard resource utilization', () => {
+  it('summarizes storage, shuttle, and lift utilization from the live state', () => {
+    const scenario = createDefaultShuttleScenario();
+    const summary = summarizeResourceUtilization(scenario, state({
+      vehicles: [
+        vehicle({ id: 'SH-01', state: 'loaded-moving', taskId: 'task-001' }),
+        vehicle({ id: 'SH-02', state: 'idle' })
+      ],
+      tasks: [
+        {
+          id: 'task-001',
+          kind: 'inbound',
+          state: 'in-progress',
+          createdAtSec: 0,
+          assignedAtSec: 1,
+          startedAtSec: 2,
+          completedAtSec: null,
+          pickupNodeId: 'inbound-lift-top-01',
+          dropoffNodeId: 'storage-r01-c02',
+          loadId: 'load-001',
+          vehicleId: 'SH-01',
+          replanCount: 0,
+          waitReason: null
+        }
+      ],
+      loads: [
+        {
+          id: 'load-stored',
+          state: 'stored',
+          nodeId: 'storage-r01-c01',
+          vehicleId: null,
+          weightKg: 100
+        }
+      ],
+      traffic: {
+        activeReservationCount: 0,
+        waitingVehicles: [],
+        liftPorts: [
+          {
+            nodeId: 'inbound-lift-top-01',
+            kind: 'inbound',
+            queueLength: 2,
+            waitingTaskIds: ['task-002', 'task-003'],
+            activeTaskId: 'task-001',
+            utilization: 0.5
+          },
+          {
+            nodeId: 'outbound-lift-top-01',
+            kind: 'outbound',
+            queueLength: 0,
+            waitingTaskIds: [],
+            activeTaskId: null,
+            utilization: 0.1
+          }
+        ],
+        deadlockCandidateVehicleIds: [],
+        minVehicleSeparationM: null,
+        maxObservedSpeedMps: 0,
+        physicalViolationCount: 0
+      },
+      kpis: kpis({
+        vehicleUtilization: {
+          'SH-01': 0.75,
+          'SH-02': 0.25
+        }
+      })
+    }));
+
+    expect(summary.storage).toMatchObject({
+      totalCells: 384,
+      usedCells: 2,
+      storedCells: 1,
+      reservedInboundCells: 1
+    });
+    expect(summary.storage.utilizationPct).toBeCloseTo(0.5208, 4);
+    expect(summary.shuttles).toMatchObject({
+      total: 2,
+      active: 1,
+      idle: 1,
+      averageUtilizationPct: 50,
+      peakUtilizationPct: 75
+    });
+    expect(summary.lifts).toMatchObject({
+      total: 2,
+      active: 1,
+      queuedTasks: 2,
+      averageUtilizationPct: 30,
+      inboundAverageUtilizationPct: 50,
+      outboundAverageUtilizationPct: 10
+    });
   });
 });
 

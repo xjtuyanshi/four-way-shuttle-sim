@@ -176,6 +176,31 @@ type SceneLayers = {
   routes: boolean;
 };
 
+type ResourceUtilizationSummary = {
+  storage: {
+    totalCells: number;
+    usedCells: number;
+    storedCells: number;
+    reservedInboundCells: number;
+    utilizationPct: number;
+  };
+  shuttles: {
+    total: number;
+    active: number;
+    idle: number;
+    averageUtilizationPct: number;
+    peakUtilizationPct: number;
+  };
+  lifts: {
+    total: number;
+    active: number;
+    queuedTasks: number;
+    averageUtilizationPct: number;
+    inboundAverageUtilizationPct: number;
+    outboundAverageUtilizationPct: number;
+  };
+};
+
 const CONTROLLED_PARAMS = [
   {
     label: 'Shuttle count',
@@ -204,9 +229,9 @@ const CONTROLLED_PARAMS = [
   {
     label: 'Lift time',
     path: '/physicsParams/liftTimeSec',
-    min: 0.5,
+    min: 0,
     max: 6,
-    step: 0.1,
+    step: 0.05,
     unit: 's'
   },
   {
@@ -347,6 +372,67 @@ export function shouldResumeAfterParamUpdate(path: string, status: ShuttleSimSta
   return shouldResetAfterParamUpdate(path, status) && (status === 'running' || status === 'completed');
 }
 
+function percent(numerator: number, denominator: number): number {
+  return denominator > 0 ? (numerator / denominator) * 100 : 0;
+}
+
+function average(values: number[]): number {
+  return values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+}
+
+export function summarizeResourceUtilization(
+  scenario: ShuttleScenario | null,
+  state: ShuttleSimState | null
+): ResourceUtilizationSummary {
+  const storageNodeIds = new Set((scenario?.layout.nodes ?? [])
+    .filter((node) => node.type === 'storage')
+    .map((node) => node.id));
+  const activeTasks = state?.tasks.filter((task) => task.state !== 'completed' && task.state !== 'failed') ?? [];
+  const storedNodeIds = new Set(
+    (state?.loads ?? [])
+      .filter((load) => load.state === 'stored' && load.nodeId && storageNodeIds.has(load.nodeId))
+      .map((load) => load.nodeId!)
+  );
+  const reservedInboundNodeIds = new Set(
+    activeTasks
+      .filter((task) => task.kind === 'inbound' && storageNodeIds.has(task.dropoffNodeId))
+      .map((task) => task.dropoffNodeId)
+  );
+  const usedStorageNodeIds = new Set([...storedNodeIds, ...reservedInboundNodeIds]);
+  const vehicles = state?.vehicles ?? [];
+  const utilizationByVehicle = state?.kpis.vehicleUtilization ?? {};
+  const vehicleUtilizationValues = vehicles.map((vehicle) => utilizationByVehicle[vehicle.id] ?? 0);
+  const liftPorts = state?.traffic.liftPorts ?? [];
+  const liftUtilizationValues = liftPorts.map((port) => port.utilization);
+  const inboundLiftUtilizationValues = liftPorts.filter((port) => port.kind === 'inbound').map((port) => port.utilization);
+  const outboundLiftUtilizationValues = liftPorts.filter((port) => port.kind === 'outbound').map((port) => port.utilization);
+
+  return {
+    storage: {
+      totalCells: storageNodeIds.size,
+      usedCells: usedStorageNodeIds.size,
+      storedCells: storedNodeIds.size,
+      reservedInboundCells: reservedInboundNodeIds.size,
+      utilizationPct: percent(usedStorageNodeIds.size, storageNodeIds.size)
+    },
+    shuttles: {
+      total: vehicles.length,
+      active: vehicles.filter((vehicle) => vehicle.state !== 'idle' || vehicle.taskId !== null).length,
+      idle: vehicles.filter((vehicle) => vehicle.state === 'idle' && vehicle.taskId === null).length,
+      averageUtilizationPct: average(vehicleUtilizationValues) * 100,
+      peakUtilizationPct: Math.max(0, ...vehicleUtilizationValues) * 100
+    },
+    lifts: {
+      total: liftPorts.length,
+      active: liftPorts.filter((port) => port.activeTaskId).length,
+      queuedTasks: liftPorts.reduce((sum, port) => sum + port.queueLength, 0),
+      averageUtilizationPct: average(liftUtilizationValues) * 100,
+      inboundAverageUtilizationPct: average(inboundLiftUtilizationValues) * 100,
+      outboundAverageUtilizationPct: average(outboundLiftUtilizationValues) * 100
+    }
+  };
+}
+
 function KpiStrip({ kpis }: { kpis: KpiSnapshot | null }) {
   const items = [
     ['Total PPH', kpis ? formatNumber(kpis.totalPph, 1) : '--'],
@@ -363,6 +449,45 @@ function KpiStrip({ kpis }: { kpis: KpiSnapshot | null }) {
         <div className="metric" key={label}>
           <span>{label}</span>
           <strong>{value}</strong>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function ResourceUtilizationPanel({ scenario, state }: { scenario: ShuttleScenario | null; state: ShuttleSimState | null }) {
+  const summary = useMemo(() => summarizeResourceUtilization(scenario, state), [scenario, state]);
+  const liftTiming = scenario?.physicsParams;
+  const items = [
+    {
+      label: 'Storage capacity',
+      value: `${formatNumber(summary.storage.utilizationPct, 1)}%`,
+      detail: `${summary.storage.usedCells}/${summary.storage.totalCells} cells, ${summary.storage.reservedInboundCells} reserved`
+    },
+    {
+      label: 'Shuttle utilization',
+      value: `${summary.shuttles.active}/${summary.shuttles.total}`,
+      detail: `avg ${formatNumber(summary.shuttles.averageUtilizationPct, 1)}%, peak ${formatNumber(summary.shuttles.peakUtilizationPct, 1)}%`
+    },
+    {
+      label: 'Lift allocation',
+      value: `${summary.lifts.active}/${summary.lifts.total}`,
+      detail: `avg ${formatNumber(summary.lifts.averageUtilizationPct, 1)}%, q${summary.lifts.queuedTasks}`
+    },
+    {
+      label: 'Lift cycle',
+      value: liftTiming ? `${formatNumber(liftTiming.liftTimeSec, 2)}s` : '--',
+      detail: liftTiming ? `lower ${formatNumber(liftTiming.lowerTimeSec, 2)}s` : 'loading'
+    }
+  ];
+
+  return (
+    <section className="resource-panel" aria-label="Resource utilization">
+      {items.map((item) => (
+        <div key={item.label}>
+          <span>{item.label}</span>
+          <strong>{item.value}</strong>
+          <small>{item.detail}</small>
         </div>
       ))}
     </section>
@@ -1392,6 +1517,7 @@ export function App() {
           onToggleLayer={toggleSceneLayer}
         />
         <KpiStrip kpis={kpis} />
+        <ResourceUtilizationPanel scenario={scenario} state={state} />
         <TrafficDiagnosticsPanel state={state} />
         <FifoInventoryPanel scenario={scenario} state={state} />
         <div className="main-grid">

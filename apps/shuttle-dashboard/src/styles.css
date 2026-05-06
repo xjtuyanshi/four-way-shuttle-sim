@@ -330,6 +330,33 @@ input[type="range"] {
   line-height: 1;
 }
 
+.resource-panel {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.resource-panel > div {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 12px;
+  display: grid;
+  gap: 4px;
+  min-height: 78px;
+}
+
+.resource-panel span,
+.resource-panel small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.resource-panel strong {
+  font-size: 22px;
+  line-height: 1;
+}
+
 .main-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(360px, 0.65fr);
@@ -792,6 +819,10 @@ th {
     grid-template-columns: repeat(2, 1fr);
   }
 
+  .resource-panel {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
   .fifo-body {
     grid-template-columns: 1fr;
   }
@@ -834,6 +865,10 @@ th {
   }
 
   .traffic-diagnostics {
+    grid-template-columns: 1fr;
+  }
+
+  .resource-panel {
     grid-template-columns: 1fr;
   }
 
