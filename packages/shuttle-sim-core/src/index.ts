@@ -2284,6 +2284,29 @@ export class ShuttleSimCore {
       return;
     }
 
+    const leadingVehicleId = this.leadingVehicleTooClose(vehicle, fromNodeId, toNodeId);
+    if (leadingVehicleId) {
+      const waitReason = 'min-separation';
+      const shouldLogWait = this.shouldLogVehicleWait(vehicle, toNodeId, waitReason, null, leadingVehicleId);
+      this.reservationConflictCount += 1;
+      vehicle.state = 'waiting-blocked';
+      vehicle.speedMps = 0;
+      vehicle.targetNodeId = toNodeId;
+      vehicle.waitReason = waitReason;
+      vehicle.blockingReservationId = null;
+      vehicle.blockingVehicleId = leadingVehicleId;
+      vehicle.waitingSinceSec ??= this.simTimeSec;
+      vehicle.blockedTimeSec = round(vehicle.blockedTimeSec + dtSec);
+      this.ensureZoneHoldReservation(vehicle, fromNodeId);
+      this.blockedTimeByReasonSec.set(waitReason, round((this.blockedTimeByReasonSec.get(waitReason) ?? 0) + dtSec));
+      if (shouldLogWait) {
+        this.logEvent('vehicle-waiting', vehicle.id, vehicle.taskId, null, fromNodeId, toNodeId, waitReason, this.vehiclePosition(vehicle), {
+          blockingVehicleId: leadingVehicleId
+        });
+      }
+      return;
+    }
+
     const authorization = this.authorizeRouteHorizon(vehicle, task);
 
     if (!authorization.ok) {
@@ -2368,12 +2391,80 @@ export class ShuttleSimCore {
     return nextEdge && this.axisForEdge(nextEdge) === axis ? 'cruise' : 'profile';
   }
 
-  private storageRowHorizonEligible(fromNodeId: string, toNodeId: string): boolean {
+  private routeHorizonEligible(fromNodeId: string, toNodeId: string): boolean {
+    const fromRowLabel = this.nodeStorageRowLabel(fromNodeId);
+    const toRowLabel = this.nodeStorageRowLabel(toNodeId);
     return (
-      this.isStorageNode(fromNodeId) &&
-      this.isStorageNode(toNodeId) &&
-      this.nodeStorageRowLabel(fromNodeId) === this.nodeStorageRowLabel(toNodeId)
+      fromRowLabel !== null &&
+      fromRowLabel === toRowLabel &&
+      (this.isStorageNode(fromNodeId) || this.isStorageNode(toNodeId))
     );
+  }
+
+  private leadingVehicleTooClose(vehicle: MutableVehicle, fromNodeId: string, toNodeId: string): string | null {
+    const from = nodePosition(this.scenario, fromNodeId);
+    const to = nodePosition(this.scenario, toNodeId);
+    const dx = to.x - from.x;
+    const dz = to.z - from.z;
+    const length = Math.hypot(dx, dz);
+    if (length <= 1e-9) {
+      return null;
+    }
+
+    const ux = dx / length;
+    const uz = dz / length;
+    const lateralToleranceM = Math.max(0.15, this.scenario.vehicles.widthM * 0.55);
+    const headwayM = Math.max(
+      this.scenario.vehicles.lengthM + this.scenario.vehicles.safetyRadiusM + 0.15,
+      this.scenario.vehicles.lengthM * 2 + this.scenario.vehicles.safetyRadiusM
+    );
+
+    for (const other of this.vehicles) {
+      if (other.id === vehicle.id) {
+        continue;
+      }
+      const relX = other.x - from.x;
+      const relZ = other.z - from.z;
+      const projection = relX * ux + relZ * uz;
+      if (projection <= 0 || projection > headwayM) {
+        continue;
+      }
+
+      const lateral = Math.abs(relX * -uz + relZ * ux);
+      if (lateral > lateralToleranceM) {
+        continue;
+      }
+
+      const otherAheadOnSameLane =
+        other.currentNodeId === toNodeId ||
+        other.targetNodeId === toNodeId ||
+        (other.currentEdgeId !== null && this.edgeIsCollinearWithVector(other.currentEdgeId, ux, uz, from));
+      if (otherAheadOnSameLane) {
+        return other.id;
+      }
+    }
+    return null;
+  }
+
+  private edgeIsCollinearWithVector(edgeId: string, ux: number, uz: number, origin: { x: number; z: number }): boolean {
+    const edge = this.scenario.layout.edges.find((candidate) => candidate.id === edgeId);
+    if (!edge) {
+      return false;
+    }
+    const from = nodePosition(this.scenario, edge.from);
+    const to = nodePosition(this.scenario, edge.to);
+    const edgeDx = to.x - from.x;
+    const edgeDz = to.z - from.z;
+    const edgeLength = Math.hypot(edgeDx, edgeDz);
+    if (edgeLength <= 1e-9) {
+      return false;
+    }
+
+    const edgeUx = edgeDx / edgeLength;
+    const edgeUz = edgeDz / edgeLength;
+    const parallel = Math.abs(edgeUx * ux + edgeUz * uz) >= 0.99;
+    const lateral = Math.abs((from.x - origin.x) * -uz + (from.z - origin.z) * ux);
+    return parallel && lateral <= Math.max(0.15, this.scenario.vehicles.widthM * 0.55);
   }
 
   private authorizeRouteHorizon(vehicle: MutableVehicle, task: TaskStateRecord | null): RouteLegAuthorization {
@@ -2436,7 +2527,7 @@ export class ShuttleSimCore {
             };
       }
 
-      const horizonEligible = this.storageRowHorizonEligible(fromNodeId, toNodeId);
+      const horizonEligible = this.routeHorizonEligible(fromNodeId, toNodeId);
       if (horizonLegCount > 0 && !horizonEligible) {
         break;
       }

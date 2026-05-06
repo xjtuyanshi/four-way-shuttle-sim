@@ -1919,6 +1919,47 @@ describe('shuttle phase 0 SimCore', () => {
     expectNoTrafficSafetyFailures(sim.getState());
   });
 
+  it('holds a same-lane follower until the leading shuttle clears minimum headway', () => {
+    const base = testScenario({});
+    const scenario = testScenario({
+      vehicles: { ...base.vehicles, count: 2 },
+      layout: {
+        units: 'meter',
+        calibrationProfile: null,
+        nodes: [
+          { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'B', type: 'parking', x: 1.25, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'C', type: 'parking', x: 2.5, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
+        ],
+        edges: [
+          { id: 'A-B', from: 'A', to: 'B', lengthM: 1.25, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'row-a', noParking: true },
+          { id: 'B-C', from: 'B', to: 'C', lengthM: 1.25, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'row-b', noParking: true }
+        ],
+        zones: []
+      },
+      physicsParams: {
+        emptySpeedMps: 2.6,
+        loadedSpeedMps: 2.2,
+        accelerationMps2: 2,
+        switchDirectionSec: 0,
+        liftTimeSec: 0,
+        lowerTimeSec: 0,
+        loadedClearanceM: 0.2,
+        reservationClearanceSec: 0.05
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['B', 'C']);
+    sim.setVehicleRouteForTest('SH-02', ['A', 'B']);
+
+    sim.step(0.2);
+    const follower = sim.getState().vehicles.find((vehicle) => vehicle.id === 'SH-02');
+
+    expect(follower?.state).toBe('waiting-blocked');
+    expect(follower?.waitReason).toBe('min-separation');
+    expect(follower?.blockingVehicleId).toBe('SH-01');
+  });
+
   it('preauthorizes same-row storage horizons without treating every storage cell as a new control decision', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       vehicles: { count: 1 },
@@ -1961,6 +2002,48 @@ describe('shuttle phase 0 SimCore', () => {
     }
 
     expect(sim.getState().vehicles[0]?.currentNodeId).toBe('storage-r01-c01');
+    expectNoTrafficSafetyFailures(sim.getState());
+  });
+
+  it('preauthorizes row-entry storage horizons from the infeed side to the target slot', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario({
+      vehicles: { count: 1 },
+      physicsParams: {
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.5,
+        accelerationMps2: 1.2,
+        switchDirectionSec: 0,
+        liftTimeSec: 0,
+        lowerTimeSec: 0,
+        loadedClearanceM: 0.2,
+        reservationClearanceSec: 0.05
+      }
+    }));
+    sim.setVehicleRouteForTest('SH-01', [
+      'right-row-01',
+      'storage-r01-c24',
+      'storage-r01-c23',
+      'storage-r01-c22',
+      'storage-r01-c21',
+      'storage-r01-c20',
+      'storage-r01-c19',
+      'storage-r01-c18'
+    ]);
+
+    sim.step(0.2);
+    const horizonEvent = sim.getEventLog().find((entry) => entry.eventType === 'reservation-created' && entry.reason === 'route-horizon');
+
+    expect(horizonEvent?.details.horizonLegCount).toBeGreaterThanOrEqual(6);
+    expect(
+      sim.getState().reservations.filter((reservation) =>
+        reservation.vehicleId === 'SH-01' &&
+        reservation.resourceType === 'edge' &&
+        (
+          reservation.resourceId === 'right-row-01-storage-r01-c24' ||
+          reservation.resourceId.startsWith('storage-r01-')
+        )
+      ).length
+    ).toBeGreaterThanOrEqual(6);
     expectNoTrafficSafetyFailures(sim.getState());
   });
 
