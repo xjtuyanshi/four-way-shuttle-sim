@@ -76,6 +76,19 @@ type ReservationAttempt =
   | { ok: true; reservations: Reservation[] }
   | { ok: false; reasonCode: string; blockingReservationId: string | null };
 
+type RouteLegAuthorization =
+  | {
+      ok: true;
+      edge: ShuttleScenario['layout']['edges'][number];
+      speedMps: number;
+      travelSec: number;
+      motionMode: MutableVehicle['legMotionMode'];
+      reservations: Reservation[];
+      horizonLegCount: number;
+      reusedExisting: boolean;
+    }
+  | { ok: false; reasonCode: string; blockingReservationId: string | null };
+
 export type ShuttleSimDebugState = {
   currentNodeOccupancy: Array<{ nodeId: string; vehicleId: string }>;
   storageNodeOccupancy: Array<{ nodeId: string; loadId: string }>;
@@ -87,6 +100,7 @@ type Rng = {
 
 const SHUTTLE_Y_M = 0.08;
 const DEFAULT_RECENT_EVENTS = 80;
+const MAX_RESERVATION_HORIZON_LEGS = 8;
 
 function makeRng(seed: number): Rng {
   let state = seed >>> 0;
@@ -1669,6 +1683,26 @@ export class ShuttleSimCore {
     return kind ? `${kind}-lift-busy:${nodeId}` : null;
   }
 
+  private reservationIsActive(reservation: Reservation): boolean {
+    return reservation.startTimeSec <= this.simTimeSec + 1e-6 && this.simTimeSec <= reservation.endTimeSec + 1e-6;
+  }
+
+  private hasActiveSelfMoveAuthorization(vehicle: MutableVehicle, edgeId: string, targetNodeId: string): boolean {
+    const hasEdgeReservation = this.reservations.some((reservation) =>
+      reservation.vehicleId === vehicle.id &&
+      reservation.resourceType === 'edge' &&
+      reservation.resourceId === edgeId &&
+      this.reservationIsActive(reservation)
+    );
+    const hasNodeReservation = this.reservations.some((reservation) =>
+      reservation.vehicleId === vehicle.id &&
+      reservation.resourceType === 'node' &&
+      reservation.resourceId === targetNodeId &&
+      this.reservationIsActive(reservation)
+    );
+    return hasEdgeReservation && hasNodeReservation;
+  }
+
   private fifoLaneBlockReason(task: TaskStateRecord): string | null {
     const rowLabel = this.taskStorageRowLabel(task);
     if (!rowLabel) {
@@ -2250,33 +2284,17 @@ export class ShuttleSimCore {
       return;
     }
 
-    const speedLimit = vehicle.loaded ? edge.speedLimitLoadedMps ?? this.scenario.physicsParams.loadedSpeedMps : edge.speedLimitEmptyMps ?? this.scenario.physicsParams.emptySpeedMps;
-    const speed = Math.min(speedLimit, vehicle.loaded ? this.scenario.physicsParams.loadedSpeedMps : this.scenario.physicsParams.emptySpeedMps);
-    const legMotionMode = this.canCruiseThroughLeg(vehicle, edge, toNodeId, task) ? 'cruise' : 'profile';
-    const travelSec = legMotionMode === 'cruise'
-      ? edge.lengthM / Math.max(0.001, speed)
-      : calculateTravelTimeSec(edge.lengthM, speed, this.scenario.physicsParams.accelerationMps2);
-    const priority = this.priorityFor(vehicle);
-    const attempt = this.traffic.reserveMove({
-      vehicleId: vehicle.id,
-      taskId: vehicle.taskId,
-      fromNodeId,
-      toNodeId,
-      startTimeSec: this.simTimeSec,
-      travelSec,
-      priority,
-      existing: this.reservations
-    });
+    const authorization = this.authorizeRouteHorizon(vehicle, task);
 
-    if (!attempt.ok) {
-      const waitReason = this.liftPortWaitReason(toNodeId) ?? attempt.reasonCode;
-      const shouldLogWait = this.shouldLogVehicleWait(vehicle, toNodeId, waitReason, attempt.blockingReservationId, null);
+    if (!authorization.ok) {
+      const waitReason = this.liftPortWaitReason(toNodeId) ?? authorization.reasonCode;
+      const shouldLogWait = this.shouldLogVehicleWait(vehicle, toNodeId, waitReason, authorization.blockingReservationId, null);
       this.reservationConflictCount += 1;
       vehicle.state = 'waiting-blocked';
       vehicle.speedMps = 0;
       vehicle.targetNodeId = toNodeId;
       vehicle.waitReason = waitReason;
-      vehicle.blockingReservationId = attempt.blockingReservationId;
+      vehicle.blockingReservationId = authorization.blockingReservationId;
       vehicle.blockingVehicleId = null;
       vehicle.waitingSinceSec ??= this.simTimeSec;
       vehicle.blockedTimeSec = round(vehicle.blockedTimeSec + dtSec);
@@ -2284,13 +2302,13 @@ export class ShuttleSimCore {
       this.blockedTimeByReasonSec.set(waitReason, round((this.blockedTimeByReasonSec.get(waitReason) ?? 0) + dtSec));
       if (shouldLogWait) {
         this.logEvent('vehicle-waiting', vehicle.id, vehicle.taskId, null, fromNodeId, toNodeId, waitReason, this.vehiclePosition(vehicle), {
-          blockingReservationId: attempt.blockingReservationId
+          blockingReservationId: authorization.blockingReservationId
         });
       }
       return;
     }
 
-    this.reservations.push(...attempt.reservations);
+    this.reservations.push(...authorization.reservations);
     this.releaseNodeOccupancy(vehicle, fromNodeId);
     vehicle.directionSwitchReadyNodeId = null;
     vehicle.waitingSinceSec = null;
@@ -2299,17 +2317,20 @@ export class ShuttleSimCore {
     vehicle.blockingVehicleId = null;
     vehicle.state = vehicle.loaded ? 'loaded-moving' : vehicle.taskId ? 'moving-to-pickup' : 'returning';
     vehicle.targetNodeId = toNodeId;
-    vehicle.legRemainingM = edge.lengthM;
+    vehicle.legRemainingM = authorization.edge.lengthM;
     vehicle.legElapsedSec = 0;
-    vehicle.legTravelSec = travelSec;
-    vehicle.currentEdgeId = edge.id;
-    vehicle.targetSpeedMps = speed;
-    vehicle.legMotionMode = legMotionMode;
-    this.logEvent('reservation-created', vehicle.id, vehicle.taskId, null, fromNodeId, toNodeId, 'route-leg', this.vehiclePosition(vehicle), {
-      edgeId: edge.id,
-      reservationIds: attempt.reservations.map((reservation) => reservation.id).join(','),
-      motionMode: vehicle.legMotionMode
-    });
+    vehicle.legTravelSec = authorization.travelSec;
+    vehicle.currentEdgeId = authorization.edge.id;
+    vehicle.targetSpeedMps = authorization.speedMps;
+    vehicle.legMotionMode = authorization.motionMode;
+    if (!authorization.reusedExisting) {
+      this.logEvent('reservation-created', vehicle.id, vehicle.taskId, null, fromNodeId, toNodeId, 'route-horizon', this.vehiclePosition(vehicle), {
+        edgeId: authorization.edge.id,
+        reservationIds: authorization.reservations.map((reservation) => reservation.id).join(','),
+        motionMode: vehicle.legMotionMode,
+        horizonLegCount: authorization.horizonLegCount
+      });
+    }
     this.advanceMovement(vehicle, dtSec);
   }
 
@@ -2323,22 +2344,167 @@ export class ShuttleSimCore {
     return !task && nodeId === this.parkingNodeFor(vehicle.id);
   }
 
-  private canCruiseThroughLeg(
+  private speedForEdge(vehicle: MutableVehicle, edge: ShuttleScenario['layout']['edges'][number]): number {
+    const speedLimit = vehicle.loaded ? edge.speedLimitLoadedMps ?? this.scenario.physicsParams.loadedSpeedMps : edge.speedLimitEmptyMps ?? this.scenario.physicsParams.emptySpeedMps;
+    return Math.min(speedLimit, vehicle.loaded ? this.scenario.physicsParams.loadedSpeedMps : this.scenario.physicsParams.emptySpeedMps);
+  }
+
+  private routeLegMotionMode(
     vehicle: MutableVehicle,
     edge: ShuttleScenario['layout']['edges'][number],
     toNodeId: string,
+    routeIndex: number,
     task: TaskStateRecord | null
-  ): boolean {
+  ): MutableVehicle['legMotionMode'] {
     const axis = this.axisForEdge(edge);
     if (!axis || this.mustStopAtNode(vehicle, task, toNodeId)) {
-      return false;
+      return 'profile';
     }
-    const nextNodeId = vehicle.routeNodeIds[vehicle.routeIndex + 2];
+    const nextNodeId = vehicle.routeNodeIds[routeIndex + 2];
     if (!nextNodeId) {
-      return false;
+      return 'profile';
     }
     const nextEdge = this.traffic.findEdge(toNodeId, nextNodeId);
-    return nextEdge ? this.axisForEdge(nextEdge) === axis : false;
+    return nextEdge && this.axisForEdge(nextEdge) === axis ? 'cruise' : 'profile';
+  }
+
+  private storageRowHorizonEligible(fromNodeId: string, toNodeId: string): boolean {
+    return (
+      this.isStorageNode(fromNodeId) &&
+      this.isStorageNode(toNodeId) &&
+      this.nodeStorageRowLabel(fromNodeId) === this.nodeStorageRowLabel(toNodeId)
+    );
+  }
+
+  private authorizeRouteHorizon(vehicle: MutableVehicle, task: TaskStateRecord | null): RouteLegAuthorization {
+    const firstFromNodeId = vehicle.currentNodeId;
+    const firstToNodeId = vehicle.routeNodeIds[vehicle.routeIndex + 1];
+    if (!firstToNodeId) {
+      return { ok: false, reasonCode: 'route-complete', blockingReservationId: null };
+    }
+
+    const firstEdge = this.traffic.findEdge(firstFromNodeId, firstToNodeId);
+    if (!firstEdge) {
+      return { ok: false, reasonCode: 'route-edge-missing', blockingReservationId: null };
+    }
+
+    const firstSpeed = this.speedForEdge(vehicle, firstEdge);
+    const firstMotionMode = this.routeLegMotionMode(vehicle, firstEdge, firstToNodeId, vehicle.routeIndex, task);
+    const firstTravelSec = firstMotionMode === 'cruise'
+      ? firstEdge.lengthM / Math.max(0.001, firstSpeed)
+      : calculateTravelTimeSec(firstEdge.lengthM, firstSpeed, this.scenario.physicsParams.accelerationMps2);
+
+    if (this.hasActiveSelfMoveAuthorization(vehicle, firstEdge.id, firstToNodeId)) {
+      return {
+        ok: true,
+        edge: firstEdge,
+        speedMps: firstSpeed,
+        travelSec: firstTravelSec,
+        motionMode: firstMotionMode,
+        reservations: [],
+        horizonLegCount: 1,
+        reusedExisting: true
+      };
+    }
+
+    const priority = this.priorityFor(vehicle);
+    const stagedReservations: Reservation[] = [];
+    let horizonLegCount = 0;
+    let cumulativeTravelSec = 0;
+    let horizonAxis: 'x' | 'z' | null = null;
+
+    for (
+      let routeIndex = vehicle.routeIndex;
+      routeIndex < vehicle.routeNodeIds.length - 1 && horizonLegCount < MAX_RESERVATION_HORIZON_LEGS;
+      routeIndex += 1
+    ) {
+      const fromNodeId = vehicle.routeNodeIds[routeIndex]!;
+      const toNodeId = vehicle.routeNodeIds[routeIndex + 1]!;
+      const edge = this.traffic.findEdge(fromNodeId, toNodeId);
+      if (!edge) {
+        return horizonLegCount === 0
+          ? { ok: false, reasonCode: 'route-edge-missing', blockingReservationId: null }
+          : {
+              ok: true,
+              edge: firstEdge,
+              speedMps: firstSpeed,
+              travelSec: firstTravelSec,
+              motionMode: firstMotionMode,
+              reservations: stagedReservations,
+              horizonLegCount,
+              reusedExisting: false
+            };
+      }
+
+      const horizonEligible = this.storageRowHorizonEligible(fromNodeId, toNodeId);
+      if (horizonLegCount > 0 && !horizonEligible) {
+        break;
+      }
+
+      const axis = this.axisForEdge(edge);
+      if (horizonLegCount > 0 && horizonAxis !== null && axis !== horizonAxis) {
+        break;
+      }
+
+      const occupiedTargetId = this.currentNodeOccupancy.get(toNodeId);
+      if (occupiedTargetId && occupiedTargetId !== vehicle.id) {
+        break;
+      }
+
+      const speed = this.speedForEdge(vehicle, edge);
+      const motionMode = this.routeLegMotionMode(vehicle, edge, toNodeId, routeIndex, task);
+      const travelSec = motionMode === 'cruise'
+        ? edge.lengthM / Math.max(0.001, speed)
+        : calculateTravelTimeSec(edge.lengthM, speed, this.scenario.physicsParams.accelerationMps2);
+      cumulativeTravelSec += travelSec;
+      const attempt = this.traffic.reserveMove({
+        vehicleId: vehicle.id,
+        taskId: vehicle.taskId,
+        fromNodeId,
+        toNodeId,
+        startTimeSec: this.simTimeSec,
+        travelSec: cumulativeTravelSec,
+        priority,
+        existing: [...this.reservations, ...stagedReservations]
+      });
+
+      if (!attempt.ok) {
+        return horizonLegCount === 0
+          ? attempt
+          : {
+              ok: true,
+              edge: firstEdge,
+              speedMps: firstSpeed,
+              travelSec: firstTravelSec,
+              motionMode: firstMotionMode,
+              reservations: stagedReservations,
+              horizonLegCount,
+              reusedExisting: false
+            };
+      }
+
+      stagedReservations.push(...attempt.reservations);
+      horizonLegCount += 1;
+      horizonAxis = axis ?? horizonAxis;
+
+      if (this.mustStopAtNode(vehicle, task, toNodeId)) {
+        break;
+      }
+      if (!horizonEligible) {
+        break;
+      }
+    }
+
+    return {
+      ok: true,
+      edge: firstEdge,
+      speedMps: firstSpeed,
+      travelSec: firstTravelSec,
+      motionMode: firstMotionMode,
+      reservations: stagedReservations,
+      horizonLegCount,
+      reusedExisting: false
+    };
   }
 
   private advanceMovement(vehicle: MutableVehicle, dtSec: number): void {
