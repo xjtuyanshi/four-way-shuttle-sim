@@ -183,6 +183,8 @@ describe('dashboard resource utilization', () => {
             queueLength: 2,
             waitingTaskIds: ['task-002', 'task-003'],
             activeTaskId: 'task-001',
+            approachOccupancy: 1,
+            approachCapacity: 1,
             utilization: 0.5
           },
           {
@@ -191,6 +193,8 @@ describe('dashboard resource utilization', () => {
             queueLength: 0,
             waitingTaskIds: [],
             activeTaskId: null,
+            approachOccupancy: 0,
+            approachCapacity: 1,
             utilization: 0.1
           }
         ],
@@ -224,6 +228,10 @@ describe('dashboard resource utilization', () => {
     expect(summary.lifts).toMatchObject({
       total: 2,
       active: 1,
+      approachOccupied: 1,
+      approachCapacity: 2,
+      inboundEnabled: 1,
+      outboundEnabled: 1,
       queuedTasks: 2,
       averageUtilizationPct: 30,
       inboundAverageUtilizationPct: 50,

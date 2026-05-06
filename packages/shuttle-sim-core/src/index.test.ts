@@ -140,6 +140,27 @@ function storageRowsInRoute(routeNodeIds: string[]): string[] {
   }))];
 }
 
+function expectStorageTraversalOnlyHorizontal(routeNodeIds: string[]) {
+  for (let index = 1; index < routeNodeIds.length; index += 1) {
+    const from = /^storage-r(\d+)-c(\d+)$/.exec(routeNodeIds[index - 1]!);
+    const to = /^storage-r(\d+)-c(\d+)$/.exec(routeNodeIds[index]!);
+    if (from && to) {
+      expect(to[1]).toBe(from[1]);
+    }
+  }
+}
+
+function expectIdleVehiclesParkedOnlyOnParkableNodes(scenario: ShuttleScenario, state: ReturnType<ShuttleSimCore['getState']>) {
+  const nodesById = new Map(scenario.layout.nodes.map((node) => [node.id, node]));
+  for (const vehicle of state.vehicles.filter((candidate) => candidate.state === 'idle' && candidate.taskId === null)) {
+    const node = nodesById.get(vehicle.currentNodeId);
+    expect(node).toBeDefined();
+    expect(node?.noParking).toBe(false);
+    expect(node?.noStop).toBe(false);
+    expect(['parking', 'storage']).toContain(node?.type);
+  }
+}
+
 function verifiedCalibrationDimensions(): NonNullable<ShuttleScenario['layout']['calibrationProfile']>['dimensions'] {
   const currentAssumptionValues = new Map(
     createDefaultShuttleScenario().layout.calibrationProfile?.dimensions.map((dimension) => [dimension.key, dimension.valueM])
@@ -1571,7 +1592,7 @@ describe('shuttle phase 0 SimCore', () => {
     expectNoTrafficSafetyFailures(state);
     expect(state.kpis.completedInbound).toBeGreaterThan(0);
     expect(state.kpis.completedOutbound).toBeGreaterThan(0);
-    expect(blockedReasons.some((reason) => reason.startsWith('fifo-') || reason.includes('lift-busy'))).toBe(true);
+    expect(blockedReasons.some((reason) => reason.startsWith('fifo-') || reason.includes('lift-'))).toBe(true);
     expect(state.vehicles).toHaveLength(4);
     expect(state.vehicles.every((vehicle) => Number.isFinite(vehicle.x) && Number.isFinite(vehicle.z))).toBe(true);
   }, 30000);
@@ -1672,8 +1693,16 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.simTimeSec).toBe(180);
     expect(state.kpis.completedInbound).toBeGreaterThanOrEqual(3);
     expect(state.kpis.totalPph).toBeGreaterThanOrEqual(60);
-    expect(state.kpis.activeTasks).toBeGreaterThanOrEqual(8);
+    expect(state.kpis.activeTasks).toBeGreaterThanOrEqual(6);
+    expect(state.kpis.queuedTasks).toBeGreaterThan(0);
     expect(utilizedVehicleCount).toBeGreaterThanOrEqual(10);
+    expect(state.traffic.liftPorts.filter((port) => port.kind === 'inbound').every((port) => port.approachOccupancy === port.approachCapacity)).toBe(true);
+    expect(Object.keys(state.kpis.blockedTimeByReasonSec).some((reason) => reason.startsWith('inbound-lift-approach-full:'))).toBe(true);
+    expect(Math.max(...state.traffic.liftPorts.filter((port) => port.kind === 'inbound').map((port) => port.utilization))).toBeLessThan(0.02);
+    expectIdleVehiclesParkedOnlyOnParkableNodes(scenario, state);
+    for (const vehicle of state.vehicles) {
+      expectStorageTraversalOnlyHorizontal(vehicle.routeNodeIds);
+    }
     expectNoTrafficSafetyFailures(state);
   }, 30000);
 
@@ -1774,6 +1803,69 @@ describe('shuttle phase 0 SimCore', () => {
       x: 4,
       z: 4
     });
+  });
+
+  it('cruises through same-axis cell chains instead of stopping at every grid node', () => {
+    const scenario = testScenario({
+      durationSec: 20,
+      vehicles: {
+        count: 1,
+        lengthM: 1,
+        widthM: 1,
+        heightM: 0.2,
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.5,
+        accelerationMps2: 1.2,
+        switchDirectionSec: 0,
+        liftTimeSec: 0,
+        lowerTimeSec: 0,
+        maxLoadKg: 1000,
+        safetyRadiusM: 0.1,
+        batteryEnabled: false,
+        initialSoc: 1
+      },
+      physicsParams: {
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.5,
+        accelerationMps2: 1.2,
+        switchDirectionSec: 0,
+        liftTimeSec: 0,
+        lowerTimeSec: 0,
+        loadedClearanceM: 0.2,
+        reservationClearanceSec: 0.05
+      },
+      layout: {
+        units: 'meter',
+        calibrationProfile: null,
+        nodes: [
+          { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'B', type: 'aisle', x: 1.25, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'C', type: 'aisle', x: 2.5, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'D', type: 'parking', x: 3.75, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
+        ],
+        edges: [
+          { id: 'A-B', from: 'A', to: 'B', lengthM: 1.25, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'row-a', noParking: true },
+          { id: 'B-C', from: 'B', to: 'C', lengthM: 1.25, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'row-b', noParking: true },
+          { id: 'C-D', from: 'C', to: 'D', lengthM: 1.25, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'row-c', noParking: true }
+        ],
+        zones: []
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['A', 'B', 'C', 'D']);
+    let arrivalTimeSec = Number.POSITIVE_INFINITY;
+    for (let index = 0; index < 80; index += 1) {
+      sim.step(0.1);
+      if (sim.getState().vehicles[0]?.currentNodeId === 'D') {
+        arrivalTimeSec = sim.getState().simTimeSec;
+        break;
+      }
+    }
+
+    const fullStopTravelSec = calculateTravelTimeSec(1.25, 2, 1.2) * 3;
+    expect(arrivalTimeSec).toBeLessThan(fullStopTravelSec - 0.8);
+    expect(sim.getEventLog().some((entry) => entry.eventType === 'reservation-created' && entry.details.motionMode === 'cruise')).toBe(true);
+    expectNoTrafficSafetyFailures(sim.getState());
   });
 
   it('does not add direction-switch dwell to the default four-way shuttle demo', () => {

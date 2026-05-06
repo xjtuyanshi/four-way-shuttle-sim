@@ -48,6 +48,7 @@ type MutableVehicle = VehicleState & {
   waitingSinceSec: number | null;
   lastMovementAxis: 'x' | 'z' | null;
   directionSwitchReadyNodeId: string | null;
+  legMotionMode: 'profile' | 'cruise';
 };
 
 type SetParamResult = {
@@ -957,7 +958,8 @@ export class ShuttleSimCore {
         targetSpeedMps: 0,
         waitingSinceSec: null,
         lastMovementAxis: null,
-        directionSwitchReadyNodeId: null
+        directionSwitchReadyNodeId: null,
+        legMotionMode: 'profile'
       };
     });
     for (const vehicle of this.vehicles) {
@@ -1151,6 +1153,7 @@ export class ShuttleSimCore {
     vehicle.targetSpeedMps = 0;
     vehicle.lastMovementAxis = null;
     vehicle.directionSwitchReadyNodeId = null;
+    vehicle.legMotionMode = 'profile';
     vehicle.state = routeNodeIds.length > 1 ? 'assigned' : 'idle';
     this.currentNodeOccupancy.set(vehicle.currentNodeId, vehicle.id);
     this.ensureZoneHoldReservation(vehicle, vehicle.currentNodeId);
@@ -1230,10 +1233,6 @@ export class ShuttleSimCore {
 
   private activeTaskCount(): number {
     return this.tasks.filter((task) => task.state !== 'completed' && task.state !== 'failed').length;
-  }
-
-  private hasQueuedTaskBacklog(): boolean {
-    return this.tasks.some((task) => task.state === 'queued');
   }
 
   private nextArrivalInterval(kind: 'inbound' | 'outbound'): number {
@@ -1330,22 +1329,29 @@ export class ShuttleSimCore {
     return node ? liftKindForNode(node) : null;
   }
 
-  private isLiftPortBusyForAssignment(kind: 'inbound' | 'outbound', liftNodeId: string): boolean {
-    return this.isLiftPortPhysicallyOccupied(liftNodeId) || this.tasks.some((task) =>
+  private isLiftPortCycleActive(kind: 'inbound' | 'outbound', liftNodeId: string): boolean {
+    return this.vehicles.some((vehicle) =>
+      vehicle.currentNodeId === liftNodeId &&
+      ((kind === 'inbound' && vehicle.state === 'lifting') || (kind === 'outbound' && vehicle.state === 'lowering'))
+    );
+  }
+
+  private liftPortApproachCapacity(): number {
+    return 1;
+  }
+
+  private liftPortApproachCount(kind: 'inbound' | 'outbound', liftNodeId: string): number {
+    return this.tasks.filter((task) =>
       task.kind === kind &&
       task.state !== 'queued' &&
       task.state !== 'completed' &&
       task.state !== 'failed' &&
       this.taskLiftPortNodeId(task) === liftNodeId &&
-      this.taskStillConsumesLiftAssignmentSlot(task, kind, liftNodeId)
-    );
+      this.taskStillConsumesLiftApproachSlot(task, kind, liftNodeId)
+    ).length;
   }
 
-  private isLiftPortPhysicallyOccupied(liftNodeId: string): boolean {
-    return this.vehicles.some((vehicle) => vehicle.currentNodeId === liftNodeId || vehicle.targetNodeId === liftNodeId);
-  }
-
-  private taskStillConsumesLiftAssignmentSlot(task: TaskStateRecord, kind: 'inbound' | 'outbound', liftNodeId: string): boolean {
+  private taskStillConsumesLiftApproachSlot(task: TaskStateRecord, kind: 'inbound' | 'outbound', liftNodeId: string): boolean {
     const vehicle = task.vehicleId ? this.vehicles.find((candidate) => candidate.id === task.vehicleId) : null;
     if (vehicle && (vehicle.currentNodeId === liftNodeId || vehicle.targetNodeId === liftNodeId)) {
       return true;
@@ -1588,6 +1594,10 @@ export class ShuttleSimCore {
     if (vehicle.id.localeCompare(blockingVehicleId) < 0) {
       return false;
     }
+    const task = vehicle.taskId ? this.tasks.find((candidate) => candidate.id === vehicle.taskId) ?? null : null;
+    if (task && task.replanCount > 0) {
+      return false;
+    }
 
     const fromNodeId = vehicle.currentNodeId;
     const currentRoutePrefix = vehicle.routeNodeIds.slice(0, vehicle.routeIndex + 1);
@@ -1634,6 +1644,9 @@ export class ShuttleSimCore {
     vehicle.blockingVehicleId = null;
     vehicle.waitingSinceSec = null;
     this.replanCount += 1;
+    if (task) {
+      task.replanCount += 1;
+    }
     this.logEvent('route-replanned', vehicle.id, vehicle.taskId, null, fromNodeId, vehicle.targetNodeId, 'head-on-yield-detour', this.vehiclePosition(vehicle), {
       blockingVehicleId,
       originalTargetNodeId: targetNodeId,
@@ -1644,7 +1657,11 @@ export class ShuttleSimCore {
 
   private liftPortBlockReason(task: TaskStateRecord): string | null {
     const liftNodeId = this.taskLiftPortNodeId(task);
-    return liftNodeId && this.isLiftPortBusyForAssignment(task.kind, liftNodeId) ? `${task.kind}-lift-busy:${liftNodeId}` : null;
+    if (!liftNodeId) {
+      return null;
+    }
+    const approachCount = this.liftPortApproachCount(task.kind, liftNodeId);
+    return approachCount >= this.liftPortApproachCapacity() ? `${task.kind}-lift-approach-full:${liftNodeId}` : null;
   }
 
   private liftPortWaitReason(nodeId: string): string | null {
@@ -1997,7 +2014,7 @@ export class ShuttleSimCore {
       return;
     }
 
-    const task = vehicle.taskId ? this.tasks.find((candidate) => candidate.id === vehicle.taskId) : null;
+    const task = vehicle.taskId ? this.tasks.find((candidate) => candidate.id === vehicle.taskId) ?? null : null;
     if (vehicle.state === 'lifting' && task) {
       vehicle.loaded = true;
       const load = this.loads.find((candidate) => candidate.id === task.loadId);
@@ -2030,17 +2047,6 @@ export class ShuttleSimCore {
       });
       vehicle.taskId = null;
       if (task.kind === 'inbound' && this.isStorageNode(vehicle.currentNodeId)) {
-        vehicle.state = 'idle';
-        vehicle.routeNodeIds = [vehicle.currentNodeId];
-        vehicle.routeIndex = 0;
-        vehicle.targetNodeId = null;
-        vehicle.waitReason = null;
-        vehicle.blockingReservationId = null;
-        vehicle.blockingVehicleId = null;
-        vehicle.directionSwitchReadyNodeId = null;
-        return;
-      }
-      if (this.hasQueuedTaskBacklog()) {
         vehicle.state = 'idle';
         vehicle.routeNodeIds = [vehicle.currentNodeId];
         vehicle.routeIndex = 0;
@@ -2087,7 +2093,7 @@ export class ShuttleSimCore {
 
   private startNextLeg(vehicle: MutableVehicle, dtSec: number): void {
     const fromNodeId = vehicle.currentNodeId;
-    const task = vehicle.taskId ? this.tasks.find((candidate) => candidate.id === vehicle.taskId) : null;
+    const task = vehicle.taskId ? this.tasks.find((candidate) => candidate.id === vehicle.taskId) ?? null : null;
 
     if (task && fromNodeId === task.pickupNodeId && !vehicle.loaded) {
       task.state = 'in-progress';
@@ -2215,7 +2221,10 @@ export class ShuttleSimCore {
 
     const speedLimit = vehicle.loaded ? edge.speedLimitLoadedMps ?? this.scenario.physicsParams.loadedSpeedMps : edge.speedLimitEmptyMps ?? this.scenario.physicsParams.emptySpeedMps;
     const speed = Math.min(speedLimit, vehicle.loaded ? this.scenario.physicsParams.loadedSpeedMps : this.scenario.physicsParams.emptySpeedMps);
-    const travelSec = calculateTravelTimeSec(edge.lengthM, speed, this.scenario.physicsParams.accelerationMps2);
+    const legMotionMode = this.canCruiseThroughLeg(vehicle, edge, toNodeId, task) ? 'cruise' : 'profile';
+    const travelSec = legMotionMode === 'cruise'
+      ? edge.lengthM / Math.max(0.001, speed)
+      : calculateTravelTimeSec(edge.lengthM, speed, this.scenario.physicsParams.accelerationMps2);
     const priority = this.priorityFor(vehicle);
     const attempt = this.traffic.reserveMove({
       vehicleId: vehicle.id,
@@ -2264,11 +2273,41 @@ export class ShuttleSimCore {
     vehicle.legTravelSec = travelSec;
     vehicle.currentEdgeId = edge.id;
     vehicle.targetSpeedMps = speed;
+    vehicle.legMotionMode = legMotionMode;
     this.logEvent('reservation-created', vehicle.id, vehicle.taskId, null, fromNodeId, toNodeId, 'route-leg', this.vehiclePosition(vehicle), {
       edgeId: edge.id,
-      reservationIds: attempt.reservations.map((reservation) => reservation.id).join(',')
+      reservationIds: attempt.reservations.map((reservation) => reservation.id).join(','),
+      motionMode: vehicle.legMotionMode
     });
     this.advanceMovement(vehicle, dtSec);
+  }
+
+  private mustStopAtNode(vehicle: MutableVehicle, task: TaskStateRecord | null, nodeId: string): boolean {
+    if (task && nodeId === task.pickupNodeId && !vehicle.loaded) {
+      return true;
+    }
+    if (task && nodeId === task.dropoffNodeId && vehicle.loaded) {
+      return true;
+    }
+    return !task && nodeId === this.parkingNodeFor(vehicle.id);
+  }
+
+  private canCruiseThroughLeg(
+    vehicle: MutableVehicle,
+    edge: ShuttleScenario['layout']['edges'][number],
+    toNodeId: string,
+    task: TaskStateRecord | null
+  ): boolean {
+    const axis = this.axisForEdge(edge);
+    if (!axis || vehicle.lastMovementAxis !== axis || this.mustStopAtNode(vehicle, task, toNodeId)) {
+      return false;
+    }
+    const nextNodeId = vehicle.routeNodeIds[vehicle.routeIndex + 2];
+    if (!nextNodeId) {
+      return false;
+    }
+    const nextEdge = this.traffic.findEdge(toNodeId, nextNodeId);
+    return nextEdge ? this.axisForEdge(nextEdge) === axis : false;
   }
 
   private advanceMovement(vehicle: MutableVehicle, dtSec: number): void {
@@ -2281,14 +2320,22 @@ export class ShuttleSimCore {
     const to = nodePosition(this.scenario, toNodeId);
     const edge = this.traffic.findEdge(fromNodeId, toNodeId);
     const lengthM = edge?.lengthM ?? Math.hypot(to.x - from.x, to.z - from.z);
-    vehicle.legElapsedSec = round(Math.min(vehicle.legTravelSec, vehicle.legElapsedSec + dtSec));
-    const profile = motionProfileAt(
-      vehicle.legElapsedSec,
-      lengthM,
-      vehicle.targetSpeedMps,
-      this.scenario.physicsParams.accelerationMps2
-    );
-    const traveledM = Math.min(lengthM, profile.distanceM);
+    const remainingLegSec = Math.max(0, vehicle.legTravelSec - vehicle.legElapsedSec);
+    const usedSec = Math.min(dtSec, remainingLegSec);
+    vehicle.legElapsedSec = round(Math.min(vehicle.legTravelSec, vehicle.legElapsedSec + usedSec));
+    const profile = vehicle.legMotionMode === 'cruise'
+      ? {
+          distanceM: vehicle.legElapsedSec * vehicle.targetSpeedMps,
+          speedMps: vehicle.targetSpeedMps
+        }
+      : motionProfileAt(
+          vehicle.legElapsedSec,
+          lengthM,
+          vehicle.targetSpeedMps,
+          this.scenario.physicsParams.accelerationMps2
+        );
+    const legCompleteByTime = vehicle.legElapsedSec >= vehicle.legTravelSec - 1e-6;
+    const traveledM = legCompleteByTime ? lengthM : Math.min(lengthM, profile.distanceM);
     vehicle.legRemainingM = round(Math.max(0, lengthM - traveledM));
     vehicle.speedMps = round(vehicle.legRemainingM <= 0 ? 0 : profile.speedMps);
     const progress = lengthM <= 0 ? 1 : traveledM / lengthM;
@@ -2311,8 +2358,9 @@ export class ShuttleSimCore {
     vehicle.targetSpeedMps = 0;
     vehicle.legElapsedSec = 0;
     vehicle.legTravelSec = 0;
+    vehicle.legMotionMode = 'profile';
     vehicle.speedMps = 0;
-    const task = vehicle.taskId ? this.tasks.find((candidate) => candidate.id === vehicle.taskId) : null;
+    const task = vehicle.taskId ? this.tasks.find((candidate) => candidate.id === vehicle.taskId) ?? null : null;
     this.logEvent('vehicle-arrived', vehicle.id, task?.id ?? null, task?.loadId ?? null, previousNode, toNodeId, 'route-arrival', this.vehiclePosition(vehicle), {});
 
     if (task && toNodeId === task.pickupNodeId && !vehicle.loaded) {
@@ -2338,10 +2386,14 @@ export class ShuttleSimCore {
     }
 
     vehicle.state = 'assigned';
+    const remainingStepSec = round(Math.max(0, dtSec - usedSec));
+    if (remainingStepSec > 1e-6) {
+      this.startNextLeg(vehicle, remainingStepSec);
+    }
   }
 
   private priorityFor(vehicle: MutableVehicle): number {
-    const task = vehicle.taskId ? this.tasks.find((candidate) => candidate.id === vehicle.taskId) : null;
+    const task = vehicle.taskId ? this.tasks.find((candidate) => candidate.id === vehicle.taskId) ?? null : null;
     const base = task?.createdAtSec ?? this.simTimeSec;
     const age = Math.floor((this.simTimeSec - base) / Math.max(1, this.scenario.trafficPolicy.priorityAgingSec));
     return age * 1000 - Number(vehicle.id.replace(/\D+/g, '') || 0);
@@ -2413,7 +2465,7 @@ export class ShuttleSimCore {
 
   private updateLiftPortUtilization(dtSec: number): void {
     for (const port of this.liftPortNodes()) {
-      if (this.isLiftPortBusyForAssignment(port.kind, port.nodeId)) {
+      if (this.isLiftPortCycleActive(port.kind, port.nodeId)) {
         this.liftPortBusyTimeSec.set(port.nodeId, round((this.liftPortBusyTimeSec.get(port.nodeId) ?? 0) + dtSec));
       }
     }
@@ -2425,13 +2477,10 @@ export class ShuttleSimCore {
         .filter((task) => task.state === 'queued' && task.kind === port.kind && this.taskLiftPortNodeId(task) === port.nodeId)
         .map((task) => task.id)
         .sort();
-      const activeTask = this.tasks
-        .filter((task) =>
-          task.kind === port.kind &&
-          task.state !== 'queued' &&
-          task.state !== 'completed' &&
-          task.state !== 'failed' &&
-          this.taskLiftPortNodeId(task) === port.nodeId
+      const activeVehicle = this.vehicles
+        .filter((vehicle) =>
+          vehicle.currentNodeId === port.nodeId &&
+          ((port.kind === 'inbound' && vehicle.state === 'lifting') || (port.kind === 'outbound' && vehicle.state === 'lowering'))
         )
         .sort((left, right) => left.id.localeCompare(right.id))[0];
       return {
@@ -2439,7 +2488,9 @@ export class ShuttleSimCore {
         kind: port.kind,
         queueLength: waitingTaskIds.length,
         waitingTaskIds,
-        activeTaskId: activeTask?.id ?? null,
+        activeTaskId: activeVehicle?.taskId ?? null,
+        approachOccupancy: this.liftPortApproachCount(port.kind, port.nodeId),
+        approachCapacity: this.liftPortApproachCapacity(),
         utilization: round((this.liftPortBusyTimeSec.get(port.nodeId) ?? 0) / Math.max(this.simTimeSec, 1), 4)
       };
     });

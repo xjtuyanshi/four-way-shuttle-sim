@@ -194,6 +194,10 @@ type ResourceUtilizationSummary = {
   lifts: {
     total: number;
     active: number;
+    approachOccupied: number;
+    approachCapacity: number;
+    inboundEnabled: number;
+    outboundEnabled: number;
     queuedTasks: number;
     averageUtilizationPct: number;
     inboundAverageUtilizationPct: number;
@@ -301,6 +305,18 @@ function topBottleneckCategory(breakdown: BottleneckBreakdown | null | undefined
 function formatBottleneckCategory(top: { category: string; seconds: number } | null): string {
   if (!top) return '--';
   return `${BOTTLENECK_LABELS[top.category] ?? top.category} ${formatNumber(top.seconds, 1)}s`;
+}
+
+function formatBlockedReason(reason: string): string {
+  if (reason.includes('lift-approach-full')) return 'lift approach';
+  if (reason.includes('lift-busy')) return 'lift/portal';
+  if (reason.startsWith('fifo-lane-busy:')) return reason.replace('fifo-lane-busy:', 'FIFO ');
+  if (reason.startsWith('fifo-left-network')) return 'left FIFO network';
+  if (reason.startsWith('storage-')) return reason.replace('storage-', 'storage ');
+  if (reason.includes('zone')) return 'portal zone';
+  if (reason.includes('node')) return 'node occupancy';
+  if (reason.includes('edge')) return 'edge reservation';
+  return reason;
 }
 
 function getPointerValue(source: unknown, pointer: string): unknown {
@@ -425,6 +441,10 @@ export function summarizeResourceUtilization(
     lifts: {
       total: liftPorts.length,
       active: liftPorts.filter((port) => port.activeTaskId).length,
+      approachOccupied: liftPorts.reduce((sum, port) => sum + (port.approachOccupancy ?? 0), 0),
+      approachCapacity: liftPorts.reduce((sum, port) => sum + (port.approachCapacity ?? 1), 0),
+      inboundEnabled: liftPorts.filter((port) => port.kind === 'inbound').length,
+      outboundEnabled: liftPorts.filter((port) => port.kind === 'outbound').length,
       queuedTasks: liftPorts.reduce((sum, port) => sum + port.queueLength, 0),
       averageUtilizationPct: average(liftUtilizationValues) * 100,
       inboundAverageUtilizationPct: average(inboundLiftUtilizationValues) * 100,
@@ -470,9 +490,14 @@ function ResourceUtilizationPanel({ scenario, state }: { scenario: ShuttleScenar
       detail: `avg ${formatNumber(summary.shuttles.averageUtilizationPct, 1)}%, peak ${formatNumber(summary.shuttles.peakUtilizationPct, 1)}%`
     },
     {
-      label: 'Lift allocation',
+      label: 'Lift approach slots',
+      value: `${summary.lifts.approachOccupied}/${summary.lifts.approachCapacity}`,
+      detail: `${summary.lifts.inboundEnabled} inbound / ${summary.lifts.outboundEnabled} outbound enabled`
+    },
+    {
+      label: 'Lift cycle active',
       value: `${summary.lifts.active}/${summary.lifts.total}`,
-      detail: `avg ${formatNumber(summary.lifts.averageUtilizationPct, 1)}%, q${summary.lifts.queuedTasks}`
+      detail: `avg cycle ${formatNumber(summary.lifts.averageUtilizationPct, 1)}%, q${summary.lifts.queuedTasks}`
     },
     {
       label: 'Lift cycle',
@@ -720,6 +745,8 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
   const liftPorts = traffic?.liftPorts ?? [];
   const queuedLiftTasks = liftPorts.reduce((sum, port) => sum + port.queueLength, 0);
   const activeLiftPorts = liftPorts.filter((port) => port.activeTaskId).length;
+  const approachOccupied = liftPorts.reduce((sum, port) => sum + (port.approachOccupancy ?? 0), 0);
+  const approachCapacity = liftPorts.reduce((sum, port) => sum + (port.approachCapacity ?? 1), 0);
   const blockedReasons = Object.entries(state?.kpis.blockedTimeByReasonSec ?? {});
   const laneWaitSec = blockedReasons
     .filter(([reason]) => reason.startsWith('fifo-'))
@@ -730,12 +757,20 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
   const liftWaitSec = blockedReasons
     .filter(([reason]) => reason.includes('lift') || reason.includes('port'))
     .reduce((sum, [, value]) => sum + value, 0);
+  const topBlockedReason = blockedReasons
+    .filter(([, seconds]) => seconds > 0)
+    .sort((left, right) => right[1] - left[1])[0] ?? null;
   const activePortalZones = (state?.reservations ?? []).filter(
     (reservation) => reservation.resourceType === 'zone' && reservation.resourceId.startsWith('zone-main-portal')
   ).length;
 
   return (
     <section className="traffic-diagnostics" aria-label="Traffic diagnostics">
+      <div>
+        <span>Bottleneck</span>
+        <strong>{topBlockedReason ? formatBlockedReason(topBlockedReason[0]) : '--'}</strong>
+        <small>{topBlockedReason ? `${formatNumber(topBlockedReason[1], 1)}s` : 'no blocked time'}</small>
+      </div>
       <div>
         <span>Reservations</span>
         <strong>{traffic?.activeReservationCount ?? '--'}</strong>
@@ -753,9 +788,14 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
         <strong className={traffic?.physicalViolationCount ? 'blocked' : 'ready'}>{traffic?.physicalViolationCount ?? 0}</strong>
       </div>
       <div>
-        <span>Port diagnostics</span>
+        <span>Lift cycles</span>
         <strong>{activeLiftPorts}/{liftPorts.length}</strong>
         <small>{queuedLiftTasks} queued</small>
+      </div>
+      <div>
+        <span>Approach slots</span>
+        <strong>{approachOccupied}/{approachCapacity}</strong>
+        <small>{liftPorts.filter((port) => port.kind === 'inbound').length} in / {liftPorts.filter((port) => port.kind === 'outbound').length} out</small>
       </div>
       <div>
         <span>Lane waits</span>
@@ -790,7 +830,7 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
         ) : (
           liftPorts.map((port) => (
             <small key={port.nodeId}>
-              {port.nodeId} / {port.kind} / q{port.queueLength} / allocated {Math.round(port.utilization * 100)}%
+              {port.nodeId} / {port.kind} / approach {port.approachOccupancy ?? 0}/{port.approachCapacity ?? 1} / q{port.queueLength} / cycle {Math.round(port.utilization * 100)}%
             </small>
           ))
         )}

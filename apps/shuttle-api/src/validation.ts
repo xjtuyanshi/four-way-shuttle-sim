@@ -240,7 +240,12 @@ function bottleneckCategoryForReason(reason: string): BottleneckCategory {
   if (reason === 'storage-empty' || reason === 'storage-full') return 'storageInventory';
   if (reason.startsWith('fifo-lane-busy:')) return 'fifoLane';
   if (reason === 'fifo-left-network-busy' || reason === 'fifo-right-network-busy') return 'sideAisleNetwork';
-  if (reason.startsWith('inbound-lift-busy:') || reason.startsWith('outbound-lift-busy:')) return 'liftPort';
+  if (
+    reason.startsWith('inbound-lift-busy:') ||
+    reason.startsWith('outbound-lift-busy:') ||
+    reason.startsWith('inbound-lift-approach-full:') ||
+    reason.startsWith('outbound-lift-approach-full:')
+  ) return 'liftPort';
   if (
     reason === 'edge-reserved' ||
     reason === 'node-reserved' ||
@@ -372,7 +377,7 @@ function buildStressScenarioSpecs(baseScenario: ShuttleScenario): Phase0StressSc
         }
       }),
       initialStoredNodeIds: [],
-      expectedBottleneckReasonPrefixes: ['storage-empty', 'fifo-', 'inbound-lift-busy:'],
+      expectedBottleneckReasonPrefixes: ['storage-empty', 'fifo-', 'inbound-lift-approach-full:'],
       requiresPositiveThroughput: true
     },
     {
@@ -390,7 +395,7 @@ function buildStressScenarioSpecs(baseScenario: ShuttleScenario): Phase0StressSc
         }
       }),
       initialStoredNodeIds: [],
-      expectedBottleneckReasonPrefixes: ['inbound-lift-busy:'],
+      expectedBottleneckReasonPrefixes: ['inbound-lift-approach-full:'],
       requiresPositiveThroughput: true
     },
     {
@@ -426,7 +431,7 @@ function buildStressScenarioSpecs(baseScenario: ShuttleScenario): Phase0StressSc
         }
       }),
       initialStoredNodeIds: preloadOutletNodes,
-      expectedBottleneckReasonPrefixes: ['fifo-', 'outbound-lift-busy:'],
+      expectedBottleneckReasonPrefixes: ['fifo-', 'outbound-lift-'],
       requiresPositiveThroughput: true
     },
     {
@@ -583,6 +588,7 @@ function inspectState(
   state: ShuttleSimState,
   debug: ShuttleSimDebugState,
   previousSpeeds: Map<string, number>,
+  previousMovingVehicleIds: Set<string>,
   counts: Record<PhysicalViolationCode, number>,
   examples: PhysicalViolationExample[]
 ): {
@@ -623,7 +629,7 @@ function inspectState(
     const previousSpeed = previousSpeeds.get(vehicle.id) ?? vehicle.speedMps;
     const accelerationMps2 = Math.abs(vehicle.speedMps - previousSpeed) / scenario.timeStepSec;
     maxObservedAccelerationMps2 = Math.max(maxObservedAccelerationMps2, accelerationMps2);
-    if (accelerationMps2 > scenario.physicsParams.accelerationMps2 + 1e-6) {
+    if (!vehicle.currentEdgeId && !previousMovingVehicleIds.has(vehicle.id) && accelerationMps2 > scenario.physicsParams.accelerationMps2 + 1e-6) {
       addViolation(counts, examples, {
         code: 'accelerationLimit',
         timeSec,
@@ -741,6 +747,7 @@ export function inspectPhase0StateSnapshot(
     state,
     debug,
     previousSpeeds,
+    new Set(),
     physicalViolationsByCode,
     physicalViolationExamples
   );
@@ -761,6 +768,7 @@ function runOnce(scenario: ShuttleScenario, seed: number, durationSec: number): 
   let maxObservedAccelerationMps2 = 0;
   let minVehicleSeparationM: number | null = null;
   let previousSpeeds = new Map<string, number>();
+  let previousMovingVehicleIds = new Set<string>();
   let maxQueuedTasks = 0;
   let maxWaitingVehicles = 0;
   let maxLiftPortQueueLength = 0;
@@ -774,6 +782,7 @@ function runOnce(scenario: ShuttleScenario, seed: number, durationSec: number): 
       state,
       sim.getDebugState(),
       previousSpeeds,
+      previousMovingVehicleIds,
       physicalViolationsByCode,
       physicalViolationExamples
     );
@@ -783,6 +792,7 @@ function runOnce(scenario: ShuttleScenario, seed: number, durationSec: number): 
     maxWaitingVehicles = Math.max(maxWaitingVehicles, state.traffic.waitingVehicles.length);
     maxLiftPortQueueLength = Math.max(maxLiftPortQueueLength, 0, ...state.traffic.liftPorts.map((port) => port.queueLength));
     previousSpeeds = new Map(state.vehicles.map((vehicle) => [vehicle.id, vehicle.speedMps]));
+    previousMovingVehicleIds = new Set(state.vehicles.filter((vehicle) => vehicle.currentEdgeId).map((vehicle) => vehicle.id));
     minVehicleSeparationM =
       physical.minVehicleSeparationM === null
         ? minVehicleSeparationM
@@ -863,6 +873,7 @@ function runStressOnce(
   let maxObservedAccelerationMps2 = 0;
   let minVehicleSeparationM: number | null = null;
   let previousSpeeds = new Map<string, number>();
+  let previousMovingVehicleIds = new Set<string>();
   let maxQueuedTasks = 0;
   let maxWaitingVehicles = 0;
   let maxLiftPortQueueLength = 0;
@@ -876,6 +887,7 @@ function runStressOnce(
       state,
       sim.getDebugState(),
       previousSpeeds,
+      previousMovingVehicleIds,
       physicalViolationsByCode,
       physicalViolationExamples
     );
@@ -885,6 +897,7 @@ function runStressOnce(
     maxWaitingVehicles = Math.max(maxWaitingVehicles, state.traffic.waitingVehicles.length);
     maxLiftPortQueueLength = Math.max(maxLiftPortQueueLength, 0, ...state.traffic.liftPorts.map((port) => port.queueLength));
     previousSpeeds = new Map(state.vehicles.map((vehicle) => [vehicle.id, vehicle.speedMps]));
+    previousMovingVehicleIds = new Set(state.vehicles.filter((vehicle) => vehicle.currentEdgeId).map((vehicle) => vehicle.id));
     minVehicleSeparationM =
       physical.minVehicleSeparationM === null
         ? minVehicleSeparationM

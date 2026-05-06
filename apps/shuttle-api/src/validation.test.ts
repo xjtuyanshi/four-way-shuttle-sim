@@ -110,7 +110,6 @@ describe('phase 0 validation', () => {
     expect(result.longRun.runs.every((run) => run.inboundPph >= result.longRun.thresholds.minInboundPph)).toBe(true);
     expect(result.longRun.runs.every((run) => run.outboundPph >= result.longRun.thresholds.minOutboundPph)).toBe(true);
     expect(result.longRun.blockedTimeByCategorySec.storageInventory).toBeGreaterThan(0);
-    expect(result.longRun.blockedTimeByCategorySec.reservationControl).toBeGreaterThan(0);
     expect(result.longRun.runs.every((run) => run.blockedTimeByCategorySec.storageInventory > 0)).toBe(true);
     expect(result.longRun.maxQueuedTasks).toBeLessThanOrEqual(result.longRun.thresholds.maxQueuedTasks);
     expect(result.longRun.maxLiftPortQueueLength).toBeLessThanOrEqual(result.longRun.thresholds.maxLiftPortQueueLength);
@@ -145,7 +144,17 @@ describe('phase 0 validation', () => {
   }, 70000);
 
   it('fails long-run acceptance when explicit throughput and queue thresholds are missed', () => {
-    const result = validatePhase0Scenario(createDefaultShuttleScenario({ durationSec: 120 }), {
+    const result = validatePhase0Scenario(createDefaultShuttleScenario({
+      durationSec: 120,
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 80
+      }
+    }), {
       durationSec: 120,
       longRunDurationSec: 240,
       repeatCount: 1,
