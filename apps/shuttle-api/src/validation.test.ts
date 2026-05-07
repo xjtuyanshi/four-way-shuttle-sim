@@ -132,7 +132,7 @@ describe('phase 0 validation', () => {
     )).toBe(true);
     expect(result.stress.blockedTimeByCategorySec.liftPort).toBeGreaterThan(0);
     expect(result.stress.blockedTimeByCategorySec.fifoLane).toBeGreaterThan(0);
-    expect(result.stress.scenarios.find((scenario) => scenario.id === 'inbound-only-saturation')?.blockedTimeByCategorySec.liftPort).toBeGreaterThan(0);
+    expect(result.stress.scenarios.find((scenario) => scenario.id === 'inbound-only-saturation')?.blockedTimeByCategorySec.vehicleFleet).toBeGreaterThan(0);
     expect(result.stress.noStressDeadlocks).toBe(true);
     expect(result.stress.noStressPhysicalSafetyViolations).toBe(true);
     expect(result.stress.noStressReservationCoverageViolations).toBe(true);

@@ -36,6 +36,7 @@ export type BottleneckCategory =
   | 'fifoLane'
   | 'sideAisleNetwork'
   | 'liftPort'
+  | 'vehicleFleet'
   | 'reservationControl'
   | 'other';
 
@@ -224,6 +225,7 @@ const BOTTLENECK_CATEGORIES: BottleneckCategory[] = [
   'fifoLane',
   'sideAisleNetwork',
   'liftPort',
+  'vehicleFleet',
   'reservationControl',
   'other'
 ];
@@ -246,6 +248,7 @@ function bottleneckCategoryForReason(reason: string): BottleneckCategory {
     reason.startsWith('inbound-lift-approach-full:') ||
     reason.startsWith('outbound-lift-approach-full:')
   ) return 'liftPort';
+  if (reason === 'vehicle-unavailable') return 'vehicleFleet';
   if (
     reason === 'edge-reserved' ||
     reason === 'node-reserved' ||
@@ -383,7 +386,7 @@ function buildStressScenarioSpecs(baseScenario: ShuttleScenario): Phase0StressSc
     {
       id: 'inbound-only-saturation',
       label: 'Inbound-only saturation',
-      description: 'All demand enters from dedicated inbound lifts so lift-port queues and reservation control must absorb the pressure without overbooking the dense FIFO grid.',
+      description: 'All demand enters from dedicated inbound lifts so the shuttle fleet, lift-port queues, and reservation control must absorb the pressure without overbooking the dense FIFO grid.',
       scenario: scenarioWithOperationalStressParams(baseScenario, {
         ...common,
         taskGeneration: {
@@ -395,7 +398,7 @@ function buildStressScenarioSpecs(baseScenario: ShuttleScenario): Phase0StressSc
         }
       }),
       initialStoredNodeIds: [],
-      expectedBottleneckReasonPrefixes: ['inbound-lift-approach-full:'],
+      expectedBottleneckReasonPrefixes: ['vehicle-unavailable'],
       requiresPositiveThroughput: true
     },
     {

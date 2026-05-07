@@ -299,6 +299,7 @@ const BOTTLENECK_LABELS: Record<string, string> = {
   fifoLane: 'FIFO lane',
   sideAisleNetwork: 'side aisle',
   liftPort: 'lift',
+  vehicleFleet: 'shuttle fleet',
   reservationControl: 'reservation',
   other: 'other'
 };
@@ -810,6 +811,9 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
   const liftWaitSec = blockedReasons
     .filter(([reason]) => reason.includes('lift') || reason.includes('port'))
     .reduce((sum, [, value]) => sum + value, 0);
+  const fleetWaitSec = blockedReasons
+    .filter(([reason]) => reason === 'vehicle-unavailable')
+    .reduce((sum, [, value]) => sum + value, 0);
   const topBlockedReason = blockedReasons
     .filter(([, seconds]) => seconds > 0)
     .sort((left, right) => right[1] - left[1])[0] ?? null;
@@ -861,6 +865,10 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
       <div>
         <span>Lift waits</span>
         <strong>{formatNumber(liftWaitSec, 1)}s</strong>
+      </div>
+      <div>
+        <span>Fleet waits</span>
+        <strong>{formatNumber(fleetWaitSec, 1)}s</strong>
       </div>
       <div>
         <span>Portal zones</span>

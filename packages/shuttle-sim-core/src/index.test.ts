@@ -1870,6 +1870,37 @@ describe('shuttle phase 0 SimCore', () => {
     expect(outboundState.kpis.completedOutbound).toBeGreaterThan(0);
   }, 30000);
 
+  it('attributes queued inbound pressure to vehicle availability when every shuttle is already busy', () => {
+    const scenario = createDefaultShuttleScenario({
+      durationSec: 60,
+      vehicles: {
+        count: 1,
+        emptySpeedMps: 1,
+        loadedSpeedMps: 0.8,
+        accelerationMps2: 1,
+        liftTimeSec: 0.05,
+        lowerTimeSec: 0.05
+      },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 4
+      },
+      trafficPolicy: {
+        liftApproachCapacity: 1
+      }
+    });
+    const state = runFor(new ShuttleSimCore(scenario), 5);
+    const queuedTasks = state.tasks.filter((task) => task.state === 'queued');
+
+    expect(state.kpis.activeTasks).toBe(1);
+    expect(queuedTasks.length).toBeGreaterThan(0);
+    expect(queuedTasks.every((task) => task.waitReason === 'vehicle-unavailable')).toBe(true);
+    expect(state.kpis.blockedTimeByReasonSec['vehicle-unavailable']).toBeGreaterThan(0);
+  });
+
   it('keeps a 12-shuttle high-inbound stress run active without premature completion', () => {
     const scenario = createDefaultShuttleScenario({
       durationSec: 7200,

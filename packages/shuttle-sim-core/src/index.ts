@@ -1777,27 +1777,31 @@ export class ShuttleSimCore {
     );
 
     for (const task of this.tasks.filter((candidate) => candidate.state === 'queued')) {
-      const reason = this.taskAssignmentBlockReason(task);
-      task.waitReason = reason;
-      if (reason) {
-        this.blockedTimeByReasonSec.set(reason, round((this.blockedTimeByReasonSec.get(reason) ?? 0) + dtSec));
+      if (availableVehicleIds.size === 0) {
+        this.recordQueuedTaskWait(task, 'vehicle-unavailable', dtSec);
         continue;
       }
 
-      if (availableVehicleIds.size === 0) {
-        return;
+      const reason = this.taskAssignmentBlockReason(task);
+      if (reason) {
+        this.recordQueuedTaskWait(task, reason, dtSec);
+        continue;
       }
 
       const assignment = this.bestAvailableVehicleForTask(task, availableVehicleIds);
       if (!assignment) {
-        task.waitReason = 'route-unavailable';
-        this.blockedTimeByReasonSec.set('route-unavailable', round((this.blockedTimeByReasonSec.get('route-unavailable') ?? 0) + dtSec));
+        this.recordQueuedTaskWait(task, 'route-unavailable', dtSec);
         continue;
       }
 
       this.assignTaskToVehicle(assignment.vehicle, task, assignment.route);
       availableVehicleIds.delete(assignment.vehicle.id);
     }
+  }
+
+  private recordQueuedTaskWait(task: TaskStateRecord, reason: string, dtSec: number): void {
+    task.waitReason = reason;
+    this.blockedTimeByReasonSec.set(reason, round((this.blockedTimeByReasonSec.get(reason) ?? 0) + dtSec));
   }
 
   private canAcceptQueuedTask(vehicle: MutableVehicle): boolean {
