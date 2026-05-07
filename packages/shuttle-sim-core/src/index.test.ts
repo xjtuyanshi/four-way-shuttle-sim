@@ -8,7 +8,8 @@ import {
   createDefaultShuttleScenario,
   hashEventLog,
   motionProfileAt,
-  summarizeScenarioStaticSceneContract
+  summarizeScenarioStaticSceneContract,
+  verticalStorageFootprintEdgeViolations
 } from './index.js';
 
 function testScenario(overrides: Partial<ShuttleScenario>): ShuttleScenario {
@@ -100,6 +101,21 @@ function runFor(sim: ShuttleSimCore, durationSec: number, dtSec = 0.2) {
   return sim.getState();
 }
 
+function runForWithStoragePathAssertions(sim: ShuttleSimCore, scenario: ShuttleScenario, durationSec: number, dtSec = 0.2, sampleSec = 5) {
+  sim.start();
+  let state = sim.getState();
+  let nextSampleSec = 0;
+  for (let elapsedSec = 0; elapsedSec < durationSec; elapsedSec = Number((elapsedSec + dtSec).toFixed(6))) {
+    state = sim.step(dtSec);
+    if (state.simTimeSec + 1e-6 >= nextSampleSec) {
+      expectNoVerticalStorageFootprintTravel(scenario, state);
+      expectNoLoadedStorageTransitThroughStoredLoads(state);
+      nextSampleSec = Number((nextSampleSec + sampleSec).toFixed(6));
+    }
+  }
+  return state;
+}
+
 function expectNoTrafficSafetyFailures(state: ReturnType<ShuttleSimCore['getState']>) {
   expect(state.kpis.deadlockCount).toBe(0);
   expect(state.kpis.livelockCount).toBe(0);
@@ -175,6 +191,35 @@ function expectStorageTraversalOnlyHorizontal(routeNodeIds: string[]) {
       expect(to[1]).toBe(from[1]);
     }
   }
+}
+
+function edgeIdForRouteHop(scenario: ShuttleScenario, fromNodeId: string, toNodeId: string): string | null {
+  const edge = scenario.layout.edges.find((candidate) =>
+    (candidate.from === fromNodeId && candidate.to === toNodeId) ||
+    (candidate.directionMode === 'twoWay' && candidate.from === toNodeId && candidate.to === fromNodeId)
+  );
+  return edge?.id ?? null;
+}
+
+function expectNoVerticalStorageFootprintTravel(scenario: ShuttleScenario, state: ReturnType<ShuttleSimCore['getState']>) {
+  const forbiddenEdgeIds = new Set(verticalStorageFootprintEdgeViolations(scenario).map((violation) => violation.edgeId));
+  const movingViolations = state.vehicles
+    .filter((vehicle) => vehicle.currentEdgeId && forbiddenEdgeIds.has(vehicle.currentEdgeId))
+    .map((vehicle) => `${vehicle.id}:${vehicle.currentEdgeId}`)
+    .sort();
+  const routeViolations = state.vehicles.flatMap((vehicle) => {
+    const route = vehicle.routeNodeIds.slice(Math.max(0, vehicle.routeIndex));
+    return route.flatMap((nodeId, index) => {
+      const nextNodeId = route[index + 1];
+      if (!nextNodeId) {
+        return [];
+      }
+      const edgeId = edgeIdForRouteHop(scenario, nodeId, nextNodeId);
+      return edgeId && forbiddenEdgeIds.has(edgeId) ? [`${vehicle.id}:${edgeId}`] : [];
+    });
+  }).sort();
+
+  expect({ movingViolations, routeViolations }).toEqual({ movingViolations: [], routeViolations: [] });
 }
 
 function expectNoLoadedStorageTransitThroughStoredLoads(state: ReturnType<ShuttleSimCore['getState']>) {
@@ -635,6 +680,39 @@ describe('shuttle phase 0 SimCore', () => {
     ]);
   });
 
+  it('rejects vertical travel edges that cut through storage-cell footprints', () => {
+    const base = createDefaultShuttleScenario();
+    const scenarioWithVerticalStorageCut = createDefaultShuttleScenario({
+      layout: {
+        ...base.layout,
+        nodes: [
+          ...base.layout.nodes,
+          { id: 'bad-portal-top', type: 'intersection', x: 2.5, y: 0, z: -11.3, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'bad-portal-bottom', type: 'intersection', x: 2.5, y: 0, z: -8.7, noStop: false, noParking: true, capacity: 1, allowedDirections: [] }
+        ],
+        edges: [
+          ...base.layout.edges,
+          {
+            id: 'bad-vertical-storage-edge',
+            from: 'bad-portal-top',
+            to: 'bad-portal-bottom',
+            lengthM: 2.6,
+            directionMode: 'twoWay',
+            reservationType: 'edge',
+            conflictGroup: 'bad-storage-cut',
+            noParking: true
+          }
+        ]
+      }
+    });
+
+    expect(verticalStorageFootprintEdgeViolations(base)).toEqual([]);
+    expect(verticalStorageFootprintEdgeViolations(scenarioWithVerticalStorageCut)).toEqual([
+      { edgeId: 'bad-vertical-storage-edge', cellId: 'storage-r01-c01' }
+    ]);
+    expect(() => new ShuttleSimCore(scenarioWithVerticalStorageCut)).toThrow(/vertical edge bad-vertical-storage-edge crosses storage-cell footprint/);
+  });
+
   it('carries blocked and structural CAD reference cells into the static scene contract without routing them', () => {
     const contract = summarizeScenarioStaticSceneContract(createDefaultShuttleScenario({
       layoutProfile: {
@@ -1003,7 +1081,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-02')?.currentNodeId).toBe('main-north-04');
   });
 
-  it('serializes lift connector crossings through the main-aisle portal zone', () => {
+  it('does not serialize parallel main-aisle travel through a broad portal zone', () => {
     const scenario = createDefaultShuttleScenario({
       durationSec: 20,
       taskGeneration: {
@@ -1024,30 +1102,26 @@ describe('shuttle phase 0 SimCore', () => {
         reservationClearanceSec: 0.1
       }
     });
-    const portalZone = scenario.layout.zones.find((zone) => zone.id === 'zone-main-portal-02');
-    expect(portalZone).toMatchObject({
-      nodeIds: []
-    });
-    expect(portalZone?.edgeIds).toEqual(expect.arrayContaining([
-      'outbound-lift-top-01-main-south-02',
-      'main-north-02-main-north-03'
-    ]));
+    expect(scenario.layout.zones.find((zone) => zone.id === 'zone-main-portal-02')).toBeUndefined();
 
     const sim = new ShuttleSimCore(scenario);
-    sim.setVehicleRouteForTest('SH-01', ['main-south-02', 'outbound-lift-top-01']);
-    sim.setVehicleRouteForTest('SH-02', ['main-north-03', 'main-north-02']);
+    sim.setVehicleRouteForTest('SH-01', ['main-south-03', 'main-south-04']);
+    sim.setVehicleRouteForTest('SH-02', ['main-north-03', 'main-north-04']);
     sim.step(0.2);
 
     const state = sim.getState();
-    expect(state.reservations).toEqual(expect.arrayContaining([
-      expect.objectContaining({ vehicleId: 'SH-01', resourceType: 'zone', resourceId: 'zone-main-portal-02' })
-    ]));
-    expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-02')).toMatchObject({
-      state: 'waiting-blocked',
-      waitReason: 'zone-reserved',
-      currentNodeId: 'main-north-03'
+    expect(state.reservations.some((reservation) => reservation.resourceId === 'zone-main-portal-03')).toBe(false);
+    expect(state.reservations.some((reservation) => reservation.resourceId === 'zone-main-portal-04')).toBe(false);
+    expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-01')).toMatchObject({
+      currentNodeId: 'main-south-03',
+      currentEdgeId: 'main-south-03-main-south-04'
     });
-    expect(sim.getDebugState().currentNodeOccupancy).toContainEqual({ nodeId: 'main-north-03', vehicleId: 'SH-02' });
+    const parallelVehicle = state.vehicles.find((vehicle) => vehicle.id === 'SH-02');
+    expect(parallelVehicle).toMatchObject({
+      currentNodeId: 'main-north-03',
+      currentEdgeId: 'main-north-03-main-north-04'
+    });
+    expect(parallelVehicle?.state).not.toBe('waiting-blocked');
   });
 
   it('keeps a stopped portal-node occupant holding the portal zone', () => {
@@ -1223,7 +1297,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(crossRowStorageHops(route)).toEqual([]);
   });
 
-  it('uses the nearest storage-side exit when an idle shuttle is parked under a load', () => {
+  it('uses the outfeed-side storage exit when an idle shuttle is parked under a load', () => {
     const scenario = createDefaultShuttleScenario({
       vehicles: { count: 1 },
       taskGeneration: {
@@ -1246,6 +1320,44 @@ describe('shuttle phase 0 SimCore', () => {
     const route = String(assigned?.details.route ?? '').split('>');
 
     expect(route.slice(0, 2)).toEqual(['storage-r16-c01', 'left-row-16']);
+  });
+
+  it('routes empty inbound pickup shuttles out through the left side instead of counterflowing on the right infeed aisle', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      }
+    }));
+    sim.setVehicleRouteForTest('SH-01', ['storage-r03-c24']);
+    sim.addLoadForTest({ id: 'manual-inbound-load', state: 'waiting', nodeId: 'inbound-lift-top-02', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'manual-inbound',
+      kind: 'inbound',
+      state: 'queued',
+      createdAtSec: 0,
+      assignedAtSec: null,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'inbound-lift-top-02',
+      dropoffNodeId: 'storage-r04-c01',
+      loadId: 'manual-inbound-load',
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: null
+    });
+
+    sim.step(0.2);
+    const route = sim.getState().vehicles[0]?.routeNodeIds ?? [];
+    const pickupIndex = route.indexOf('inbound-lift-top-02');
+
+    expect(route.slice(0, 2)).toEqual(['storage-r03-c24', 'storage-r03-c23']);
+    expect(route.indexOf('left-row-03')).toBeGreaterThan(route.indexOf('storage-r03-c01'));
+    expect(route.slice(0, pickupIndex).includes('right-row-03')).toBe(false);
   });
 
   it('ends inbound work at the target storage cell without a post-dropoff route tail', () => {
@@ -1733,7 +1845,7 @@ describe('shuttle phase 0 SimCore', () => {
         deadlockDetectSec: 20
       }
     });
-    const state = runFor(new ShuttleSimCore(scenario), 180);
+    const state = runForWithStoragePathAssertions(new ShuttleSimCore(scenario), scenario, 180);
     const utilizedVehicleCount = Object.values(state.kpis.vehicleUtilization).filter((utilization) => utilization > 0.05).length;
 
     expect(state.status).toBe('running');
@@ -1781,13 +1893,17 @@ describe('shuttle phase 0 SimCore', () => {
     const sim = new ShuttleSimCore(scenario);
 
     expect(sim.getState().vehicles.find((vehicle) => vehicle.id === 'SH-12')?.currentNodeId).toBe('storage-r13-c01');
-    const state = runFor(sim, 900, 1);
+    const state = runForWithStoragePathAssertions(sim, scenario, 900, 1);
     const utilizedVehicleCount = Object.values(state.kpis.vehicleUtilization).filter((utilization) => utilization > 0.05).length;
 
     expect(state.status).toBe('running');
-    expect(state.kpis.completedInbound).toBeGreaterThanOrEqual(25);
-    expect(state.kpis.totalPph).toBeGreaterThan(100);
+    expect(state.kpis.completedInbound).toBeGreaterThanOrEqual(50);
+    expect(state.kpis.totalPph).toBeGreaterThan(200);
     expect(utilizedVehicleCount).toBe(12);
+    expect(
+      Object.values(state.kpis.vehicleUtilization).reduce((total, utilization) => total + utilization, 0) /
+      Object.values(state.kpis.vehicleUtilization).length
+    ).toBeGreaterThan(0.6);
     expect(state.traffic.deadlockCandidateVehicleIds).toEqual([]);
     expect(storageFillHoles(state.loads.filter((load) => load.state === 'stored' && load.nodeId?.startsWith('storage-')).map((load) => load.nodeId!))).toEqual([]);
     expectNoLoadedStorageTransitThroughStoredLoads(state);
