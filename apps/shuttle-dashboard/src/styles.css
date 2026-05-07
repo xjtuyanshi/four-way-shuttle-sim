@@ -330,6 +330,33 @@ input[type="range"] {
   line-height: 1;
 }
 
+.capacity-panel {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.capacity-panel > div {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 12px;
+  display: grid;
+  gap: 4px;
+  min-height: 78px;
+}
+
+.capacity-panel span,
+.capacity-panel small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.capacity-panel strong {
+  font-size: 22px;
+  line-height: 1;
+}
+
 .resource-panel {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -823,6 +850,10 @@ th {
     grid-template-columns: repeat(2, 1fr);
   }
 
+  .capacity-panel {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
   .fifo-body {
     grid-template-columns: 1fr;
   }
@@ -869,6 +900,10 @@ th {
   }
 
   .resource-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .capacity-panel {
     grid-template-columns: 1fr;
   }
 

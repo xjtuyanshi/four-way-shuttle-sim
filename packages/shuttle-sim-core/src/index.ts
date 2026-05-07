@@ -920,6 +920,9 @@ class TrafficReservationController {
   }
 }
 
+type TheoreticalCapacitySnapshot = NonNullable<KpiSnapshot['theoreticalCapacity']>;
+type TheoreticalCapacityBaseline = Omit<TheoreticalCapacitySnapshot, 'achievedInboundPct' | 'averageVehicleUtilizationPct'>;
+
 export class ShuttleSimCore {
   private scenario: ShuttleScenario;
   private readonly sessionId = randomUUID();
@@ -952,6 +955,7 @@ export class ShuttleSimCore {
   private deferredTaskReasons: Record<'inbound' | 'outbound', string | null> = { inbound: null, outbound: null };
   private liftPortBusyTimeSec = new Map<string, number>();
   private neighborByNodeId = new Map<string, Array<{ nodeId: string; lengthM: number }>>();
+  private theoreticalCapacityBaseline: TheoreticalCapacityBaseline | null = null;
   private error: string | null = null;
 
   constructor(scenario: ShuttleScenario = createDefaultShuttleScenario()) {
@@ -970,6 +974,7 @@ export class ShuttleSimCore {
   loadScenario(scenario: ShuttleScenario): ShuttleSimState {
     this.scenario = ShuttleScenarioSchema.parse(scenario);
     assertNoVerticalStorageFootprintEdges(this.scenario);
+    this.theoreticalCapacityBaseline = null;
     this.traffic = new TrafficReservationController(this.scenario);
     this.rng = makeRng(this.scenario.seed);
     this.rebuildGraphNeighbors();
@@ -1099,6 +1104,7 @@ export class ShuttleSimCore {
     }
 
     this.scenario = parsed.data;
+    this.theoreticalCapacityBaseline = null;
     if (path.startsWith('/layout')) {
       this.rebuildGraphNeighbors();
     }
@@ -1791,6 +1797,121 @@ export class ShuttleSimCore {
       }
     }
     return distanceM;
+  }
+
+  private nearestLiftPortNodeIdByDistance(kind: LiftKind, relatedNodeId: string): string | null {
+    const related = this.scenario.layout.nodes.find((node) => node.id === relatedNodeId);
+    const liftNodes = this.scenario.layout.nodes
+      .filter((node) => liftKindForNode(node) === kind)
+      .sort((left, right) => {
+        const leftDistance = related ? Math.abs(left.x - related.x) + Math.abs(left.z - related.z) : 0;
+        const rightDistance = related ? Math.abs(right.x - related.x) + Math.abs(right.z - related.z) : 0;
+        return leftDistance - rightDistance || left.id.localeCompare(right.id);
+      });
+    return liftNodes[0]?.id ?? null;
+  }
+
+  private routeThroughTargets(startNodeId: string, targets: string[]): string[] {
+    const route = [startNodeId];
+    for (const target of targets) {
+      if (target === route[route.length - 1]) {
+        continue;
+      }
+      const fromNodeId = route[route.length - 1]!;
+      const blockedStorageNodeIds = this.blockedStorageTransitNodeIds(fromNodeId, target);
+      const segment = this.shortestPath(fromNodeId, target, blockedStorageNodeIds);
+      route.push(...segment.slice(1));
+    }
+    return route;
+  }
+
+  private idealInboundCycleForStorageCell(storageNodeId: string): {
+    loadedDistanceM: number;
+    emptyReturnDistanceM: number;
+    loadedTravelSec: number;
+    emptyReturnSec: number;
+    cycleSec: number;
+  } | null {
+    const liftNodeId = this.nearestLiftPortNodeIdByDistance('inbound', storageNodeId);
+    const storageEntryNodeId = this.storageSideNodeId(storageNodeId, 'right');
+    const storageExitNodeId = this.storageSideNodeId(storageNodeId, 'left');
+    if (!liftNodeId || !storageEntryNodeId || !storageExitNodeId) {
+      return null;
+    }
+
+    try {
+      const loadedRoute = this.routeThroughTargets(liftNodeId, [storageEntryNodeId, storageNodeId]);
+      const emptyReturnRoute = this.routeThroughTargets(storageNodeId, [storageExitNodeId, liftNodeId]);
+      const loadedDistanceM = this.routeDistanceM(loadedRoute);
+      const emptyReturnDistanceM = this.routeDistanceM(emptyReturnRoute);
+      const loadedTravelSec = calculateTravelTimeSec(
+        loadedDistanceM,
+        this.scenario.physicsParams.loadedSpeedMps,
+        this.scenario.physicsParams.accelerationMps2
+      );
+      const emptyReturnSec = calculateTravelTimeSec(
+        emptyReturnDistanceM,
+        this.scenario.physicsParams.emptySpeedMps,
+        this.scenario.physicsParams.accelerationMps2
+      );
+      const cycleSec = loadedTravelSec + emptyReturnSec + this.scenario.physicsParams.liftTimeSec + this.scenario.physicsParams.lowerTimeSec;
+      return { loadedDistanceM, emptyReturnDistanceM, loadedTravelSec, emptyReturnSec, cycleSec };
+    } catch {
+      return null;
+    }
+  }
+
+  private calculateTheoreticalCapacityBaseline(): TheoreticalCapacityBaseline {
+    if (this.theoreticalCapacityBaseline) {
+      return this.theoreticalCapacityBaseline;
+    }
+
+    const samples = this.scenario.layout.nodes
+      .filter((node) => node.type === 'storage')
+      .flatMap((node) => this.idealInboundCycleForStorageCell(node.id) ?? []);
+    const sampleCount = Math.max(1, samples.length);
+    const averageCycleSec = samples.reduce((sum, sample) => sum + sample.cycleSec, 0) / sampleCount;
+    const averageLoadedDistanceM = samples.reduce((sum, sample) => sum + sample.loadedDistanceM, 0) / sampleCount;
+    const averageEmptyReturnDistanceM = samples.reduce((sum, sample) => sum + sample.emptyReturnDistanceM, 0) / sampleCount;
+    const averageLoadedTravelSec = samples.reduce((sum, sample) => sum + sample.loadedTravelSec, 0) / sampleCount;
+    const averageEmptyReturnSec = samples.reduce((sum, sample) => sum + sample.emptyReturnSec, 0) / sampleCount;
+    const singleShuttlePph = averageCycleSec > 0 ? 3600 / averageCycleSec : 0;
+    const fleetPph = singleShuttlePph * this.scenario.vehicles.count;
+    this.theoreticalCapacityBaseline = {
+      kind: 'inbound',
+      shuttleCount: this.scenario.vehicles.count,
+      singleShuttlePph: round(singleShuttlePph, 3),
+      fleetPph: round(fleetPph, 3),
+      idealCycleSec: round(averageCycleSec, 3),
+      loadedTravelSec: round(averageLoadedTravelSec, 3),
+      emptyReturnSec: round(averageEmptyReturnSec, 3),
+      liftAndLowerSec: round(this.scenario.physicsParams.liftTimeSec + this.scenario.physicsParams.lowerTimeSec, 3),
+      averageLoadedDistanceM: round(averageLoadedDistanceM, 3),
+      averageEmptyReturnDistanceM: round(averageEmptyReturnDistanceM, 3),
+      assumptions: [
+        'inbound-only ideal with unlimited lift-side demand',
+        'no traffic conflicts, waiting, deadlock recovery, battery, or upstream starvation',
+        'average over all storage cells using nearest inbound lift and current speed/lift/lower parameters',
+        'empty return is modeled from storage cell back to the nearest inbound lift through allowed horizontal storage rows and aisles'
+      ]
+    };
+    return this.theoreticalCapacityBaseline;
+  }
+
+  private calculateTheoreticalCapacity(
+    inboundPph: number,
+    vehicleUtilization: Record<string, number>
+  ): TheoreticalCapacitySnapshot {
+    const baseline = this.calculateTheoreticalCapacityBaseline();
+    const utilizationValues = Object.values(vehicleUtilization);
+    const averageVehicleUtilizationPct =
+      utilizationValues.reduce((sum, value) => sum + value, 0) / Math.max(1, utilizationValues.length) * 100;
+
+    return {
+      ...baseline,
+      achievedInboundPct: round(baseline.fleetPph > 0 ? (inboundPph / baseline.fleetPph) * 100 : 0, 3),
+      averageVehicleUtilizationPct: round(averageVehicleUtilizationPct, 3)
+    };
   }
 
   private taskAssignmentBlockReason(task: TaskStateRecord): string | null {
@@ -3254,6 +3375,8 @@ export class ShuttleSimCore {
 
   private calculateKpis(): KpiSnapshot {
     const elapsedHours = Math.max(this.simTimeSec / 3600, 1e-9);
+    const inboundPph = round(this.completedInbound / elapsedHours, 3);
+    const outboundPph = round(this.completedOutbound / elapsedHours, 3);
     const activeTasks = this.tasks.filter((task) => task.state === 'assigned' || task.state === 'in-progress').length;
     const queuedTasks = this.tasks.filter((task) => task.state === 'queued').length;
     const vehicleUtilization = Object.fromEntries(
@@ -3262,8 +3385,8 @@ export class ShuttleSimCore {
     const blockedTimeByReasonSec = Object.fromEntries([...this.blockedTimeByReasonSec.entries()].sort(([left], [right]) => left.localeCompare(right)));
 
     return {
-      inboundPph: round(this.completedInbound / elapsedHours, 3),
-      outboundPph: round(this.completedOutbound / elapsedHours, 3),
+      inboundPph,
+      outboundPph,
       totalPph: round((this.completedInbound + this.completedOutbound) / elapsedHours, 3),
       completedInbound: this.completedInbound,
       completedOutbound: this.completedOutbound,
@@ -3278,7 +3401,8 @@ export class ShuttleSimCore {
       replanCount: this.replanCount,
       deadlockCount: this.deadlockCount,
       livelockCount: this.livelockCount,
-      eventLogHash: hashEventLog(this.eventLog)
+      eventLogHash: hashEventLog(this.eventLog),
+      theoreticalCapacity: this.calculateTheoreticalCapacity(inboundPph, vehicleUtilization)
     };
   }
 

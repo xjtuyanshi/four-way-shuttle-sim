@@ -2479,4 +2479,25 @@ describe('shuttle phase 0 SimCore', () => {
     const loadedTravelSec = calculateTravelTimeSec(4, scenario.physicsParams.loadedSpeedMps, scenario.physicsParams.accelerationMps2);
     expect(loadedTravelSec).toBeGreaterThan(travelSec);
   });
+
+  it('reports lightweight inbound theoretical shuttle capacity from the current layout and speed parameters', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario({ vehicles: { count: 12 } }));
+    const baseline = sim.getState().kpis.theoreticalCapacity!;
+
+    expect(baseline.kind).toBe('inbound');
+    expect(baseline.shuttleCount).toBe(12);
+    expect(baseline.singleShuttlePph).toBeGreaterThan(40);
+    expect(baseline.fleetPph).toBeCloseTo(baseline.singleShuttlePph * 12, 2);
+    expect(baseline.idealCycleSec).toBeCloseTo(
+      baseline.loadedTravelSec + baseline.emptyReturnSec + baseline.liftAndLowerSec,
+      3
+    );
+    expect(baseline.averageLoadedDistanceM).toBeGreaterThan(0);
+    expect(baseline.averageEmptyReturnDistanceM).toBeGreaterThan(0);
+    expect(baseline.assumptions).toContain('inbound-only ideal with unlimited lift-side demand');
+
+    expect(sim.setParam('/physicsParams/loadedSpeedMps', 2).accepted).toBe(true);
+    const fasterLoaded = sim.getState().kpis.theoreticalCapacity!;
+    expect(fasterLoaded.singleShuttlePph).toBeGreaterThan(baseline.singleShuttlePph);
+  });
 });

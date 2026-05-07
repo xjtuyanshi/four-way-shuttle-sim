@@ -453,7 +453,22 @@ export const KpiSnapshotSchema = z.object({
   replanCount: z.number().int().nonnegative(),
   deadlockCount: z.number().int().nonnegative(),
   livelockCount: z.number().int().nonnegative(),
-  eventLogHash: z.string()
+  eventLogHash: z.string(),
+  theoreticalCapacity: z.object({
+    kind: z.literal('inbound'),
+    shuttleCount: z.number().int().nonnegative(),
+    singleShuttlePph: z.number().nonnegative(),
+    fleetPph: z.number().nonnegative(),
+    achievedInboundPct: z.number().nonnegative(),
+    idealCycleSec: z.number().nonnegative(),
+    loadedTravelSec: z.number().nonnegative(),
+    emptyReturnSec: z.number().nonnegative(),
+    liftAndLowerSec: z.number().nonnegative(),
+    averageLoadedDistanceM: z.number().nonnegative(),
+    averageEmptyReturnDistanceM: z.number().nonnegative(),
+    averageVehicleUtilizationPct: z.number().nonnegative(),
+    assumptions: z.array(z.string())
+  }).optional()
 });
 
 export const EventLogEntrySchema = z.object({

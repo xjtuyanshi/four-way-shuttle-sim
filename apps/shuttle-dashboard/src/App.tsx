@@ -475,6 +475,36 @@ function KpiStrip({ kpis }: { kpis: KpiSnapshot | null }) {
   );
 }
 
+function CapacityTheoryPanel({ kpis }: { kpis: KpiSnapshot | null }) {
+  const theory = kpis?.theoreticalCapacity;
+  const inboundGapPph = theory ? Math.max(0, theory.fleetPph - kpis.inboundPph) : 0;
+
+  return (
+    <section className="capacity-panel" aria-label="Theoretical capacity">
+      <div>
+        <span>Ideal / shuttle</span>
+        <strong>{theory ? formatNumber(theory.singleShuttlePph, 1) : '--'} PPH</strong>
+        <small>{theory ? `${formatNumber(theory.idealCycleSec, 1)}s avg cycle` : 'inbound ideal'}</small>
+      </div>
+      <div>
+        <span>Fleet theory</span>
+        <strong>{theory ? formatNumber(theory.fleetPph, 1) : '--'} PPH</strong>
+        <small>{theory ? `${theory.shuttleCount} shuttles, no traffic wait` : 'same layout'}</small>
+      </div>
+      <div>
+        <span>Actual vs theory</span>
+        <strong>{theory ? `${formatNumber(theory.achievedInboundPct, 1)}%` : '--'}</strong>
+        <small>{theory ? `${formatNumber(inboundGapPph, 1)} PPH gap` : 'needs running state'}</small>
+      </div>
+      <div>
+        <span>Cycle split</span>
+        <strong>{theory ? `${formatNumber(theory.loadedTravelSec, 1)}s / ${formatNumber(theory.emptyReturnSec, 1)}s` : '--'}</strong>
+        <small>{theory ? `lift+lower ${formatNumber(theory.liftAndLowerSec, 2)}s, util ${formatNumber(theory.averageVehicleUtilizationPct, 1)}%` : 'loaded / empty'}</small>
+      </div>
+    </section>
+  );
+}
+
 function ResourceUtilizationPanel({ scenario, state }: { scenario: ShuttleScenario | null; state: ShuttleSimState | null }) {
   const summary = useMemo(() => summarizeResourceUtilization(scenario, state), [scenario, state]);
   const liftTiming = scenario?.physicsParams;
@@ -1557,6 +1587,7 @@ export function App() {
           onToggleLayer={toggleSceneLayer}
         />
         <KpiStrip kpis={kpis} />
+        <CapacityTheoryPanel kpis={kpis} />
         <ResourceUtilizationPanel scenario={scenario} state={state} />
         <TrafficDiagnosticsPanel state={state} />
         <FifoInventoryPanel scenario={scenario} state={state} />
