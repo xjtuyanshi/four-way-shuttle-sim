@@ -1389,7 +1389,7 @@ describe('shuttle phase 0 SimCore', () => {
     );
   });
 
-  it('parks an unloaded shuttle under its inbound dropoff load instead of crossing the FIFO row empty', () => {
+  it('dispatches an unloaded inbound-only shuttle from dropoff to lift-near storage standby', () => {
     const scenario = createDefaultShuttleScenario({
       durationSec: 120,
       vehicles: { count: 1 },
@@ -1418,12 +1418,19 @@ describe('shuttle phase 0 SimCore', () => {
       state = sim.step(0.2);
     }
     const vehicle = state.vehicles[0]!;
+    const standbyEvent = sim.getEventLog().find((event) => event.eventType === 'vehicle-standby-dispatched');
+    const standbyRoute = String(standbyEvent?.details.route ?? '').split('>');
+    const standbyTarget = standbyRoute.at(-1);
 
     expect(state.kpis.completedInbound).toBe(1);
-    expect(vehicle.state).toBe('idle');
+    expect(vehicle.state).toBe('assigned');
     expect(vehicle.loaded).toBe(false);
-    expect(vehicle.currentNodeId).toBe('storage-r01-c01');
-    expect(vehicle.routeNodeIds).toEqual(['storage-r01-c01']);
+    expect(vehicle.taskId).toBeNull();
+    expect(standbyEvent).toBeDefined();
+    expect(standbyTarget).toMatch(/^storage-r\d+-c\d+$/);
+    expect(standbyTarget).not.toBe('storage-r01-c01');
+    expect(vehicle.routeNodeIds.at(-1)).toBe(standbyTarget);
+    expect(crossRowStorageHops(vehicle.routeNodeIds)).toEqual([]);
     expect(state.loads.find((load) => load.id === 'load-0001')).toMatchObject({
       state: 'stored',
       nodeId: 'storage-r01-c01',
@@ -1433,6 +1440,43 @@ describe('shuttle phase 0 SimCore', () => {
       nodeId: 'storage-r01-c01',
       vehicleId: 'SH-01'
     });
+  });
+
+  it('preempts an empty inbound-standby shuttle at the next control node when a lift calls it', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2
+      }
+    }));
+    sim.setVehicleRouteForTest('SH-01', ['storage-r01-c24', 'right-row-01', 'main-north-05']);
+    sim.addLoadForTest({ id: 'manual-call-load', state: 'waiting', nodeId: 'inbound-lift-top-02', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'manual-call',
+      kind: 'inbound',
+      state: 'queued',
+      createdAtSec: 0,
+      assignedAtSec: null,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'inbound-lift-top-02',
+      dropoffNodeId: 'storage-r02-c01',
+      loadId: 'manual-call-load',
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: null
+    });
+
+    sim.step(0.2);
+    const vehicle = sim.getState().vehicles[0]!;
+
+    expect(vehicle.taskId).toBe('manual-call');
+    expect(vehicle.routeNodeIds).toContain('inbound-lift-top-02');
+    expect(vehicle.routeNodeIds.at(-1)).toBe('storage-r02-c01');
   });
 
   it('routes cross-row storage moves through side aisles instead of vertical storage hops', () => {
@@ -2108,6 +2152,13 @@ describe('shuttle phase 0 SimCore', () => {
   it('preauthorizes same-row storage horizons without treating every storage cell as a new control decision', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
       physicsParams: {
         emptySpeedMps: 2,
         loadedSpeedMps: 1.5,
@@ -2153,6 +2204,13 @@ describe('shuttle phase 0 SimCore', () => {
   it('preauthorizes row-entry storage horizons from the infeed side to the target slot', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
       physicsParams: {
         emptySpeedMps: 2,
         loadedSpeedMps: 1.5,

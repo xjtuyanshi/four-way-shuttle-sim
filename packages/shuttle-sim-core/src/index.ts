@@ -1761,9 +1761,9 @@ export class ShuttleSimCore {
   }
 
   private assignQueuedTasks(dtSec: number): void {
-    const idleVehicleIds = new Set(
+    const availableVehicleIds = new Set(
       this.vehicles
-        .filter((vehicle) => vehicle.state === 'idle')
+        .filter((vehicle) => this.canAcceptQueuedTask(vehicle))
         .map((vehicle) => vehicle.id)
     );
 
@@ -1775,11 +1775,11 @@ export class ShuttleSimCore {
         continue;
       }
 
-      if (idleVehicleIds.size === 0) {
+      if (availableVehicleIds.size === 0) {
         return;
       }
 
-      const assignment = this.bestIdleVehicleForTask(task, idleVehicleIds);
+      const assignment = this.bestAvailableVehicleForTask(task, availableVehicleIds);
       if (!assignment) {
         task.waitReason = 'route-unavailable';
         this.blockedTimeByReasonSec.set('route-unavailable', round((this.blockedTimeByReasonSec.get('route-unavailable') ?? 0) + dtSec));
@@ -1787,13 +1787,20 @@ export class ShuttleSimCore {
       }
 
       this.assignTaskToVehicle(assignment.vehicle, task, assignment.route);
-      idleVehicleIds.delete(assignment.vehicle.id);
+      availableVehicleIds.delete(assignment.vehicle.id);
     }
   }
 
-  private bestIdleVehicleForTask(task: TaskStateRecord, idleVehicleIds: Set<string>): { vehicle: MutableVehicle; route: string[]; pickupDistanceM: number; totalDistanceM: number } | null {
+  private canAcceptQueuedTask(vehicle: MutableVehicle): boolean {
+    if (vehicle.taskId || vehicle.loaded || vehicle.currentEdgeId || vehicle.legRemainingM > 0 || vehicle.phaseRemainingSec > 0) {
+      return false;
+    }
+    return vehicle.state === 'idle' || vehicle.state === 'assigned' || vehicle.state === 'waiting-blocked' || vehicle.state === 'parking';
+  }
+
+  private bestAvailableVehicleForTask(task: TaskStateRecord, availableVehicleIds: Set<string>): { vehicle: MutableVehicle; route: string[]; pickupDistanceM: number; totalDistanceM: number } | null {
     let bestAssignment: { vehicle: MutableVehicle; route: string[]; pickupDistanceM: number; totalDistanceM: number } | null = null;
-    for (const vehicle of this.vehicles.filter((candidate) => idleVehicleIds.has(candidate.id))) {
+    for (const vehicle of this.vehicles.filter((candidate) => availableVehicleIds.has(candidate.id))) {
       if (
         task.kind === 'inbound' &&
         this.scenario.taskGeneration.outboundRatePerHour > 0 &&
@@ -1821,6 +1828,9 @@ export class ShuttleSimCore {
   }
 
   private assignTaskToVehicle(vehicle: MutableVehicle, task: TaskStateRecord, route: string[]): void {
+    if (!vehicle.taskId) {
+      this.clearTasklessRouteReservations(vehicle);
+    }
     vehicle.taskId = task.id;
     vehicle.routeNodeIds = route;
     vehicle.routeIndex = 0;
@@ -1837,6 +1847,13 @@ export class ShuttleSimCore {
     this.logEvent('task-assigned', vehicle.id, task.id, task.loadId, vehicle.currentNodeId, task.pickupNodeId, 'nearest-available', this.vehiclePosition(vehicle), {
       route: route.join('>')
     });
+  }
+
+  private clearTasklessRouteReservations(vehicle: MutableVehicle): void {
+    this.reservations = this.reservations.filter(
+      (reservation) => reservation.vehicleId !== vehicle.id || reservation.reasonCode === 'zone-hold'
+    );
+    this.ensureZoneHoldReservation(vehicle, vehicle.currentNodeId);
   }
 
   private routeDistanceM(routeNodeIds: string[], stopAtNodeId?: string): number {
@@ -2177,7 +2194,7 @@ export class ShuttleSimCore {
     const storageEntrySideNodeId = task.kind === 'inbound' ? this.storageSideNodeId(task.dropoffNodeId, 'right') : this.storageSideNodeId(task.pickupNodeId, 'left');
     const liftStagingNodeId = task.kind === 'inbound' ? this.inboundLiftStagingNodeForTask(task) : null;
     const currentStorageExitNodeId = task.kind === 'inbound' && this.isStorageNode(currentNodeId)
-      ? this.storageSideNodeId(currentNodeId, 'left') ?? this.nearestStorageSideNodeId(currentNodeId)
+      ? this.inboundStorageExitNodeId(currentNodeId)
       : null;
     const alreadyAtOutboundPickup = task.kind === 'outbound' && currentNodeId === task.pickupNodeId;
     const targets = task.kind === 'inbound'
@@ -2196,6 +2213,160 @@ export class ShuttleSimCore {
       route.push(...segment.slice(1));
     }
     return route;
+  }
+
+  private inboundStorageExitNodeId(storageNodeId: string): string | null {
+    if (this.isInboundOnlyFlow()) {
+      return this.nearestStorageSideNodeId(storageNodeId);
+    }
+    return this.storageSideNodeId(storageNodeId, 'left') ?? this.nearestStorageSideNodeId(storageNodeId);
+  }
+
+  private dispatchVehicleToInboundStandby(vehicle: MutableVehicle): boolean {
+    if (!this.isInboundOnlyFlow() || vehicle.loaded || vehicle.taskId) {
+      return false;
+    }
+
+    const route = this.routeToInboundStandby(vehicle);
+    if (!route || route.length <= 1) {
+      return false;
+    }
+
+    this.clearTasklessRouteReservations(vehicle);
+    vehicle.state = 'assigned';
+    vehicle.routeNodeIds = route;
+    vehicle.routeIndex = 0;
+    vehicle.targetNodeId = route[1] ?? null;
+    vehicle.waitReason = null;
+    vehicle.blockingReservationId = null;
+    vehicle.blockingVehicleId = null;
+    vehicle.directionSwitchReadyNodeId = null;
+    this.logEvent('vehicle-standby-dispatched', vehicle.id, null, null, vehicle.currentNodeId, route[route.length - 1] ?? null, 'inbound-lift-near-storage-standby', this.vehiclePosition(vehicle), {
+      route: route.join('>')
+    });
+    return true;
+  }
+
+  private routeToInboundStandby(vehicle: MutableVehicle): string[] | null {
+    for (const candidate of this.inboundStandbyNodeCandidates(vehicle.id)) {
+      try {
+        const route = this.planStandbyRoute(vehicle.currentNodeId, candidate.id);
+        if (route.length > 1) {
+          return route;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  private planStandbyRoute(fromNodeId: string, targetNodeId: string): string[] {
+    const route: string[] = [fromNodeId];
+    const targets: Array<string | null> = this.isStorageNode(targetNodeId)
+      ? this.isStorageNode(fromNodeId)
+        ? [this.nearestStorageSideNodeId(fromNodeId), this.nearestStorageSideNodeId(targetNodeId), targetNodeId]
+        : [this.nearestStorageSideNodeId(targetNodeId), targetNodeId]
+      : [targetNodeId];
+
+    for (const target of targets) {
+      if (!target || target === route[route.length - 1]) {
+        continue;
+      }
+      const current = route[route.length - 1]!;
+      const blockedNodeIds = this.blockedStorageTransitNodeIds(current, target);
+      const segment = this.shortestPath(current, target, blockedNodeIds);
+      route.push(...segment.slice(1));
+    }
+    return route;
+  }
+
+  private inboundStandbyNodeCandidates(vehicleId: string): LayoutNode[] {
+    const inboundLifts = this.inboundLiftNodes();
+    if (inboundLifts.length === 0) {
+      return [];
+    }
+
+    const storageNodes = this.scenario.layout.nodes.filter((node): node is LayoutNode =>
+      node.type === 'storage' && !node.noStop && !node.noParking
+    );
+    const blockedDropoffNodeIds = this.activeInboundDropoffNodeIds();
+    const claimedStandbyNodeIds = this.claimedTasklessStorageNodeIds(vehicleId);
+    const vehicleOffset = (this.vehicleOrdinal(vehicleId) - 1) % inboundLifts.length;
+    const liftOrder = inboundLifts.map((_, index) => inboundLifts[(index + vehicleOffset) % inboundLifts.length]!);
+    const candidates: LayoutNode[] = [];
+    const seenNodeIds = new Set<string>();
+
+    for (const lift of liftOrder) {
+      const rankedNodes = storageNodes
+        .filter((node) => !blockedDropoffNodeIds.has(node.id))
+        .filter((node) => !claimedStandbyNodeIds.has(node.id))
+        .filter((node) => {
+          const occupantId = this.currentNodeOccupancy.get(node.id);
+          return !occupantId || occupantId === vehicleId;
+        })
+        .map((node) => ({
+          node,
+          distanceM: Math.hypot(node.x - lift.x, node.z - lift.z)
+        }))
+        .sort((left, right) =>
+          left.distanceM - right.distanceM ||
+          left.node.id.localeCompare(right.node.id)
+        );
+
+      for (const ranked of rankedNodes) {
+        if (seenNodeIds.has(ranked.node.id)) {
+          continue;
+        }
+        seenNodeIds.add(ranked.node.id);
+        candidates.push(ranked.node);
+      }
+    }
+
+    return candidates;
+  }
+
+  private inboundLiftNodes(): LayoutNode[] {
+    return this.scenario.layout.nodes
+      .filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound')
+      .sort((left, right) => left.id.localeCompare(right.id));
+  }
+
+  private activeInboundDropoffNodeIds(): Set<string> {
+    return new Set(
+      this.tasks
+        .filter((task) =>
+          task.kind === 'inbound' &&
+          task.state !== 'completed' &&
+          task.state !== 'failed' &&
+          this.isStorageNode(task.dropoffNodeId)
+        )
+        .map((task) => task.dropoffNodeId)
+    );
+  }
+
+  private claimedTasklessStorageNodeIds(vehicleId: string): Set<string> {
+    const claimed = new Set<string>();
+    for (const vehicle of this.vehicles) {
+      if (vehicle.id === vehicleId || vehicle.taskId || vehicle.loaded) {
+        continue;
+      }
+      const routeTargetNodeId = vehicle.routeNodeIds.at(-1) ?? null;
+      for (const nodeId of [vehicle.currentNodeId, vehicle.targetNodeId, routeTargetNodeId]) {
+        if (nodeId && this.isStorageNode(nodeId)) {
+          claimed.add(nodeId);
+        }
+      }
+    }
+    return claimed;
+  }
+
+  private isInboundOnlyFlow(): boolean {
+    return this.scenario.taskGeneration.inboundRatePerHour > 0 && this.scenario.taskGeneration.outboundRatePerHour <= 0;
+  }
+
+  private vehicleOrdinal(vehicleId: string): number {
+    return Math.max(1, Number(vehicleId.replace(/\D+/g, '')) || 1);
   }
 
   private inboundLiftStagingNodeIds(liftNodeId: string): string[] {
@@ -2548,6 +2719,9 @@ export class ShuttleSimCore {
       });
       vehicle.taskId = null;
       if (task.kind === 'inbound' && this.isStorageNode(vehicle.currentNodeId)) {
+        if (this.dispatchVehicleToInboundStandby(vehicle)) {
+          return;
+        }
         vehicle.state = 'idle';
         vehicle.routeNodeIds = [vehicle.currentNodeId];
         vehicle.routeIndex = 0;
