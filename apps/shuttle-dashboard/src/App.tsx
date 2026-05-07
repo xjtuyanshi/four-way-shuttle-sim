@@ -190,6 +190,10 @@ type ResourceUtilizationSummary = {
     idle: number;
     averageUtilizationPct: number;
     peakUtilizationPct: number;
+    averageProductivePct: number;
+    averageWaitingPct: number;
+    averageIdlePct: number;
+    averageTasklessTravelPct: number;
   };
   lifts: {
     total: number;
@@ -426,6 +430,8 @@ export function summarizeResourceUtilization(
   const vehicles = state?.vehicles ?? [];
   const utilizationByVehicle = state?.kpis.vehicleUtilization ?? {};
   const vehicleUtilizationValues = vehicles.map((vehicle) => utilizationByVehicle[vehicle.id] ?? 0);
+  const utilizationBreakdownByVehicle = state?.kpis.vehicleUtilizationBreakdown ?? {};
+  const vehicleBreakdowns = vehicles.map((vehicle) => utilizationBreakdownByVehicle[vehicle.id]);
   const liftPorts = state?.traffic.liftPorts ?? [];
   const liftUtilizationValues = liftPorts.map((port) => port.utilization);
   const inboundLiftUtilizationValues = liftPorts.filter((port) => port.kind === 'inbound').map((port) => port.utilization);
@@ -444,7 +450,11 @@ export function summarizeResourceUtilization(
       active: vehicles.filter((vehicle) => vehicle.state !== 'idle' || vehicle.taskId !== null).length,
       idle: vehicles.filter((vehicle) => vehicle.state === 'idle' && vehicle.taskId === null).length,
       averageUtilizationPct: average(vehicleUtilizationValues) * 100,
-      peakUtilizationPct: Math.max(0, ...vehicleUtilizationValues) * 100
+      peakUtilizationPct: Math.max(0, ...vehicleUtilizationValues) * 100,
+      averageProductivePct: average(vehicleBreakdowns.map((breakdown) => breakdown?.productive ?? 0)) * 100,
+      averageWaitingPct: average(vehicleBreakdowns.map((breakdown) => breakdown?.waiting ?? 0)) * 100,
+      averageIdlePct: average(vehicleBreakdowns.map((breakdown) => breakdown?.idle ?? 0)) * 100,
+      averageTasklessTravelPct: average(vehicleBreakdowns.map((breakdown) => breakdown?.tasklessTravel ?? 0)) * 100
     },
     lifts: {
       total: liftPorts.length,
@@ -525,7 +535,12 @@ function ResourceUtilizationPanel({ scenario, state }: { scenario: ShuttleScenar
     {
       label: 'Shuttle utilization',
       value: `${summary.shuttles.active}/${summary.shuttles.total}`,
-      detail: `avg ${formatNumber(summary.shuttles.averageUtilizationPct, 1)}%, peak ${formatNumber(summary.shuttles.peakUtilizationPct, 1)}%`
+      detail: `busy ${formatNumber(summary.shuttles.averageUtilizationPct, 1)}%, productive ${formatNumber(summary.shuttles.averageProductivePct, 1)}%, wait ${formatNumber(summary.shuttles.averageWaitingPct, 1)}%`
+    },
+    {
+      label: 'Shuttle idle/standby',
+      value: `${formatNumber(summary.shuttles.averageIdlePct, 1)}%`,
+      detail: `taskless travel ${formatNumber(summary.shuttles.averageTasklessTravelPct, 1)}%, peak busy ${formatNumber(summary.shuttles.peakUtilizationPct, 1)}%`
     },
     {
       label: 'Lift approach slots',

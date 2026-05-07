@@ -1894,6 +1894,10 @@ describe('shuttle phase 0 SimCore', () => {
     });
     const state = runForWithStoragePathAssertions(new ShuttleSimCore(scenario), scenario, 180);
     const utilizedVehicleCount = Object.values(state.kpis.vehicleUtilization).filter((utilization) => utilization > 0.05).length;
+    const utilizationBreakdowns = Object.values(state.kpis.vehicleUtilizationBreakdown);
+    const averageBusyUtilization = utilizationBreakdowns.reduce((sum, value) => sum + value.busy, 0) / utilizationBreakdowns.length;
+    const averageProductiveUtilization = utilizationBreakdowns.reduce((sum, value) => sum + value.productive, 0) / utilizationBreakdowns.length;
+    const averageWaitingUtilization = utilizationBreakdowns.reduce((sum, value) => sum + value.waiting, 0) / utilizationBreakdowns.length;
 
     expect(state.status).toBe('running');
     expect(state.simTimeSec).toBe(180);
@@ -1902,6 +1906,11 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.kpis.activeTasks).toBe(12);
     expect(state.kpis.queuedTasks).toBeGreaterThan(0);
     expect(utilizedVehicleCount).toBe(12);
+    expect(utilizationBreakdowns).toHaveLength(12);
+    expect(averageBusyUtilization).toBeGreaterThan(0.9);
+    expect(averageProductiveUtilization).toBeGreaterThan(0.35);
+    expect(averageProductiveUtilization).toBeLessThan(averageBusyUtilization);
+    expect(averageWaitingUtilization).toBeGreaterThan(0);
     expect(
       state.traffic.liftPorts
         .filter((port) => port.kind === 'inbound')

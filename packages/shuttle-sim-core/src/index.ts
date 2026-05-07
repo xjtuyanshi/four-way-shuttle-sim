@@ -49,6 +49,9 @@ type MutableVehicle = VehicleState & {
   lastMovementAxis: 'x' | 'z' | null;
   directionSwitchReadyNodeId: string | null;
   legMotionMode: 'profile' | 'cruise';
+  movingTimeSec: number;
+  handlingTimeSec: number;
+  tasklessTravelTimeSec: number;
 };
 
 type SetParamResult = {
@@ -1107,7 +1110,10 @@ export class ShuttleSimCore {
         waitingSinceSec: null,
         lastMovementAxis: null,
         directionSwitchReadyNodeId: null,
-        legMotionMode: 'profile'
+        legMotionMode: 'profile',
+        movingTimeSec: 0,
+        handlingTimeSec: 0,
+        tasklessTravelTimeSec: 0
       };
     });
     for (const vehicle of this.vehicles) {
@@ -1303,6 +1309,9 @@ export class ShuttleSimCore {
     vehicle.lastMovementAxis = null;
     vehicle.directionSwitchReadyNodeId = null;
     vehicle.legMotionMode = 'profile';
+    vehicle.movingTimeSec = 0;
+    vehicle.handlingTimeSec = 0;
+    vehicle.tasklessTravelTimeSec = 0;
     vehicle.state = routeNodeIds.length > 1 ? 'assigned' : 'idle';
     this.currentNodeOccupancy.set(vehicle.currentNodeId, vehicle.id);
     this.ensureZoneHoldReservation(vehicle, vehicle.currentNodeId);
@@ -2659,6 +2668,7 @@ export class ShuttleSimCore {
         continue;
       }
       vehicle.busyTimeSec = round(vehicle.busyTimeSec + dtSec);
+      this.accrueVehicleWorkBreakdown(vehicle, dtSec);
 
       if (vehicle.state === 'lifting' || vehicle.state === 'lowering' || vehicle.state === 'parking') {
         this.advanceTimedPhase(vehicle, dtSec);
@@ -2676,6 +2686,24 @@ export class ShuttleSimCore {
       }
 
       this.startNextLeg(vehicle, dtSec);
+    }
+  }
+
+  private accrueVehicleWorkBreakdown(vehicle: MutableVehicle, dtSec: number): void {
+    const moving =
+      vehicle.currentEdgeId !== null ||
+      vehicle.legRemainingM > 0 ||
+      vehicle.state === 'moving-to-pickup' ||
+      vehicle.state === 'loaded-moving' ||
+      vehicle.state === 'returning';
+    if (moving) {
+      vehicle.movingTimeSec = round(vehicle.movingTimeSec + dtSec);
+    }
+    if (vehicle.state === 'lifting' || vehicle.state === 'lowering') {
+      vehicle.handlingTimeSec = round(vehicle.handlingTimeSec + dtSec);
+    }
+    if (!vehicle.taskId && !vehicle.loaded && (moving || vehicle.state === 'assigned' || vehicle.state === 'returning')) {
+      vehicle.tasklessTravelTimeSec = round(vehicle.tasklessTravelTimeSec + dtSec);
     }
   }
 
@@ -3655,6 +3683,22 @@ export class ShuttleSimCore {
     const vehicleUtilization = Object.fromEntries(
       this.vehicles.map((vehicle) => [vehicle.id, round(vehicle.busyTimeSec / Math.max(this.simTimeSec, 1), 4)])
     );
+    const vehicleUtilizationBreakdown = Object.fromEntries(
+      this.vehicles.map((vehicle) => {
+        const elapsedSec = Math.max(this.simTimeSec, 1);
+        const tasklessTravelSec = Math.min(vehicle.tasklessTravelTimeSec, vehicle.movingTimeSec);
+        const productiveSec = Math.max(0, vehicle.movingTimeSec - tasklessTravelSec) + vehicle.handlingTimeSec;
+        return [vehicle.id, {
+          busy: round(vehicle.busyTimeSec / elapsedSec, 4),
+          productive: round(productiveSec / elapsedSec, 4),
+          moving: round(vehicle.movingTimeSec / elapsedSec, 4),
+          handling: round(vehicle.handlingTimeSec / elapsedSec, 4),
+          waiting: round(vehicle.blockedTimeSec / elapsedSec, 4),
+          idle: round(vehicle.idleTimeSec / elapsedSec, 4),
+          tasklessTravel: round(tasklessTravelSec / elapsedSec, 4)
+        }];
+      })
+    );
     const blockedTimeByReasonSec = Object.fromEntries([...this.blockedTimeByReasonSec.entries()].sort(([left], [right]) => left.localeCompare(right)));
 
     return {
@@ -3669,6 +3713,7 @@ export class ShuttleSimCore {
       p95TaskCycleSec: round(percentile(this.completedTaskCycleTimes, 95)),
       averageTaskWaitSec: round(this.completedTaskWaitTimes.reduce((sum, value) => sum + value, 0) / Math.max(1, this.completedTaskWaitTimes.length)),
       vehicleUtilization,
+      vehicleUtilizationBreakdown,
       blockedTimeByReasonSec,
       reservationConflictCount: this.reservationConflictCount,
       replanCount: this.replanCount,

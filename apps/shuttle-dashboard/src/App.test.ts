@@ -57,6 +57,7 @@ function kpis(overrides: Partial<KpiSnapshot> = {}): KpiSnapshot {
     p95TaskCycleSec: 0,
     averageTaskWaitSec: 0,
     vehicleUtilization: {},
+    vehicleUtilizationBreakdown: {},
     blockedTimeByReasonSec: {},
     reservationConflictCount: 0,
     replanCount: 0,
@@ -207,6 +208,10 @@ describe('dashboard resource utilization', () => {
         vehicleUtilization: {
           'SH-01': 0.75,
           'SH-02': 0.25
+        },
+        vehicleUtilizationBreakdown: {
+          'SH-01': { busy: 0.75, productive: 0.6, moving: 0.55, handling: 0.05, waiting: 0.1, idle: 0.25, tasklessTravel: 0 },
+          'SH-02': { busy: 0.25, productive: 0.05, moving: 0.1, handling: 0, waiting: 0.15, idle: 0.75, tasklessTravel: 0.05 }
         }
       })
     }));
@@ -223,7 +228,11 @@ describe('dashboard resource utilization', () => {
       active: 1,
       idle: 1,
       averageUtilizationPct: 50,
-      peakUtilizationPct: 75
+      peakUtilizationPct: 75,
+      averageProductivePct: 32.5,
+      averageWaitingPct: 12.5,
+      averageIdlePct: 50,
+      averageTasklessTravelPct: 2.5
     });
     expect(summary.lifts).toMatchObject({
       total: 2,

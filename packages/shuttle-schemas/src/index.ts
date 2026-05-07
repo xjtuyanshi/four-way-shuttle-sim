@@ -437,6 +437,16 @@ export const ReservationSchema = z.object({
   reasonCode: z.string()
 });
 
+export const VehicleUtilizationBreakdownSchema = z.object({
+  busy: z.number().min(0).max(1),
+  productive: z.number().min(0).max(1),
+  moving: z.number().min(0).max(1),
+  handling: z.number().min(0).max(1),
+  waiting: z.number().min(0).max(1),
+  idle: z.number().min(0).max(1),
+  tasklessTravel: z.number().min(0).max(1)
+});
+
 export const KpiSnapshotSchema = z.object({
   inboundPph: z.number().nonnegative(),
   outboundPph: z.number().nonnegative(),
@@ -449,6 +459,7 @@ export const KpiSnapshotSchema = z.object({
   p95TaskCycleSec: z.number().nonnegative(),
   averageTaskWaitSec: z.number().nonnegative(),
   vehicleUtilization: z.record(z.number().min(0).max(1)),
+  vehicleUtilizationBreakdown: z.record(VehicleUtilizationBreakdownSchema).default({}),
   blockedTimeByReasonSec: z.record(z.number().nonnegative()),
   reservationConflictCount: z.number().int().nonnegative(),
   replanCount: z.number().int().nonnegative(),
