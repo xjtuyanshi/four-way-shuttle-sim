@@ -239,6 +239,14 @@ const CONTROLLED_PARAMS = [
     unit: 's'
   },
   {
+    label: 'Lift staging',
+    path: '/trafficPolicy/liftApproachCapacity',
+    min: 1,
+    max: 4,
+    step: 1,
+    unit: 'slots'
+  },
+  {
     label: 'Inbound rate',
     path: '/taskGeneration/inboundRatePerHour',
     min: 0,
@@ -381,7 +389,7 @@ export function mergeKpiUpdate(
 }
 
 export function shouldResetAfterParamUpdate(path: string, status: ShuttleSimState['status'] | null | undefined): boolean {
-  return path === '/vehicles/count' || path.startsWith('/taskGeneration/') || status === 'completed';
+  return path === '/vehicles/count' || path === '/trafficPolicy/liftApproachCapacity' || path.startsWith('/taskGeneration/') || status === 'completed';
 }
 
 export function shouldResumeAfterParamUpdate(path: string, status: ShuttleSimState['status'] | null | undefined): boolean {

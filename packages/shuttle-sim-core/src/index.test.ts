@@ -75,6 +75,7 @@ function testScenario(overrides: Partial<ShuttleScenario>): ShuttleScenario {
       edgeCapacity: 1,
       nodeCapacity: 1,
       zoneCapacity: 1,
+      liftApproachCapacity: 1,
       minimumClearanceSec: 0.2,
       priorityAgingSec: 20,
       deadlockDetectSec: 1,
@@ -1909,6 +1910,28 @@ describe('shuttle phase 0 SimCore', () => {
     expectNoLoadedStorageTransitThroughStoredLoads(state);
     expectNoTrafficSafetyFailures(state);
   }, 30000);
+
+  it('uses configured lift approach staging capacity without changing lift node capacity', () => {
+    const scenario = createDefaultShuttleScenario({
+      vehicles: { count: 12 },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        maxTasks: 80
+      },
+      trafficPolicy: { liftApproachCapacity: 3 }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    const state = runFor(sim, 90);
+    const inboundPorts = state.traffic.liftPorts.filter((port) => port.kind === 'inbound');
+
+    expect(inboundPorts).toHaveLength(4);
+    expect(inboundPorts.every((port) => port.approachCapacity === 3)).toBe(true);
+    expect(scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox').every((node) => node.capacity === 1)).toBe(true);
+    expect(Math.max(...inboundPorts.map((port) => port.approachOccupancy))).toBeGreaterThan(1);
+    expectNoTrafficSafetyFailures(state);
+  });
 
   it('accepts dashboard-style parameter updates through JSON pointers', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario());

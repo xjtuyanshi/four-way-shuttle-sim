@@ -104,6 +104,7 @@ export const TrafficPolicySchema = z.object({
   edgeCapacity: z.number().int().positive().default(1),
   nodeCapacity: z.number().int().positive().default(1),
   zoneCapacity: z.number().int().positive().default(1),
+  liftApproachCapacity: z.number().int().positive().default(1),
   minimumClearanceSec: z.number().nonnegative().default(0.4),
   priorityAgingSec: z.number().nonnegative().default(20),
   deadlockDetectSec: z.number().positive().default(15),

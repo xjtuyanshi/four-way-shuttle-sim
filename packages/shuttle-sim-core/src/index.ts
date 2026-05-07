@@ -723,6 +723,7 @@ export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides
       edgeCapacity: 1,
       nodeCapacity: 1,
       zoneCapacity: 1,
+      liftApproachCapacity: 1,
       minimumClearanceSec: 0.4,
       priorityAgingSec: 20,
       deadlockDetectSec: 15,
@@ -1426,7 +1427,7 @@ export class ShuttleSimCore {
   }
 
   private liftPortApproachCapacity(): number {
-    return 1;
+    return this.scenario.trafficPolicy.liftApproachCapacity;
   }
 
   private liftPortApproachCount(kind: 'inbound' | 'outbound', liftNodeId: string): number {
