@@ -229,9 +229,10 @@ void AShuttleVisualTwinBootstrapGameMode::BeginPlay()
     CameraSpawnParameters.Name = TEXT("ShuttleVisualTwinTopCamera");
     CameraSpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
+    constexpr float ShuttleSceneCameraOrthoWidthCm = 5600.0f;
     ACameraActor* CameraActor = World->SpawnActor<ACameraActor>(
-        FVector(2050.0f, 0.0f, 4800.0f),
-        FRotator(-90.0f, 0.0f, 0.0f),
+        FVector(2025.0f, 0.0f, 4800.0f),
+        FRotator(-90.0f, 90.0f, 0.0f),
         CameraSpawnParameters
     );
     if (!CameraActor)
@@ -243,7 +244,7 @@ void AShuttleVisualTwinBootstrapGameMode::BeginPlay()
     if (CameraComponent)
     {
         CameraComponent->SetProjectionMode(ECameraProjectionMode::Orthographic);
-        CameraComponent->SetOrthoWidth(6400.0f);
+        CameraComponent->SetOrthoWidth(ShuttleSceneCameraOrthoWidthCm);
     }
 
     if (APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0))
@@ -251,7 +252,7 @@ void AShuttleVisualTwinBootstrapGameMode::BeginPlay()
         PlayerController->SetViewTarget(CameraActor);
     }
 
-    ConfigurePixelStreamingRenderTarget(CameraActor->GetActorLocation(), CameraActor->GetActorRotation(), 6400.0f);
+    ConfigurePixelStreamingRenderTarget(CameraActor->GetActorLocation(), CameraActor->GetActorRotation(), ShuttleSceneCameraOrthoWidthCm);
     ConfigurePixelStreamingVideoProducer();
 
     UE_LOG(LogShuttleVisualTwinBootstrap, Display, TEXT("Bootstrap scene ready; Pixel Streaming video producer is bound to a render target."));
