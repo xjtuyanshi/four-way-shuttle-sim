@@ -289,7 +289,7 @@ describe('shuttle phase 0 SimCore', () => {
     ]);
     expect(parsed.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound')).toHaveLength(4);
     expect(parsed.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'outbound')).toHaveLength(4);
-    expect(parsed.layout.nodes.filter((node) => node.type === 'parking').map((node) => node.id).sort()).toEqual([
+    expect(parsed.layout.nodes.filter((node) => node.type === 'parking' && !node.noParking).map((node) => node.id).sort()).toEqual([
       'parking-a',
       'parking-b',
       'parking-c',
@@ -299,6 +299,7 @@ describe('shuttle phase 0 SimCore', () => {
       'parking-g',
       'parking-h'
     ]);
+    expect(parsed.layout.nodes.filter((node) => node.id.includes('-stage-') && node.type === 'parking' && node.noParking)).toHaveLength(12);
     expect(parsed.layout.zones.some((zone) => zone.noStop && zone.noParking)).toBe(true);
     expect(parsed.layout.calibrationProfile).toMatchObject({
       id: 'phase0-cad-assumption-v1',
@@ -543,17 +544,17 @@ describe('shuttle phase 0 SimCore', () => {
       storageCellCount: 384,
       blockedCellCount: 0,
       structuralCellCount: 0,
-      trackBedCount: 478,
+      trackBedCount: 494,
       storageLaneTrackCount: 400,
       sideAisleTrackCount: 42,
       crossAisleTrackCount: 12,
       inboundConnectorTrackCount: 8,
       outboundConnectorTrackCount: 8,
-      parkingConnectorTrackCount: 8,
+      parkingConnectorTrackCount: 24,
       diagonalTrackCount: 0,
       inboundLiftPadCount: 4,
       outboundLiftPadCount: 4,
-      parkingPadCount: 8,
+      parkingPadCount: 20,
       singleLevel: true,
       storageIslandCount: 8,
       denseStorageIslands: true,
@@ -669,7 +670,7 @@ describe('shuttle phase 0 SimCore', () => {
       'inbound-lift-top-02'
     ]);
     expect(contract.liftPads.filter((pad) => pad.category === 'outboundLift')).toHaveLength(4);
-    expect(contract.parkingPads.map((pad) => pad.id).sort()).toEqual([
+    expect(contract.parkingPads.filter((pad) => pad.id.startsWith('parking-')).map((pad) => pad.id).sort()).toEqual([
       'parking-a',
       'parking-b',
       'parking-c',
@@ -679,6 +680,7 @@ describe('shuttle phase 0 SimCore', () => {
       'parking-g',
       'parking-h'
     ]);
+    expect(contract.parkingPads.filter((pad) => pad.id.includes('-stage-'))).toHaveLength(12);
   });
 
   it('rejects vertical travel edges that cut through storage-cell footprints', () => {
@@ -1851,12 +1853,16 @@ describe('shuttle phase 0 SimCore', () => {
 
     expect(state.status).toBe('running');
     expect(state.simTimeSec).toBe(180);
-    expect(state.kpis.completedInbound).toBeGreaterThanOrEqual(3);
-    expect(state.kpis.totalPph).toBeGreaterThanOrEqual(60);
-    expect(state.kpis.activeTasks).toBeGreaterThanOrEqual(5);
+    expect(state.kpis.completedInbound).toBeGreaterThanOrEqual(10);
+    expect(state.kpis.totalPph).toBeGreaterThanOrEqual(200);
+    expect(state.kpis.activeTasks).toBe(12);
     expect(state.kpis.queuedTasks).toBeGreaterThan(0);
-    expect(utilizedVehicleCount).toBeGreaterThanOrEqual(8);
-    expect(state.traffic.liftPorts.filter((port) => port.kind === 'inbound').every((port) => port.approachOccupancy === port.approachCapacity)).toBe(true);
+    expect(utilizedVehicleCount).toBe(12);
+    expect(
+      state.traffic.liftPorts
+        .filter((port) => port.kind === 'inbound')
+        .reduce((total, port) => total + port.approachOccupancy, 0)
+    ).toBeGreaterThanOrEqual(7);
     expect(Object.keys(state.kpis.blockedTimeByReasonSec).some((reason) => reason.startsWith('inbound-lift-approach-full:'))).toBe(true);
     expect(Math.max(...state.traffic.liftPorts.filter((port) => port.kind === 'inbound').map((port) => port.utilization))).toBeLessThan(0.02);
     expectIdleVehiclesParkedOnlyOnParkableNodes(scenario, state);
@@ -1920,14 +1926,14 @@ describe('shuttle phase 0 SimCore', () => {
         inboundOutboundMix: 1,
         maxTasks: 80
       },
-      trafficPolicy: { liftApproachCapacity: 3 }
+      trafficPolicy: { liftApproachCapacity: 2 }
     });
     const sim = new ShuttleSimCore(scenario);
     const state = runFor(sim, 90);
     const inboundPorts = state.traffic.liftPorts.filter((port) => port.kind === 'inbound');
 
     expect(inboundPorts).toHaveLength(4);
-    expect(inboundPorts.every((port) => port.approachCapacity === 3)).toBe(true);
+    expect(inboundPorts.every((port) => port.approachCapacity === 2)).toBe(true);
     expect(scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox').every((node) => node.capacity === 1)).toBe(true);
     expect(Math.max(...inboundPorts.map((port) => port.approachOccupancy))).toBeGreaterThan(1);
     expectNoTrafficSafetyFailures(state);

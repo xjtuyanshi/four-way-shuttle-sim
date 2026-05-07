@@ -356,7 +356,7 @@ function buildStressScenarioSpecs(baseScenario: ShuttleScenario): Phase0StressSc
   const preloadOutletNodes = allStorageNodeIds.slice(0, 48);
   const nearFullStoredNodes = allStorageNodeIds.slice(0, Math.max(0, allStorageNodeIds.length - 4));
   const common = {
-    vehicles: { count: Math.min(4, baseScenario.vehicles.count < 4 ? 4 : baseScenario.vehicles.count) },
+    vehicles: { count: Math.max(12, baseScenario.vehicles.count) },
     physicsParams: stressPhysics,
     trafficPolicy: { deadlockDetectSec: 5 }
   };
@@ -377,7 +377,7 @@ function buildStressScenarioSpecs(baseScenario: ShuttleScenario): Phase0StressSc
         }
       }),
       initialStoredNodeIds: [],
-      expectedBottleneckReasonPrefixes: ['storage-empty', 'fifo-', 'inbound-lift-approach-full:'],
+      expectedBottleneckReasonPrefixes: ['storage-empty', 'fifo-'],
       requiresPositiveThroughput: true
     },
     {
@@ -431,7 +431,7 @@ function buildStressScenarioSpecs(baseScenario: ShuttleScenario): Phase0StressSc
         }
       }),
       initialStoredNodeIds: preloadOutletNodes,
-      expectedBottleneckReasonPrefixes: ['fifo-', 'outbound-lift-'],
+      expectedBottleneckReasonPrefixes: ['fifo-'],
       requiresPositiveThroughput: true
     },
     {

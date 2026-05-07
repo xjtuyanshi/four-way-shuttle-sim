@@ -4011,6 +4011,42 @@
       "side": "none"
     },
     {
+      "id": "inbound-lift-bottom-01-stage-01-inbound-lift-bottom-01",
+      "category": "parkingConnector",
+      "xM": 18.625,
+      "yM": 0,
+      "zM": 14.2,
+      "lengthXM": 3.25,
+      "lengthZM": 0.12,
+      "orientation": "x",
+      "row": 0,
+      "side": "bottom"
+    },
+    {
+      "id": "inbound-lift-bottom-01-stage-02-inbound-lift-bottom-01-stage-01",
+      "category": "parkingConnector",
+      "xM": 15.375,
+      "yM": 0,
+      "zM": 14.2,
+      "lengthXM": 3.25,
+      "lengthZM": 0.12,
+      "orientation": "x",
+      "row": 0,
+      "side": "bottom"
+    },
+    {
+      "id": "inbound-lift-bottom-01-stage-03-inbound-lift-bottom-01-stage-02",
+      "category": "parkingConnector",
+      "xM": 12.125,
+      "yM": 0,
+      "zM": 14.2,
+      "lengthXM": 3.25,
+      "lengthZM": 0.12,
+      "orientation": "x",
+      "row": 0,
+      "side": "bottom"
+    },
+    {
       "id": "inbound-lift-bottom-02-main-north-04",
       "category": "inboundConnector",
       "xM": 39.25,
@@ -4033,6 +4069,42 @@
       "orientation": "z",
       "row": 0,
       "side": "right"
+    },
+    {
+      "id": "inbound-lift-bottom-02-stage-01-inbound-lift-bottom-02",
+      "category": "parkingConnector",
+      "xM": 37.7085,
+      "yM": 0,
+      "zM": 14.2,
+      "lengthXM": 3.083,
+      "lengthZM": 0.12,
+      "orientation": "x",
+      "row": 0,
+      "side": "bottom"
+    },
+    {
+      "id": "inbound-lift-bottom-02-stage-02-inbound-lift-bottom-02-stage-01",
+      "category": "parkingConnector",
+      "xM": 34.625,
+      "yM": 0,
+      "zM": 14.2,
+      "lengthXM": 3.084,
+      "lengthZM": 0.12,
+      "orientation": "x",
+      "row": 0,
+      "side": "bottom"
+    },
+    {
+      "id": "inbound-lift-bottom-02-stage-03-inbound-lift-bottom-02-stage-02",
+      "category": "parkingConnector",
+      "xM": 31.5415,
+      "yM": 0,
+      "zM": 14.2,
+      "lengthXM": 3.083,
+      "lengthZM": 0.12,
+      "orientation": "x",
+      "row": 0,
+      "side": "bottom"
     },
     {
       "id": "inbound-lift-top-01-main-north-01",
@@ -4059,6 +4131,42 @@
       "side": "none"
     },
     {
+      "id": "inbound-lift-top-01-stage-01-inbound-lift-top-01",
+      "category": "parkingConnector",
+      "xM": 12.125,
+      "yM": 0,
+      "zM": -14.2,
+      "lengthXM": 3.25,
+      "lengthZM": 0.12,
+      "orientation": "x",
+      "row": 0,
+      "side": "top"
+    },
+    {
+      "id": "inbound-lift-top-01-stage-02-inbound-lift-top-01-stage-01",
+      "category": "parkingConnector",
+      "xM": 15.375,
+      "yM": 0,
+      "zM": -14.2,
+      "lengthXM": 3.25,
+      "lengthZM": 0.12,
+      "orientation": "x",
+      "row": 0,
+      "side": "top"
+    },
+    {
+      "id": "inbound-lift-top-01-stage-03-inbound-lift-top-01-stage-02",
+      "category": "parkingConnector",
+      "xM": 18.625,
+      "yM": 0,
+      "zM": -14.2,
+      "lengthXM": 3.25,
+      "lengthZM": 0.12,
+      "orientation": "x",
+      "row": 0,
+      "side": "top"
+    },
+    {
       "id": "inbound-lift-top-02-main-north-03",
       "category": "inboundConnector",
       "xM": 30,
@@ -4081,6 +4189,42 @@
       "orientation": "z",
       "row": 0,
       "side": "none"
+    },
+    {
+      "id": "inbound-lift-top-02-stage-01-inbound-lift-top-02",
+      "category": "parkingConnector",
+      "xM": 31.5415,
+      "yM": 0,
+      "zM": -14.2,
+      "lengthXM": 3.083,
+      "lengthZM": 0.12,
+      "orientation": "x",
+      "row": 0,
+      "side": "top"
+    },
+    {
+      "id": "inbound-lift-top-02-stage-02-inbound-lift-top-02-stage-01",
+      "category": "parkingConnector",
+      "xM": 34.625,
+      "yM": 0,
+      "zM": -14.2,
+      "lengthXM": 3.084,
+      "lengthZM": 0.12,
+      "orientation": "x",
+      "row": 0,
+      "side": "top"
+    },
+    {
+      "id": "inbound-lift-top-02-stage-03-inbound-lift-top-02-stage-02",
+      "category": "parkingConnector",
+      "xM": 37.7085,
+      "yM": 0,
+      "zM": -14.2,
+      "lengthXM": 3.083,
+      "lengthZM": 0.12,
+      "orientation": "x",
+      "row": 0,
+      "side": "top"
     },
     {
       "id": "left-bottom-right-bottom",
@@ -4359,6 +4503,18 @@
       "side": "none"
     },
     {
+      "id": "main-north-02-inbound-lift-top-01-stage-03",
+      "category": "parkingConnector",
+      "xM": 20.25,
+      "yM": 0,
+      "zM": -7.5,
+      "lengthXM": 0.12,
+      "lengthZM": 13.4,
+      "orientation": "z",
+      "row": 0,
+      "side": "none"
+    },
+    {
       "id": "main-north-02-main-north-03",
       "category": "crossAisle",
       "xM": 25.125,
@@ -4405,6 +4561,18 @@
       "orientation": "z",
       "row": 0,
       "side": "none"
+    },
+    {
+      "id": "main-north-04-inbound-lift-top-02-stage-03",
+      "category": "parkingConnector",
+      "xM": 39.25,
+      "yM": 0,
+      "zM": -7.5,
+      "lengthXM": 0.12,
+      "lengthZM": 13.4,
+      "orientation": "z",
+      "row": 0,
+      "side": "right"
     },
     {
       "id": "main-north-04-main-north-05",
@@ -4467,6 +4635,18 @@
       "side": "none"
     },
     {
+      "id": "main-south-01-inbound-lift-bottom-01-stage-03",
+      "category": "parkingConnector",
+      "xM": 10.5,
+      "yM": 0,
+      "zM": 7.5,
+      "lengthXM": 0.12,
+      "lengthZM": 13.4,
+      "orientation": "z",
+      "row": 0,
+      "side": "none"
+    },
+    {
       "id": "main-south-01-main-south-02",
       "category": "crossAisle",
       "xM": 15.375,
@@ -4487,6 +4667,18 @@
       "lengthXM": 9.75,
       "lengthZM": 0.1,
       "orientation": "x",
+      "row": 0,
+      "side": "none"
+    },
+    {
+      "id": "main-south-03-inbound-lift-bottom-02-stage-03",
+      "category": "parkingConnector",
+      "xM": 30,
+      "yM": 0,
+      "zM": 7.5,
+      "lengthXM": 0.12,
+      "lengthZM": 13.4,
+      "orientation": "z",
       "row": 0,
       "side": "none"
     },
@@ -9807,6 +9999,126 @@
   ],
   "parkingPads": [
     {
+      "id": "inbound-lift-bottom-01-stage-01",
+      "category": "parking",
+      "xM": 17,
+      "yM": 0,
+      "zM": 14.2,
+      "lengthXM": 1.5,
+      "lengthZM": 1.15,
+      "side": "mixed"
+    },
+    {
+      "id": "inbound-lift-bottom-01-stage-02",
+      "category": "parking",
+      "xM": 13.75,
+      "yM": 0,
+      "zM": 14.2,
+      "lengthXM": 1.5,
+      "lengthZM": 1.15,
+      "side": "mixed"
+    },
+    {
+      "id": "inbound-lift-bottom-01-stage-03",
+      "category": "parking",
+      "xM": 10.5,
+      "yM": 0,
+      "zM": 14.2,
+      "lengthXM": 1.5,
+      "lengthZM": 1.15,
+      "side": "mixed"
+    },
+    {
+      "id": "inbound-lift-bottom-02-stage-01",
+      "category": "parking",
+      "xM": 36.167,
+      "yM": 0,
+      "zM": 14.2,
+      "lengthXM": 1.5,
+      "lengthZM": 1.15,
+      "side": "mixed"
+    },
+    {
+      "id": "inbound-lift-bottom-02-stage-02",
+      "category": "parking",
+      "xM": 33.083,
+      "yM": 0,
+      "zM": 14.2,
+      "lengthXM": 1.5,
+      "lengthZM": 1.15,
+      "side": "mixed"
+    },
+    {
+      "id": "inbound-lift-bottom-02-stage-03",
+      "category": "parking",
+      "xM": 30,
+      "yM": 0,
+      "zM": 14.2,
+      "lengthXM": 1.5,
+      "lengthZM": 1.15,
+      "side": "mixed"
+    },
+    {
+      "id": "inbound-lift-top-01-stage-01",
+      "category": "parking",
+      "xM": 13.75,
+      "yM": 0,
+      "zM": -14.2,
+      "lengthXM": 1.5,
+      "lengthZM": 1.15,
+      "side": "mixed"
+    },
+    {
+      "id": "inbound-lift-top-01-stage-02",
+      "category": "parking",
+      "xM": 17,
+      "yM": 0,
+      "zM": -14.2,
+      "lengthXM": 1.5,
+      "lengthZM": 1.15,
+      "side": "mixed"
+    },
+    {
+      "id": "inbound-lift-top-01-stage-03",
+      "category": "parking",
+      "xM": 20.25,
+      "yM": 0,
+      "zM": -14.2,
+      "lengthXM": 1.5,
+      "lengthZM": 1.15,
+      "side": "mixed"
+    },
+    {
+      "id": "inbound-lift-top-02-stage-01",
+      "category": "parking",
+      "xM": 33.083,
+      "yM": 0,
+      "zM": -14.2,
+      "lengthXM": 1.5,
+      "lengthZM": 1.15,
+      "side": "mixed"
+    },
+    {
+      "id": "inbound-lift-top-02-stage-02",
+      "category": "parking",
+      "xM": 36.167,
+      "yM": 0,
+      "zM": -14.2,
+      "lengthXM": 1.5,
+      "lengthZM": 1.15,
+      "side": "mixed"
+    },
+    {
+      "id": "inbound-lift-top-02-stage-03",
+      "category": "parking",
+      "xM": 39.25,
+      "yM": 0,
+      "zM": -14.2,
+      "lengthXM": 1.5,
+      "lengthZM": 1.15,
+      "side": "right"
+    },
+    {
       "id": "parking-a",
       "category": "parking",
       "xM": 42.9,
@@ -9892,17 +10204,17 @@
   "storageCellCount": 384,
   "blockedCellCount": 0,
   "structuralCellCount": 0,
-  "trackBedCount": 478,
+  "trackBedCount": 494,
   "storageLaneTrackCount": 400,
   "sideAisleTrackCount": 42,
   "crossAisleTrackCount": 12,
   "inboundConnectorTrackCount": 8,
   "outboundConnectorTrackCount": 8,
-  "parkingConnectorTrackCount": 8,
+  "parkingConnectorTrackCount": 24,
   "diagonalTrackCount": 0,
   "inboundLiftPadCount": 4,
   "outboundLiftPadCount": 4,
-  "parkingPadCount": 8,
+  "parkingPadCount": 20,
   "storagePitchXM": 1.25,
   "storagePitchZM": 1.2,
   "storageBlockMinXM": 2.5,

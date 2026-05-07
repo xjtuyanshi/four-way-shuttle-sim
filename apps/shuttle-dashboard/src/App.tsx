@@ -242,7 +242,7 @@ const CONTROLLED_PARAMS = [
     label: 'Lift staging',
     path: '/trafficPolicy/liftApproachCapacity',
     min: 1,
-    max: 4,
+    max: 3,
     step: 1,
     unit: 'slots'
   },

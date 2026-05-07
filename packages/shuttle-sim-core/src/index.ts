@@ -376,7 +376,7 @@ function createDefaultLayout(profile: ShuttleLayoutGeometryProfile = DEFAULT_SHU
     );
   });
 
-  [
+  const liftDefinitions = [
     { id: 'inbound-lift-top-01', liftKind: 'inbound' as const, x: liftPortalXs[0]!, z: topLiftZ },
     { id: 'outbound-lift-top-01', liftKind: 'outbound' as const, x: liftPortalXs[1]!, z: topLiftZ },
     { id: 'inbound-lift-top-02', liftKind: 'inbound' as const, x: liftPortalXs[2]!, z: topLiftZ },
@@ -385,8 +385,33 @@ function createDefaultLayout(profile: ShuttleLayoutGeometryProfile = DEFAULT_SHU
     { id: 'inbound-lift-bottom-01', liftKind: 'inbound' as const, x: liftPortalXs[1]!, z: bottomLiftZ },
     { id: 'outbound-lift-bottom-02', liftKind: 'outbound' as const, x: liftPortalXs[2]!, z: bottomLiftZ },
     { id: 'inbound-lift-bottom-02', liftKind: 'inbound' as const, x: liftPortalXs[3]!, z: bottomLiftZ }
-  ].forEach((lift) => {
+  ];
+  const inboundStagingPortalXByLiftId = new Map<string, number>([
+    ['inbound-lift-top-01', liftPortalXs[1]!],
+    ['inbound-lift-top-02', liftPortalXs[3]!],
+    ['inbound-lift-bottom-01', liftPortalXs[0]!],
+    ['inbound-lift-bottom-02', liftPortalXs[2]!]
+  ]);
+
+  liftDefinitions.forEach((lift) => {
     nodes.push({ id: lift.id, type: 'lift-blackbox', liftKind: lift.liftKind, x: lift.x, y: 0, z: lift.z, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
+  });
+  liftDefinitions.filter((lift) => lift.liftKind === 'inbound').forEach((lift) => {
+    const stagingPortalX = inboundStagingPortalXByLiftId.get(lift.id) ?? lift.x;
+    const stagingPitchX = (stagingPortalX - lift.x) / 3;
+    for (let stageIndex = 1; stageIndex <= 3; stageIndex += 1) {
+      nodes.push({
+        id: `${lift.id}-stage-${String(stageIndex).padStart(2, '0')}`,
+        type: 'parking',
+        x: round(lift.x + stagingPitchX * stageIndex, 3),
+        y: 0,
+        z: lift.z,
+        noStop: false,
+        noParking: true,
+        capacity: 1,
+        allowedDirections: []
+      });
+    }
   });
 
   for (let rowIndex = 0; rowIndex < rowZs.length; rowIndex += 1) {
@@ -467,7 +492,7 @@ function createDefaultLayout(profile: ShuttleLayoutGeometryProfile = DEFAULT_SHU
   addEdge('parking-g-parking-c', 'parking-g', 'parking-c', 'parking-staging-left-north');
   addEdge('parking-h-parking-d', 'parking-h', 'parking-d', 'parking-staging-left-south');
 
-  [
+  const liftConnectorDefinitions = [
     { id: 'inbound-lift-top-01', targets: [mainLaneNodeId('north', 1), mainLaneNodeId('south', 1)] },
     { id: 'outbound-lift-top-01', targets: [mainLaneNodeId('north', 2), mainLaneNodeId('south', 2)] },
     { id: 'inbound-lift-top-02', targets: [mainLaneNodeId('north', 3), mainLaneNodeId('south', 3)] },
@@ -476,11 +501,30 @@ function createDefaultLayout(profile: ShuttleLayoutGeometryProfile = DEFAULT_SHU
     { id: 'inbound-lift-bottom-01', targets: [mainLaneNodeId('north', 2), mainLaneNodeId('south', 2)] },
     { id: 'outbound-lift-bottom-02', targets: [mainLaneNodeId('north', 3), mainLaneNodeId('south', 3)] },
     { id: 'inbound-lift-bottom-02', targets: [mainLaneNodeId('north', 4), mainLaneNodeId('south', 4)] }
-  ].forEach((connector) => {
+  ];
+  liftConnectorDefinitions.forEach((connector) => {
     for (const target of connector.targets) {
       addEdge(`${connector.id}-${target}`, connector.id, target, `${connector.id}-dock`);
     }
   });
+  liftConnectorDefinitions
+    .filter((connector) => liftDefinitions.some((lift) => lift.id === connector.id && lift.liftKind === 'inbound'))
+    .forEach((connector) => {
+      const lift = liftDefinitions.find((candidate) => candidate.id === connector.id)!;
+      const stagingPortalX = inboundStagingPortalXByLiftId.get(lift.id) ?? lift.x;
+      const stagingPortalIndex = mainXs.findIndex((x) => Math.abs(x - stagingPortalX) <= 1e-6);
+      if (stagingPortalIndex < 0) {
+        throw new Error(`Default layout staging portal for ${lift.id} does not align with a main lane portal.`);
+      }
+      const approachTarget = lift.z < profile.mainLaneNorthZM
+        ? mainLaneNodeId('north', stagingPortalIndex)
+        : mainLaneNodeId('south', stagingPortalIndex);
+      const stageNodeIds = [1, 2, 3].map((stageIndex) => `${connector.id}-stage-${String(stageIndex).padStart(2, '0')}`);
+      addEdge(`${approachTarget}-${stageNodeIds[2]!}`, approachTarget, stageNodeIds[2]!, `${connector.id}-staging-approach`, 'oneWay');
+      addEdge(`${stageNodeIds[2]!}-${stageNodeIds[1]!}`, stageNodeIds[2]!, stageNodeIds[1]!, `${connector.id}-staging-queue`, 'oneWay');
+      addEdge(`${stageNodeIds[1]!}-${stageNodeIds[0]!}`, stageNodeIds[1]!, stageNodeIds[0]!, `${connector.id}-staging-queue`, 'oneWay');
+      addEdge(`${stageNodeIds[0]!}-${connector.id}`, stageNodeIds[0]!, connector.id, `${connector.id}-staging-dock`, 'oneWay');
+    });
 
   const topRowNodeIds = rowZs.map((z, rowIndex) => ({ z, left: `left-row-${String(rowIndex + 1).padStart(2, '0')}`, right: `right-row-${String(rowIndex + 1).padStart(2, '0')}` }))
     .filter((row) => row.z < profile.mainLaneNorthZM);
@@ -560,9 +604,12 @@ function createDefaultLayout(profile: ShuttleLayoutGeometryProfile = DEFAULT_SHU
   const liftConnectorEdges = edges.filter((edge) => {
     const fromNode = nodesById.get(edge.from);
     const toNode = nodesById.get(edge.to);
+    const isVertical = fromNode?.x === toNode?.x;
+    const isInboundStagingAccess = isVertical && edge.conflictGroup?.includes('-staging-');
     return (
       (fromNode?.type === 'lift-blackbox' && toNode?.id.startsWith('main-')) ||
-      (toNode?.type === 'lift-blackbox' && fromNode?.id.startsWith('main-'))
+      (toNode?.type === 'lift-blackbox' && fromNode?.id.startsWith('main-')) ||
+      Boolean(isInboundStagingAccess)
     );
   });
   const fifoLaneEdges = edges.filter((edge) => edge.conflictGroup?.startsWith('fifo-lane'));
@@ -649,6 +696,7 @@ function createDefaultLayout(profile: ShuttleLayoutGeometryProfile = DEFAULT_SHU
           const otherNode = nodesById.get(otherNodeId);
           return (
             otherNode?.type === 'lift-blackbox' ||
+            otherNode?.id.includes('-stage-') ||
             edge.id === `${mainLaneNodeId('north', index)}-${mainLaneNodeId('south', index)}`
           );
         })
@@ -723,7 +771,7 @@ export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides
       edgeCapacity: 1,
       nodeCapacity: 1,
       zoneCapacity: 1,
-      liftApproachCapacity: 1,
+      liftApproachCapacity: 3,
       minimumClearanceSec: 0.4,
       priorityAgingSec: 20,
       deadlockDetectSec: 15,
@@ -835,6 +883,17 @@ class TrafficReservationController {
         resourceId: edge.id,
         conflictGroup: edge.conflictGroup ?? null,
         reasonCode: 'edge-reservation',
+        vehicleId: options.vehicleId,
+        taskId: options.taskId,
+        startTimeSec: options.startTimeSec,
+        endTimeSec,
+        priority: options.priority
+      }),
+      this.createReservation({
+        resourceType: 'node',
+        resourceId: options.fromNodeId,
+        conflictGroup: currentNodeZones[0]?.conflictGroup ?? null,
+        reasonCode: 'node-departure-reservation',
         vehicleId: options.vehicleId,
         taskId: options.taskId,
         startTimeSec: options.startTimeSec,
@@ -2024,18 +2083,25 @@ export class ShuttleSimCore {
     return reservation.startTimeSec <= this.simTimeSec + 1e-6 && this.simTimeSec <= reservation.endTimeSec + 1e-6;
   }
 
-  private hasActiveSelfMoveAuthorization(vehicle: MutableVehicle, edgeId: string, targetNodeId: string): boolean {
+  private hasActiveSelfMoveAuthorization(
+    vehicle: MutableVehicle,
+    edgeId: string,
+    targetNodeId: string,
+    requiredEndTimeSec: number
+  ): boolean {
     const hasEdgeReservation = this.reservations.some((reservation) =>
       reservation.vehicleId === vehicle.id &&
       reservation.resourceType === 'edge' &&
       reservation.resourceId === edgeId &&
-      this.reservationIsActive(reservation)
+      this.reservationIsActive(reservation) &&
+      reservation.endTimeSec >= requiredEndTimeSec - 1e-6
     );
     const hasNodeReservation = this.reservations.some((reservation) =>
       reservation.vehicleId === vehicle.id &&
       reservation.resourceType === 'node' &&
       reservation.resourceId === targetNodeId &&
-      this.reservationIsActive(reservation)
+      this.reservationIsActive(reservation) &&
+      reservation.endTimeSec >= requiredEndTimeSec - 1e-6
     );
     return hasEdgeReservation && hasNodeReservation;
   }
@@ -2109,12 +2175,13 @@ export class ShuttleSimCore {
   private planRoute(currentNodeId: string, task: TaskStateRecord, parkingNodeId: string): string[] {
     const route: string[] = [currentNodeId];
     const storageEntrySideNodeId = task.kind === 'inbound' ? this.storageSideNodeId(task.dropoffNodeId, 'right') : this.storageSideNodeId(task.pickupNodeId, 'left');
+    const liftStagingNodeId = task.kind === 'inbound' ? this.inboundLiftStagingNodeForTask(task) : null;
     const currentStorageExitNodeId = task.kind === 'inbound' && this.isStorageNode(currentNodeId)
       ? this.storageSideNodeId(currentNodeId, 'left') ?? this.nearestStorageSideNodeId(currentNodeId)
       : null;
     const alreadyAtOutboundPickup = task.kind === 'outbound' && currentNodeId === task.pickupNodeId;
     const targets = task.kind === 'inbound'
-      ? [currentStorageExitNodeId, task.pickupNodeId, storageEntrySideNodeId, task.dropoffNodeId]
+      ? [currentStorageExitNodeId, liftStagingNodeId, task.pickupNodeId, storageEntrySideNodeId, task.dropoffNodeId]
       : alreadyAtOutboundPickup
         ? [task.dropoffNodeId, parkingNodeId]
         : [storageEntrySideNodeId, task.pickupNodeId, storageEntrySideNodeId, task.dropoffNodeId, parkingNodeId];
@@ -2129,6 +2196,33 @@ export class ShuttleSimCore {
       route.push(...segment.slice(1));
     }
     return route;
+  }
+
+  private inboundLiftStagingNodeIds(liftNodeId: string): string[] {
+    return this.scenario.layout.nodes
+      .map((node) => node.id)
+      .filter((nodeId) => nodeId.startsWith(`${liftNodeId}-stage-`))
+      .sort((left, right) => left.localeCompare(right));
+  }
+
+  private inboundLiftStagingNodeForTask(task: TaskStateRecord): string | null {
+    const liftNodeId = this.taskLiftPortNodeId(task);
+    if (!liftNodeId || task.kind !== 'inbound') {
+      return null;
+    }
+    const stageNodeIds = this.inboundLiftStagingNodeIds(liftNodeId).slice(0, this.liftPortApproachCapacity());
+    if (stageNodeIds.length === 0) {
+      return null;
+    }
+    const activeSameLiftTaskCount = this.tasks.filter((candidate) =>
+      candidate.id !== task.id &&
+      candidate.kind === 'inbound' &&
+      candidate.state !== 'queued' &&
+      candidate.state !== 'completed' &&
+      candidate.state !== 'failed' &&
+      this.taskLiftPortNodeId(candidate) === liftNodeId
+    ).length;
+    return stageNodeIds[Math.min(activeSameLiftTaskCount, stageNodeIds.length - 1)] ?? null;
   }
 
   private storageSideNodeId(storageNodeId: string, side: 'left' | 'right'): string | null {
@@ -2286,7 +2380,10 @@ export class ShuttleSimCore {
       node.type === 'storage' && !node.noStop && !node.noParking;
     const dedicatedParking = this.scenario.layout.nodes
       .filter((node) => node.type === 'parking' && !node.noStop && !node.noParking)
-      .sort((left, right) => left.id.localeCompare(right.id));
+      .sort((left, right) => {
+        const parkingRank = (nodeId: string): number => nodeId.startsWith('parking-') ? 0 : 1;
+        return parkingRank(left.id) - parkingRank(right.id) || left.id.localeCompare(right.id);
+      });
     const temporaryStorageParking = this.scenario.layout.nodes
       .filter(isParkableStorage)
       .sort((left, right) => {
@@ -2915,7 +3012,8 @@ export class ShuttleSimCore {
       ? firstEdge.lengthM / Math.max(0.001, firstSpeed)
       : calculateTravelTimeSec(firstEdge.lengthM, firstSpeed, this.scenario.physicsParams.accelerationMps2);
 
-    if (this.hasActiveSelfMoveAuthorization(vehicle, firstEdge.id, firstToNodeId)) {
+    const requiredSelfAuthorizationEndSec = this.simTimeSec + firstTravelSec + this.scenario.trafficPolicy.minimumClearanceSec;
+    if (this.hasActiveSelfMoveAuthorization(vehicle, firstEdge.id, firstToNodeId, requiredSelfAuthorizationEndSec)) {
       return {
         ok: true,
         edge: firstEdge,
