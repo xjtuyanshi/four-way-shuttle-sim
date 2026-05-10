@@ -82,6 +82,10 @@ function state(overrides: Partial<ShuttleSimState> = {}): ShuttleSimState {
     loads: [],
     reservations: [],
     traffic: {
+      trafficMode: 'flow-debug',
+      safetyValidated: false,
+      longHorizonReservationEnabled: false,
+      legacyZoneHoldEnabled: false,
       activeReservationCount: 0,
       waitingVehicles: [],
       liftPorts: [],
@@ -175,6 +179,10 @@ describe('dashboard resource utilization', () => {
         }
       ],
       traffic: {
+        trafficMode: 'flow-debug',
+        safetyValidated: false,
+        longHorizonReservationEnabled: false,
+        legacyZoneHoldEnabled: false,
         activeReservationCount: 0,
         waitingVehicles: [],
         liftPorts: [

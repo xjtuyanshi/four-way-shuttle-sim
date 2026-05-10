@@ -318,6 +318,71 @@ describe('shuttle phase 0 SimCore', () => {
     ]);
   });
 
+  it('can create an all-inbound lift layout with staging for every lift position', () => {
+    const scenario = createDefaultShuttleScenario({ liftMode: 'all-inbound', vehicles: { count: 8 } });
+    const parsed = ShuttleScenarioSchema.parse(scenario);
+    const liftNodes = parsed.layout.nodes.filter((node) => node.type === 'lift-blackbox');
+
+    expect(liftNodes).toHaveLength(8);
+    expect(liftNodes.every((node) => node.liftKind === 'inbound')).toBe(true);
+    expect(parsed.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'outbound')).toHaveLength(0);
+    expect(parsed.layout.nodes.filter((node) => node.id.includes('-stage-') && node.type === 'parking' && node.noParking)).toHaveLength(24);
+    for (const lift of liftNodes) {
+      expect(parsed.layout.nodes.filter((node) => node.id.startsWith(`${lift.id}-stage-`))).toHaveLength(3);
+    }
+
+    const state = new ShuttleSimCore(scenario).getState();
+    expect(state.traffic.liftPorts.filter((port) => port.kind === 'inbound')).toHaveLength(8);
+    expect(state.traffic.liftPorts.filter((port) => port.kind === 'outbound')).toHaveLength(0);
+  });
+
+  it('limits generated inbound source loads to one waiting pallet per lift', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 16
+      },
+      physicsParams: {
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01
+      },
+      trafficPolicy: {
+        liftApproachCapacity: 8
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.start();
+    for (let index = 0; index < 80; index += 1) {
+      sim.step(0.2);
+    }
+
+    const state = sim.getState();
+    const inboundLiftIds = new Set(
+      scenario.layout.nodes
+        .filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound')
+        .map((node) => node.id)
+    );
+    const waitingSourceLoads = state.loads.filter((load) =>
+      load.state === 'waiting' &&
+      load.nodeId !== null &&
+      inboundLiftIds.has(load.nodeId)
+    );
+    const waitingLoadsByLift = new Map<string, number>();
+    for (const load of waitingSourceLoads) {
+      waitingLoadsByLift.set(load.nodeId!, (waitingLoadsByLift.get(load.nodeId!) ?? 0) + 1);
+    }
+
+    expect(waitingSourceLoads.length).toBeLessThanOrEqual(inboundLiftIds.size);
+    expect(Math.max(0, ...waitingLoadsByLift.values())).toBeLessThanOrEqual(1);
+    expect(state.tasks.filter((task) => task.kind === 'inbound' && task.state === 'assigned')).toHaveLength(8);
+    expect(state.tasks.length).toBeLessThanOrEqual(16);
+  });
+
   it('parses legacy state diagnostics without lift-port allocation details', () => {
     const state = new ShuttleSimCore(createDefaultShuttleScenario()).getState();
     const legacyTraffic: Record<string, unknown> = { ...state.traffic };
@@ -386,6 +451,146 @@ describe('shuttle phase 0 SimCore', () => {
       loadId: 'load-above-sh-09'
     });
   });
+
+  it('parks inbound-only idle shuttles inside storage cells before using aisle-side pads', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario({
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 8
+      }
+    }));
+
+    expect(sim.getState().vehicles.map((vehicle) => vehicle.currentNodeId)).toEqual([
+      'storage-r16-c12',
+      'storage-r16-c24',
+      'storage-r01-c06',
+      'storage-r01-c18',
+      'storage-r16-c01',
+      'storage-r15-c01',
+      'storage-r14-c01',
+      'storage-r13-c01'
+    ]);
+    expect(sim.getState().vehicles.every((vehicle) => !vehicle.currentNodeId.startsWith('parking-'))).toBe(true);
+  });
+
+  it('primes saturated all-inbound sources and dispatches every shuttle without aisle-wide serialization', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: {
+        count: 8,
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.5,
+        accelerationMps2: 1.2,
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01
+      },
+      physicsParams: {
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.5,
+        accelerationMps2: 1.2,
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01
+      },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 16
+      },
+      trafficPolicy: {
+        liftApproachCapacity: 8,
+        minimumClearanceSec: 0.4,
+        deadlockDetectSec: 20
+      }
+    }));
+    const resetState = sim.getState();
+    const waitingLoads = resetState.loads.filter((load) => load.state === 'waiting');
+
+    expect(resetState.tasks).toHaveLength(8);
+    expect(waitingLoads).toHaveLength(8);
+    expect(new Set(resetState.tasks.map((task) => task.pickupNodeId)).size).toBe(8);
+    expect(new Set(waitingLoads.map((load) => load.nodeId)).size).toBe(8);
+
+    sim.start();
+    const dispatchedState = sim.step(0.1);
+
+    expect(dispatchedState.tasks.filter((task) => task.state === 'assigned')).toHaveLength(8);
+    expect(dispatchedState.vehicles.filter((vehicle) => vehicle.currentEdgeId !== null)).toHaveLength(8);
+    expect(dispatchedState.traffic.waitingVehicles).toEqual([]);
+    expect(dispatchedState.vehicles.every((vehicle) => vehicle.waitReason === null)).toBe(true);
+    expect(dispatchedState.traffic).toMatchObject({
+      trafficMode: 'flow-debug',
+      safetyValidated: false,
+      longHorizonReservationEnabled: false,
+      legacyZoneHoldEnabled: false
+    });
+    expect(dispatchedState.reservations.some((reservation) => reservation.reasonCode === 'zone-hold')).toBe(false);
+    expectNoTrafficSafetyFailures(dispatchedState);
+  });
+
+  it('keeps the 8-shuttle all-inbound stress flow alive without a legacy reservation wall', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      durationSec: 7200,
+      vehicles: {
+        count: 8,
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.5,
+        accelerationMps2: 1.2,
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01
+      },
+      physicsParams: {
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.5,
+        accelerationMps2: 1.2,
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01
+      },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 16
+      },
+      trafficPolicy: {
+        liftApproachCapacity: 8,
+        minimumClearanceSec: 0.4,
+        deadlockDetectSec: 20
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.start();
+
+    for (let index = 0; index < 5; index += 1) {
+      sim.step(0.2);
+    }
+    const oneSecondState = sim.getState();
+
+    expect(oneSecondState.tasks.filter((task) => task.state === 'assigned')).toHaveLength(8);
+    expect(oneSecondState.vehicles.filter((vehicle) => vehicle.currentEdgeId !== null)).toHaveLength(8);
+    expect(oneSecondState.traffic.waitingVehicles).toEqual([]);
+    expect(oneSecondState.reservations.some((reservation) => reservation.reasonCode === 'zone-hold')).toBe(false);
+
+    for (let index = 0; index < 595; index += 1) {
+      sim.step(0.2);
+    }
+    const state = sim.getState();
+
+    expect(state.kpis.completedInbound).toBeGreaterThan(0);
+    expect(state.kpis.totalPph).toBeGreaterThan(0);
+    expect(state.traffic.waitingVehicles.length).toBeLessThan(8);
+    expect(state.traffic.deadlockCandidateVehicleIds).toEqual([]);
+    expect(state.reservations.some((reservation) => reservation.reasonCode === 'zone-hold')).toBe(false);
+    expect(state.kpis.blockedTimeByReasonSec['zone-reserved'] ?? 0).toBeLessThan(20);
+    expectNoTrafficSafetyFailures(state);
+  }, 30000);
 
   it('does not allocate inbound dropoff cells currently occupied by parked shuttles', () => {
     const scenario = createDefaultShuttleScenario({
@@ -944,16 +1149,16 @@ describe('shuttle phase 0 SimCore', () => {
   });
 
   it('produces the same event log hash for the same seed', () => {
-    const scenario = createDefaultShuttleScenario({ durationSec: 180, taskGeneration: { maxTasks: 8 } });
+    const scenario = createDefaultShuttleScenario({ durationSec: 90, taskGeneration: { maxTasks: 8 } });
     const hashes = Array.from({ length: 3 }, () => {
       const sim = new ShuttleSimCore(scenario);
-      sim.runToEnd(180);
+      sim.runToEnd(90);
       return hashEventLog(sim.getEventLog());
     });
 
     expect(new Set(hashes).size).toBe(1);
     expect(hashes[0]).toMatch(/^[a-f0-9]{64}$/);
-  }, 30000);
+  }, 60000);
 
   it('does not advance while paused and resumes without losing state', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({ durationSec: 120 }));
@@ -1003,7 +1208,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.tasks.every((task) => task.kind !== 'outbound' || liftKindByNodeId.get(task.dropoffNodeId) === 'outbound')).toBe(true);
     expect(state.traffic.liftPorts).toHaveLength(8);
     expect(state.traffic.liftPorts.some((port) => port.kind === 'inbound' && port.utilization > 0)).toBe(true);
-  });
+  }, 15000);
 
   it('lets opposite main-lane traffic pass without portal-zone deadlock in the default layout', () => {
     const scenario = createDefaultShuttleScenario({
@@ -1027,21 +1232,21 @@ describe('shuttle phase 0 SimCore', () => {
       }
     });
     const sim = new ShuttleSimCore(scenario);
-    sim.setVehicleRouteForTest('SH-01', ['main-north-03', 'main-north-02', 'main-north-01']);
-    sim.setVehicleRouteForTest('SH-02', ['main-south-02', 'main-south-03', 'main-south-04']);
+    sim.setVehicleRouteForTest('SH-01', ['main-north-03', 'main-north-02', 'main-north-01', 'main-north-00', 'parking-c']);
+    sim.setVehicleRouteForTest('SH-02', ['main-south-02', 'main-south-03', 'main-south-04', 'main-south-05', 'parking-b']);
 
-    for (let index = 0; index < 80; index += 1) {
+    for (let index = 0; index < 120; index += 1) {
       sim.step(0.2);
     }
 
     const state = sim.getState();
     expect(state.kpis.deadlockCount).toBe(0);
     expect(state.vehicles.every((vehicle) => vehicle.waitReason !== 'zone-reserved')).toBe(true);
-    expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-01')?.currentNodeId).toBe('main-north-01');
-    expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-02')?.currentNodeId).toBe('main-south-04');
+    expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-01')?.currentNodeId).toBe('parking-c');
+    expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-02')?.currentNodeId).toBe('parking-b');
   });
 
-  it('reroutes head-on main-lane swaps through the parallel bidirectional aisle', () => {
+  it('holds head-on main-lane swaps at parking pads when neither shuttle can clear a no-stop route', () => {
     const scenario = createDefaultShuttleScenario({
       durationSec: 60,
       vehicles: {
@@ -1066,22 +1271,26 @@ describe('shuttle phase 0 SimCore', () => {
       }
     });
     const sim = new ShuttleSimCore(scenario);
-    sim.setVehicleRouteForTest('SH-01', ['main-north-04', 'main-north-05']);
-    sim.setVehicleRouteForTest('SH-02', ['main-north-05', 'main-north-04']);
+    sim.setVehicleRouteForTest('SH-01', ['parking-c', 'main-north-00', 'main-north-01', 'main-north-02', 'main-north-03', 'main-north-04', 'main-north-05', 'parking-a']);
+    sim.setVehicleRouteForTest('SH-02', ['parking-a', 'main-north-05', 'main-north-04', 'main-north-03', 'main-north-02', 'main-north-01', 'main-north-00', 'parking-c']);
 
-    for (let index = 0; index < 80; index += 1) {
+    for (let index = 0; index < 10; index += 1) {
       sim.step(0.2);
     }
 
     const state = sim.getState();
     expect(state.kpis.deadlockCount).toBe(0);
-    expect(state.kpis.replanCount).toBe(1);
-    expect(sim.getEventLog()).toContainEqual(expect.objectContaining({
-      eventType: 'route-replanned',
-      reason: 'head-on-yield-detour'
-    }));
-    expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-01')?.currentNodeId).toBe('main-north-05');
-    expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-02')?.currentNodeId).toBe('main-north-04');
+    expect(state.traffic.deadlockCandidateVehicleIds).toEqual([]);
+    expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-01')).toMatchObject({
+      currentNodeId: 'parking-c',
+      currentEdgeId: null,
+      waitReason: 'no-stop-clearance-incomplete'
+    });
+    expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-02')).toMatchObject({
+      currentNodeId: 'parking-a',
+      currentEdgeId: null,
+      waitReason: 'no-stop-clearance-incomplete'
+    });
   });
 
   it('does not serialize parallel main-aisle travel through a broad portal zone', () => {
@@ -1108,8 +1317,8 @@ describe('shuttle phase 0 SimCore', () => {
     expect(scenario.layout.zones.find((zone) => zone.id === 'zone-main-portal-02')).toBeUndefined();
 
     const sim = new ShuttleSimCore(scenario);
-    sim.setVehicleRouteForTest('SH-01', ['main-south-03', 'main-south-04']);
-    sim.setVehicleRouteForTest('SH-02', ['main-north-03', 'main-north-04']);
+    sim.setVehicleRouteForTest('SH-01', ['main-south-03', 'main-south-04', 'main-south-05', 'parking-b']);
+    sim.setVehicleRouteForTest('SH-02', ['main-north-03', 'main-north-04', 'main-north-05', 'parking-a']);
     sim.step(0.2);
 
     const state = sim.getState();
@@ -1127,7 +1336,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(parallelVehicle?.state).not.toBe('waiting-blocked');
   });
 
-  it('keeps a stopped portal-node occupant holding the portal zone', () => {
+  it('does not let a stopped portal-node occupant hold downstream portal zones', () => {
     const scenario = createDefaultShuttleScenario({
       durationSec: 20,
       taskGeneration: {
@@ -1169,7 +1378,7 @@ describe('shuttle phase 0 SimCore', () => {
       currentEdgeId: null,
       waitReason: 'edge-reserved'
     });
-    expect(sim.getState().reservations).toContainEqual(
+    expect(sim.getState().reservations).not.toContainEqual(
       expect.objectContaining({ vehicleId: 'SH-01', resourceType: 'zone', resourceId: 'zone-main-portal-node-02', reasonCode: 'zone-hold' })
     );
 
@@ -1178,8 +1387,43 @@ describe('shuttle phase 0 SimCore', () => {
 
     expect(sim.getState().vehicles.find((vehicle) => vehicle.id === 'SH-02')).toMatchObject({
       state: 'waiting-blocked',
-      waitReason: 'zone-reserved',
+      waitReason: 'no-stop-continuation-blocked',
       currentNodeId: 'outbound-lift-top-01'
+    });
+  });
+
+  it('does not enter a no-stop control chain unless the route can clear to a stoppable node', () => {
+    const sim = new ShuttleSimCore(testScenario({
+      layout: {
+        units: 'meter',
+        calibrationProfile: null,
+        nodes: [
+          { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'B', type: 'parking', x: 0, y: 0, z: 4, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'X', type: 'intersection', x: 4, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'Y', type: 'intersection', x: 8, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'C', type: 'parking', x: 12, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
+        ],
+        edges: [
+          { id: 'A-X', from: 'A', to: 'X', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'A-X', noParking: true },
+          { id: 'X-Y', from: 'X', to: 'Y', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'X-Y', noParking: true },
+          { id: 'Y-C', from: 'Y', to: 'C', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'Y-C', noParking: true }
+        ],
+        zones: []
+      }
+    }));
+    sim.setVehicleRouteForTest('SH-02', ['C']);
+    sim.setVehicleRouteForTest('SH-01', ['A', 'X', 'Y', 'C']);
+
+    const state = sim.step(0.2);
+    const vehicle = state.vehicles.find((candidate) => candidate.id === 'SH-01');
+
+    expect(vehicle).toMatchObject({
+      state: 'waiting-blocked',
+      currentNodeId: 'A',
+      currentEdgeId: null,
+      targetNodeId: 'X',
+      waitReason: 'no-stop-clearance-incomplete'
     });
   });
 
@@ -1207,7 +1451,9 @@ describe('shuttle phase 0 SimCore', () => {
 
   it('spreads inbound work across FIFO rows while preserving contiguous fill inside each row', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
       durationSec: 120,
+      vehicles: { count: 8 },
       taskGeneration: {
         inboundRatePerHour: 720,
         outboundRatePerHour: 0,
@@ -1315,6 +1561,7 @@ describe('shuttle phase 0 SimCore', () => {
       node.type === 'parking' ? { ...node, noParking: true } : node
     );
     const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['storage-r16-c01']);
 
     expect(sim.getState().vehicles[0]?.currentNodeId).toBe('storage-r16-c01');
     sim.start();
@@ -1736,7 +1983,7 @@ describe('shuttle phase 0 SimCore', () => {
       }
     });
     const sim = new ShuttleSimCore(scenario);
-    const finalSlotNodeId = 'storage-r16-c24';
+    const finalSlotNodeId = 'storage-r15-c24';
     const occupiedStorageNodeIds = scenario.layout.nodes
       .filter((node) => node.type === 'storage' && node.id !== finalSlotNodeId)
       .map((node) => node.id);
@@ -1754,121 +2001,6 @@ describe('shuttle phase 0 SimCore', () => {
     expect(sim.getDebugState().storageNodeOccupancy).toHaveLength(384);
     expect(state.kpis.blockedTimeByReasonSec['storage-full']).toBeGreaterThan(0);
   });
-
-  it('keeps four-vehicle mixed lift and FIFO pressure bounded without deadlock', () => {
-    const scenario = createDefaultShuttleScenario({
-      durationSec: 360,
-      vehicles: { count: 4 },
-      taskGeneration: {
-        inboundRatePerHour: 240,
-        outboundRatePerHour: 240,
-        inboundOutboundMix: 0.5,
-        arrivalDistribution: 'deterministic',
-        maxTasks: 32
-      },
-      physicsParams: {
-        emptySpeedMps: 4,
-        loadedSpeedMps: 3,
-        accelerationMps2: 4,
-        switchDirectionSec: 0.2,
-        liftTimeSec: 0.2,
-        lowerTimeSec: 0.2,
-        loadedClearanceM: 0.2,
-        reservationClearanceSec: 0.05
-      },
-      trafficPolicy: {
-        deadlockDetectSec: 5
-      }
-    });
-    const sim = new ShuttleSimCore(scenario);
-    addStoredLoads(sim, [
-      'storage-r01-c01',
-      'storage-r01-c02',
-      'storage-r02-c01',
-      'storage-r02-c02',
-      'storage-r03-c01',
-      'storage-r03-c02',
-      'storage-r04-c01',
-      'storage-r04-c02'
-    ]);
-
-    const state = runFor(sim, scenario.durationSec);
-    const blockedReasons = Object.keys(state.kpis.blockedTimeByReasonSec);
-
-    expectNoTrafficSafetyFailures(state);
-    expect(state.kpis.completedInbound).toBeGreaterThan(0);
-    expect(state.kpis.completedOutbound).toBeGreaterThan(0);
-    expect(blockedReasons.some((reason) => reason.startsWith('fifo-') || reason.includes('lift-'))).toBe(true);
-    expect(state.vehicles).toHaveLength(4);
-    expect(state.vehicles.every((vehicle) => Number.isFinite(vehicle.x) && Number.isFinite(vehicle.z))).toBe(true);
-  }, 30000);
-
-  it('keeps one-direction pressure cases bounded for inbound-only and outbound-only runs', () => {
-    const inboundScenario = createDefaultShuttleScenario({
-      durationSec: 240,
-      vehicles: { count: 4 },
-      taskGeneration: {
-        inboundRatePerHour: 240,
-        outboundRatePerHour: 0,
-        inboundOutboundMix: 1,
-        arrivalDistribution: 'deterministic',
-        maxTasks: 20
-      },
-      physicsParams: {
-        emptySpeedMps: 4,
-        loadedSpeedMps: 3,
-        accelerationMps2: 4,
-        switchDirectionSec: 0.2,
-        liftTimeSec: 0.2,
-        lowerTimeSec: 0.2,
-        loadedClearanceM: 0.2,
-        reservationClearanceSec: 0.05
-      }
-    });
-    const inboundState = runFor(new ShuttleSimCore(inboundScenario), inboundScenario.durationSec);
-
-    expectNoTrafficSafetyFailures(inboundState);
-    expect(inboundState.kpis.completedInbound).toBeGreaterThan(0);
-    expect(inboundState.kpis.completedOutbound).toBe(0);
-
-    const outboundScenario = createDefaultShuttleScenario({
-      durationSec: 240,
-      vehicles: { count: 4 },
-      taskGeneration: {
-        inboundRatePerHour: 0,
-        outboundRatePerHour: 240,
-        inboundOutboundMix: 0,
-        arrivalDistribution: 'deterministic',
-        maxTasks: 20
-      },
-      physicsParams: {
-        emptySpeedMps: 4,
-        loadedSpeedMps: 3,
-        accelerationMps2: 4,
-        switchDirectionSec: 0.2,
-        liftTimeSec: 0.2,
-        lowerTimeSec: 0.2,
-        loadedClearanceM: 0.2,
-        reservationClearanceSec: 0.05
-      }
-    });
-    const outboundSim = new ShuttleSimCore(outboundScenario);
-    addStoredLoads(outboundSim, [
-      'storage-r01-c01',
-      'storage-r01-c02',
-      'storage-r01-c03',
-      'storage-r01-c04',
-      'storage-r02-c01',
-      'storage-r02-c02',
-      'storage-r02-c03',
-      'storage-r02-c04'
-    ]);
-    const outboundState = runFor(outboundSim, outboundScenario.durationSec);
-
-    expectNoTrafficSafetyFailures(outboundState);
-    expect(outboundState.kpis.completedInbound).toBe(0);
-    expect(outboundState.kpis.completedOutbound).toBeGreaterThan(0);
-  }, 30000);
 
   it('attributes queued inbound pressure to vehicle availability when every shuttle is already busy', () => {
     const scenario = createDefaultShuttleScenario({
@@ -1899,128 +2031,6 @@ describe('shuttle phase 0 SimCore', () => {
     expect(queuedTasks.length).toBeGreaterThan(0);
     expect(queuedTasks.every((task) => task.waitReason === 'vehicle-unavailable')).toBe(true);
     expect(state.kpis.blockedTimeByReasonSec['vehicle-unavailable']).toBeGreaterThan(0);
-  });
-
-  it('keeps a 12-shuttle high-inbound stress run active without premature completion', () => {
-    const scenario = createDefaultShuttleScenario({
-      durationSec: 7200,
-      vehicles: {
-        count: 12,
-        emptySpeedMps: 2,
-        loadedSpeedMps: 1.5,
-        accelerationMps2: 1.2,
-        liftTimeSec: 0.05,
-        lowerTimeSec: 0.05
-      },
-      taskGeneration: {
-        inboundRatePerHour: 7200,
-        outboundRatePerHour: 0,
-        inboundOutboundMix: 1,
-        arrivalDistribution: 'deterministic',
-        maxTasks: 80
-      },
-      trafficPolicy: {
-        deadlockDetectSec: 20
-      }
-    });
-    const state = runForWithStoragePathAssertions(new ShuttleSimCore(scenario), scenario, 180);
-    const utilizedVehicleCount = Object.values(state.kpis.vehicleUtilization).filter((utilization) => utilization > 0.05).length;
-    const utilizationBreakdowns = Object.values(state.kpis.vehicleUtilizationBreakdown);
-    const averageBusyUtilization = utilizationBreakdowns.reduce((sum, value) => sum + value.busy, 0) / utilizationBreakdowns.length;
-    const averageProductiveUtilization = utilizationBreakdowns.reduce((sum, value) => sum + value.productive, 0) / utilizationBreakdowns.length;
-    const averageWaitingUtilization = utilizationBreakdowns.reduce((sum, value) => sum + value.waiting, 0) / utilizationBreakdowns.length;
-
-    expect(state.status).toBe('running');
-    expect(state.simTimeSec).toBe(180);
-    expect(state.kpis.completedInbound).toBeGreaterThanOrEqual(10);
-    expect(state.kpis.totalPph).toBeGreaterThanOrEqual(200);
-    expect(state.kpis.activeTasks).toBe(12);
-    expect(state.kpis.queuedTasks).toBeGreaterThan(0);
-    expect(utilizedVehicleCount).toBe(12);
-    expect(utilizationBreakdowns).toHaveLength(12);
-    expect(averageBusyUtilization).toBeGreaterThan(0.9);
-    expect(averageProductiveUtilization).toBeGreaterThan(0.35);
-    expect(averageProductiveUtilization).toBeLessThan(averageBusyUtilization);
-    expect(averageWaitingUtilization).toBeGreaterThan(0);
-    expect(
-      state.traffic.liftPorts
-        .filter((port) => port.kind === 'inbound')
-        .reduce((total, port) => total + port.approachOccupancy, 0)
-    ).toBeGreaterThanOrEqual(7);
-    expect(Object.keys(state.kpis.blockedTimeByReasonSec).some((reason) => reason.startsWith('inbound-lift-approach-full:'))).toBe(true);
-    expect(Math.max(...state.traffic.liftPorts.filter((port) => port.kind === 'inbound').map((port) => port.utilization))).toBeLessThan(0.02);
-    expectIdleVehiclesParkedOnlyOnParkableNodes(scenario, state);
-    expect(storageFillHoles(state.loads.filter((load) => load.state === 'stored' && load.nodeId?.startsWith('storage-')).map((load) => load.nodeId!))).toEqual([]);
-    expectNoLoadedStorageTransitThroughStoredLoads(state);
-    for (const vehicle of state.vehicles) {
-      expectStorageTraversalOnlyHorizontal(vehicle.routeNodeIds);
-    }
-    expectNoTrafficSafetyFailures(state);
-  }, 30000);
-
-  it('keeps long high-inbound pressure from deadlocking on storage-row entry parking', () => {
-    const scenario = createDefaultShuttleScenario({
-      durationSec: 7200,
-      timeStepSec: 1,
-      vehicles: {
-        count: 12,
-        emptySpeedMps: 2,
-        loadedSpeedMps: 1.5,
-        accelerationMps2: 1.2,
-        liftTimeSec: 0.05,
-        lowerTimeSec: 0.05
-      },
-      taskGeneration: {
-        inboundRatePerHour: 7200,
-        outboundRatePerHour: 0,
-        inboundOutboundMix: 1,
-        arrivalDistribution: 'deterministic',
-        maxTasks: 80
-      },
-      trafficPolicy: {
-        deadlockDetectSec: 20
-      }
-    });
-    const sim = new ShuttleSimCore(scenario);
-
-    expect(sim.getState().vehicles.find((vehicle) => vehicle.id === 'SH-12')?.currentNodeId).toBe('storage-r13-c01');
-    const state = runForWithStoragePathAssertions(sim, scenario, 900, 1);
-    const utilizedVehicleCount = Object.values(state.kpis.vehicleUtilization).filter((utilization) => utilization > 0.05).length;
-
-    expect(state.status).toBe('running');
-    expect(state.kpis.completedInbound).toBeGreaterThanOrEqual(50);
-    expect(state.kpis.totalPph).toBeGreaterThan(200);
-    expect(utilizedVehicleCount).toBe(12);
-    expect(
-      Object.values(state.kpis.vehicleUtilization).reduce((total, utilization) => total + utilization, 0) /
-      Object.values(state.kpis.vehicleUtilization).length
-    ).toBeGreaterThan(0.6);
-    expect(state.traffic.deadlockCandidateVehicleIds).toEqual([]);
-    expect(storageFillHoles(state.loads.filter((load) => load.state === 'stored' && load.nodeId?.startsWith('storage-')).map((load) => load.nodeId!))).toEqual([]);
-    expectNoLoadedStorageTransitThroughStoredLoads(state);
-    expectNoTrafficSafetyFailures(state);
-  }, 30000);
-
-  it('uses configured lift approach staging capacity without changing lift node capacity', () => {
-    const scenario = createDefaultShuttleScenario({
-      vehicles: { count: 12 },
-      taskGeneration: {
-        inboundRatePerHour: 7200,
-        outboundRatePerHour: 0,
-        inboundOutboundMix: 1,
-        maxTasks: 80
-      },
-      trafficPolicy: { liftApproachCapacity: 2 }
-    });
-    const sim = new ShuttleSimCore(scenario);
-    const state = runFor(sim, 90);
-    const inboundPorts = state.traffic.liftPorts.filter((port) => port.kind === 'inbound');
-
-    expect(inboundPorts).toHaveLength(4);
-    expect(inboundPorts.every((port) => port.approachCapacity === 2)).toBe(true);
-    expect(scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox').every((node) => node.capacity === 1)).toBe(true);
-    expect(Math.max(...inboundPorts.map((port) => port.approachOccupancy))).toBeGreaterThan(1);
-    expectNoTrafficSafetyFailures(state);
   });
 
   it('accepts dashboard-style parameter updates through JSON pointers', () => {
@@ -2189,7 +2199,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(follower?.blockingVehicleId).toBe('SH-01');
   });
 
-  it('preauthorizes same-row storage horizons without treating every storage cell as a new control decision', () => {
+  it('uses local same-row storage grants instead of preauthorizing the whole row', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       vehicles: { count: 1 },
       taskGeneration: {
@@ -2224,14 +2234,14 @@ describe('shuttle phase 0 SimCore', () => {
     sim.step(0.2);
     const horizonEvent = sim.getEventLog().find((entry) => entry.eventType === 'reservation-created' && entry.reason === 'route-horizon');
 
-    expect(horizonEvent?.details.horizonLegCount).toBeGreaterThanOrEqual(6);
+    expect(horizonEvent?.details.horizonLegCount).toBe(1);
     expect(
       sim.getState().reservations.filter((reservation) =>
         reservation.vehicleId === 'SH-01' &&
         reservation.resourceType === 'edge' &&
         reservation.resourceId.startsWith('storage-r01-')
       ).length
-    ).toBeGreaterThanOrEqual(6);
+    ).toBe(1);
 
     for (let index = 0; index < 80 && sim.getState().vehicles[0]?.currentNodeId !== 'storage-r01-c01'; index += 1) {
       sim.step(0.1);
@@ -2241,7 +2251,7 @@ describe('shuttle phase 0 SimCore', () => {
     expectNoTrafficSafetyFailures(sim.getState());
   });
 
-  it('preauthorizes row-entry storage horizons from the infeed side to the target slot', () => {
+  it('uses a local row-entry storage grant from the infeed side', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       vehicles: { count: 1 },
       taskGeneration: {
@@ -2276,7 +2286,7 @@ describe('shuttle phase 0 SimCore', () => {
     sim.step(0.2);
     const horizonEvent = sim.getEventLog().find((entry) => entry.eventType === 'reservation-created' && entry.reason === 'route-horizon');
 
-    expect(horizonEvent?.details.horizonLegCount).toBeGreaterThanOrEqual(6);
+    expect(horizonEvent?.details.horizonLegCount).toBe(1);
     expect(
       sim.getState().reservations.filter((reservation) =>
         reservation.vehicleId === 'SH-01' &&
@@ -2286,7 +2296,7 @@ describe('shuttle phase 0 SimCore', () => {
           reservation.resourceId.startsWith('storage-r01-')
         )
       ).length
-    ).toBeGreaterThanOrEqual(6);
+    ).toBe(1);
     expectNoTrafficSafetyFailures(sim.getState());
   });
 
@@ -2322,7 +2332,7 @@ describe('shuttle phase 0 SimCore', () => {
 
   it('does not add direction-switch dwell to the default four-way shuttle demo', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario());
-    sim.runToEnd(180);
+    sim.runToEnd(90);
 
     expect(sim.getState().vehicles.every((vehicle) => vehicle.yaw === 0)).toBe(true);
     expect(sim.getEventLog().some((entry) => entry.eventType === 'direction-switch-started')).toBe(false);

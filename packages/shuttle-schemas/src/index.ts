@@ -520,6 +520,10 @@ export const LiftPortDiagnosticsSchema = z.object({
 });
 
 export const TrafficDiagnosticsSchema = z.object({
+  trafficMode: z.enum(['flow-debug', 'segment-safe']).default('flow-debug'),
+  safetyValidated: z.boolean().default(false),
+  longHorizonReservationEnabled: z.boolean().default(false),
+  legacyZoneHoldEnabled: z.boolean().default(false),
   activeReservationCount: z.number().int().nonnegative(),
   waitingVehicles: z.array(TrafficWaitingVehicleSchema),
   liftPorts: z.array(LiftPortDiagnosticsSchema).default([]),
