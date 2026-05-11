@@ -2385,6 +2385,23 @@ describe('shuttle phase 0 SimCore', () => {
     expect(sim.getState().traffic.collisionAvoidanceEnabled).toBe(false);
   });
 
+  it('requires reset before changing collision avoidance after the run has advanced', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario());
+    sim.step(0.1);
+
+    const result = sim.setParam('/trafficPolicy/collisionAvoidanceEnabled', false);
+
+    expect(result).toMatchObject({
+      accepted: false,
+      path: '/trafficPolicy/collisionAvoidanceEnabled',
+      previousValue: true,
+      value: false,
+      reason: 'reset-required'
+    });
+    expect(sim.getScenario().trafficPolicy.collisionAvoidanceEnabled).toBe(true);
+    expect(sim.getState().traffic.collisionAvoidanceEnabled).toBe(true);
+  });
+
   it('uses local same-row storage grants instead of preauthorizing the whole row', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       vehicles: { count: 1 },

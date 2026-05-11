@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     globals: true,
+    fileParallelism: false,
     include: ['packages/*/src/**/*.test.ts', 'apps/shuttle-api/src/**/*.test.ts', 'apps/shuttle-dashboard/src/**/*.test.ts'],
     exclude: ['**/node_modules/**', 'dist/**']
   }

@@ -15,5 +15,15 @@ export default defineConfig({
         ws: true
       }
     }
+  },
+  preview: {
+    port: 5180,
+    proxy: {
+      '/api': apiTarget,
+      '/shuttle-ws': {
+        target: wsTarget,
+        ws: true
+      }
+    }
   }
 });

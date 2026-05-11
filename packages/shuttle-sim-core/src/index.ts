@@ -43,6 +43,8 @@ export {
 
 type RuntimeStatus = ShuttleSimState['status'];
 
+const COLLISION_AVOIDANCE_PARAM = '/trafficPolicy/collisionAvoidanceEnabled';
+
 type MutableVehicle = VehicleState & {
   targetSpeedMps: number;
   waitingSinceSec: number | null;
@@ -1219,6 +1221,20 @@ export class ShuttleSimCore {
 
   setParam(path: string, value: unknown): SetParamResult {
     const previousScenario = this.scenario;
+    const previousValue = getByPointer(previousScenario as unknown as Record<string, unknown>, path);
+    if (
+      path === COLLISION_AVOIDANCE_PARAM &&
+      this.simTimeSec > 0 &&
+      previousValue !== value
+    ) {
+      return {
+        accepted: false,
+        path,
+        previousValue,
+        value,
+        reason: 'reset-required'
+      };
+    }
     const nextScenario = structuredClone(this.scenario) as ShuttleScenario;
     const result = setByPointer(nextScenario as unknown as Record<string, unknown>, path, value);
     if (!result.accepted) {
@@ -1250,7 +1266,7 @@ export class ShuttleSimCore {
     return {
       accepted: true,
       path,
-      previousValue: result.previousValue ?? getByPointer(previousScenario as unknown as Record<string, unknown>, path),
+      previousValue: result.previousValue ?? previousValue,
       value
     };
   }

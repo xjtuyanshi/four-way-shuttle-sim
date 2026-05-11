@@ -11,7 +11,9 @@ import { collectPrerequisites } from './prerequisites.js';
 import { validatePhase0Scenario } from './validation.js';
 
 const port = Number(process.env.SHUTTLE_PORT ?? process.env.PORT ?? 8791);
-const tickMs = Number(process.env.SHUTTLE_TICK_MS ?? 250);
+const tickMs = Number(process.env.SHUTTLE_TICK_MS ?? 100);
+const streamBroadcastIntervalMs = Number(process.env.SHUTTLE_STREAM_TICK_MS ?? 250);
+const fullStateBroadcastIntervalMs = Number(process.env.SHUTTLE_FULL_STATE_TICK_MS ?? 1000);
 
 function parsePlaybackSpeed(value: unknown): number | null {
   if (typeof value !== 'number' && typeof value !== 'string') {
@@ -33,6 +35,8 @@ app.use(express.json({ limit: '4mb' }));
 let sim = new ShuttleSimCore(createDefaultShuttleScenario());
 const clients = new Set<WebSocket>();
 let lastEventSequence = -1;
+let lastStreamBroadcastMs = 0;
+let lastFullStateBroadcastMs = 0;
 
 function send(socket: WebSocket, message: ShuttleStreamMessage): void {
   if (socket.readyState === socket.OPEN) {
@@ -46,31 +50,41 @@ function broadcast(message: ShuttleStreamMessage): void {
   }
 }
 
-function broadcastState(): void {
+function broadcastState(options: { full?: boolean } = {}): void {
+  const nowMs = Date.now();
+  const shouldBroadcastStream =
+    options.full === true ||
+    nowMs - lastStreamBroadcastMs >= streamBroadcastIntervalMs;
+  const shouldBroadcastFull =
+    options.full === true ||
+    nowMs - lastFullStateBroadcastMs >= fullStateBroadcastIntervalMs;
+  if (!shouldBroadcastStream && !shouldBroadcastFull) {
+    return;
+  }
   const state = sim.getState();
-  broadcast({ type: 'simState', state });
-  broadcast({ type: 'vehicleState', vehicles: state.vehicles, simTimeSec: state.simTimeSec });
-  broadcast({ type: 'kpiUpdate', kpis: state.kpis, simTimeSec: state.simTimeSec });
-  const newEvents = state.recentEvents.filter((event) => event.sequence > lastEventSequence);
-  if (newEvents.length > 0) {
-    lastEventSequence = Math.max(...newEvents.map((event) => event.sequence));
-    broadcast({ type: 'taskEvent', events: newEvents, simTimeSec: state.simTimeSec });
+  if (shouldBroadcastFull) {
+    lastFullStateBroadcastMs = nowMs;
+    broadcast({ type: 'simState', state });
+  }
+  if (shouldBroadcastStream) {
+    lastStreamBroadcastMs = nowMs;
+    broadcast({ type: 'vehicleState', vehicles: state.vehicles, simTimeSec: state.simTimeSec });
+    broadcast({ type: 'kpiUpdate', kpis: state.kpis, simTimeSec: state.simTimeSec });
+    const newEvents = state.recentEvents.filter((event) => event.sequence > lastEventSequence);
+    if (newEvents.length > 0) {
+      lastEventSequence = Math.max(...newEvents.map((event) => event.sequence));
+      broadcast({ type: 'taskEvent', events: newEvents, simTimeSec: state.simTimeSec });
+    }
   }
 }
 
 function commandResponse(response: Response): void {
-  broadcastState();
+  broadcastState({ full: true });
   response.json({ ok: true, state: sim.getState() });
 }
 
 function advanceLiveSimulation(deltaSec: number): void {
-  const maxStepSec = Math.max(0.001, sim.getScenario().timeStepSec);
-  let remainingSec = deltaSec;
-  while (remainingSec > 1e-9 && sim.getState().status === 'running') {
-    const stepSec = Math.min(maxStepSec, remainingSec);
-    sim.step(stepSec);
-    remainingSec -= stepSec;
-  }
+  sim.advanceBy(deltaSec);
 }
 
 app.get('/api/shuttle/health', (_request: Request, response: Response) => {
@@ -108,7 +122,16 @@ app.post('/api/shuttle/playbackSpeed', (request: Request, response: Response) =>
 });
 
 app.get('/api/shuttle/exportLog', (_request: Request, response: Response) => {
-  response.json({ eventLog: sim.getEventLog(), hash: hashEventLog(sim.getEventLog()) });
+  const collisionAvoidanceEnabled = sim.getScenario().trafficPolicy.collisionAvoidanceEnabled !== false;
+  response.json({
+    collisionAvoidanceEnabled,
+    safetyValidated: false,
+    safetyValidationNote: collisionAvoidanceEnabled
+      ? 'Run log export is not an IE or mechanical safety certificate.'
+      : 'UNSAFE DIAGNOSTIC - collision avoidance is disabled.',
+    eventLog: sim.getEventLog(),
+    hash: hashEventLog(sim.getEventLog())
+  });
 });
 
 app.post('/api/shuttle/validatePhase0', async (request: Request, response: Response, next: NextFunction) => {
@@ -227,7 +250,7 @@ wss.on('connection', (socket) => {
 });
 
 setInterval(() => {
-  if (sim.getState().status === 'running') {
+  if (sim.getStatus() === 'running') {
     advanceLiveSimulation((tickMs / 1000) * playbackSpeed);
     broadcastState();
   }

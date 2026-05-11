@@ -12,6 +12,7 @@ import {
   summarizeScenarioStaticSceneContract,
   type ShuttleStaticSceneCalibrationReadiness
 } from '@four-way-shuttle/sim-core/static-scene';
+import type { ShuttleSceneCameraView, ShuttleSceneRendererInfo } from './ShuttleScene3D.js';
 
 const ShuttleScene3D = lazy(() =>
   import('./ShuttleScene3D.js').then((module) => ({ default: module.ShuttleScene3D }))
@@ -54,6 +55,12 @@ type PlaybackSpeedResponse = {
   speed: number;
 };
 
+type LiveStreamSnapshot = {
+  simTimeSec: number;
+  vehicles: VehicleState[] | null;
+  kpis: KpiSnapshot | null;
+};
+
 type BottleneckBreakdown = Record<string, number>;
 
 type Phase0ValidationRun = {
@@ -67,6 +74,16 @@ type Phase0ValidationRun = {
   totalPph: number;
   inboundPph: number;
   outboundPph: number;
+  theoreticalFleetPph: number | null;
+  theoreticalSingleShuttlePph: number | null;
+  theoreticalIdealCycleSec: number | null;
+  theoreticalLiftAndLowerSec: number | null;
+  achievedInboundVsTheoryPct: number | null;
+  inboundPphGapToTheory: number | null;
+  averageVehicleUtilizationPct: number;
+  averageVehicleProductivePct: number;
+  averageVehicleWaitingPct: number;
+  averageVehicleIdlePct: number;
   queuedTasks: number;
   maxQueuedTasks: number;
   maxWaitingVehicles: number;
@@ -94,6 +111,13 @@ type Phase0StressScenarioResult = {
   maxLiftPortQueueLength: number;
   observedBottleneckReasons: string[];
   blockedTimeByCategorySec?: BottleneckBreakdown;
+  theoreticalFleetPphMean: number | null;
+  achievedInboundVsTheoryPctMean: number | null;
+  inboundPphGapToTheoryMean: number | null;
+  averageVehicleUtilizationPctMean: number;
+  averageVehicleProductivePctMean: number;
+  averageVehicleWaitingPctMean: number;
+  averageVehicleIdlePctMean: number;
   pass: boolean;
 };
 
@@ -240,15 +264,23 @@ const CONTROLLED_PARAMS = [
     label: 'Lift time',
     path: '/physicsParams/liftTimeSec',
     min: 0,
-    max: 6,
-    step: 0.05,
+    max: 1,
+    step: 0.01,
+    unit: 's'
+  },
+  {
+    label: 'Lower time',
+    path: '/physicsParams/lowerTimeSec',
+    min: 0,
+    max: 1,
+    step: 0.01,
     unit: 's'
   },
   {
     label: 'Lift staging',
     path: '/trafficPolicy/liftApproachCapacity',
     min: 1,
-    max: 3,
+    max: 8,
     step: 1,
     unit: 'slots'
   },
@@ -271,9 +303,26 @@ const CONTROLLED_PARAMS = [
 ] as const;
 
 const PLAYBACK_SPEEDS = [1, 2, 4, 10] as const;
+const API_BASE_URL = import.meta.env.VITE_SHUTTLE_API_TARGET?.replace(/\/$/, '') ?? '';
+const DEFAULT_SCENE_CAMERA_VIEW: ShuttleSceneCameraView = {
+  zoom: 1,
+  yawOffsetRad: 0,
+  pitchOffsetRad: 0
+};
+
+function clampSceneCameraView(view: ShuttleSceneCameraView): ShuttleSceneCameraView {
+  return {
+    zoom: Math.min(4, Math.max(0.45, view.zoom)),
+    yawOffsetRad: view.yawOffsetRad,
+    pitchOffsetRad: Math.min(0.78, Math.max(-0.78, view.pitchOffsetRad))
+  };
+}
 
 async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, {
+  const target = typeof input === 'string' && input.startsWith('/') && API_BASE_URL
+    ? `${API_BASE_URL}${input}`
+    : input;
+  const response = await fetch(target, {
     headers: {
       'Content-Type': 'application/json'
     },
@@ -345,6 +394,9 @@ function getPointerValue(source: unknown, pointer: string): unknown {
 }
 
 function websocketUrl(): string {
+  if (API_BASE_URL) {
+    return `${API_BASE_URL.replace(/^http/, 'ws')}/shuttle-ws`;
+  }
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${protocol}//${window.location.host}/shuttle-ws`;
 }
@@ -363,6 +415,9 @@ export function mergeVehicleStateUpdate(
   simTimeSec: number
 ): ShuttleSimState | null {
   if (!previous) {
+    return previous;
+  }
+  if (previous.simTimeSec > simTimeSec) {
     return previous;
   }
   const incomingById = new Map(vehicles.map((vehicle) => [vehicle.id, vehicle]));
@@ -386,6 +441,9 @@ export function mergeKpiUpdate(
   simTimeSec: number
 ): ShuttleSimState | null {
   if (!previous) {
+    return previous;
+  }
+  if (previous.simTimeSec > simTimeSec) {
     return previous;
   }
   return {
@@ -481,12 +539,17 @@ export function summarizeResourceUtilization(
 }
 
 function KpiStrip({ kpis }: { kpis: KpiSnapshot | null }) {
+  const averageUtilizationPct = kpis
+    ? average(Object.values(kpis.vehicleUtilization)) * 100
+    : 0;
+  const utilizationBreakdowns = kpis ? Object.values(kpis.vehicleUtilizationBreakdown) : [];
+  const averageWaitingPct = average(utilizationBreakdowns.map((breakdown) => breakdown.waiting)) * 100;
   const items = [
     ['Total PPH', kpis ? formatNumber(kpis.totalPph, 1) : '--'],
     ['Inbound PPH', kpis ? formatNumber(kpis.inboundPph, 1) : '--'],
-    ['Outbound PPH', kpis ? formatNumber(kpis.outboundPph, 1) : '--'],
-    ['P95 cycle', kpis ? `${formatNumber(kpis.p95TaskCycleSec, 1)}s` : '--'],
-    ['Conflicts', kpis ? String(kpis.reservationConflictCount) : '--'],
+    ['Active / queued', kpis ? `${kpis.activeTasks} / ${kpis.queuedTasks}` : '--'],
+    ['Avg wait', kpis ? `${formatNumber(kpis.averageTaskWaitSec, 1)}s` : '--'],
+    ['Util / wait', kpis ? `${formatNumber(averageUtilizationPct, 1)}% / ${formatNumber(averageWaitingPct, 1)}%` : '--'],
     ['Deadlocks', kpis ? String(kpis.deadlockCount) : '--']
   ];
 
@@ -746,31 +809,43 @@ function AuthoritativeMap({ scenario, state }: { scenario: ShuttleScenario | nul
   );
 }
 
+function formatRendererInfo(info: ShuttleSceneRendererInfo | null): string {
+  if (!info) return 'GPU: checking';
+  const device = info.renderer
+    .replace(/^ANGLE \((.*)\)$/i, '$1')
+    .replace(/\s+Direct3D\d+.*$/i, '')
+    .replace(/\s+vs_.*$/i, '')
+    .trim();
+  return `${info.hardwareAccelerated ? 'GPU' : 'Software'}: ${info.webglVersion} ${device || info.renderer}`;
+}
+
 function StreamingPane({
-  prerequisites,
   scenario,
   state,
   layers,
   selectedVehicleId,
-  onToggleLayer
+  cameraView,
+  rendererInfo,
+  onCameraViewChange,
+  onToggleLayer,
+  onRendererInfo
 }: {
-  prerequisites: PrerequisiteReport | null;
   scenario: ShuttleScenario | null;
   state: ShuttleSimState | null;
   layers: SceneLayers;
   selectedVehicleId: string | null;
+  cameraView: ShuttleSceneCameraView;
+  rendererInfo: ShuttleSceneRendererInfo | null;
+  onCameraViewChange: (view: ShuttleSceneCameraView) => void;
   onToggleLayer: (layer: keyof SceneLayers) => void;
+  onRendererInfo: (info: ShuttleSceneRendererInfo) => void;
 }) {
-  const unrealReady = prerequisites?.unreal.status === 'ready';
-  const xcodeReady = prerequisites?.xcode.status === 'ready';
-  const ready = unrealReady && xcodeReady;
-
   return (
     <section className="stream-pane">
       <div className="stream-header">
         <div>
-          <h2>3D SimCore View</h2>
-          <p>Browser-side visual twin preview driven by the same authoritative state stream Unreal will consume.</p>
+          <h2>3D Model</h2>
+          <p>Live SimCore state stream.</p>
         </div>
         <div className="scene-layer-controls">
           {(Object.keys(layers) as Array<keyof SceneLayers>).map((layer) => (
@@ -784,7 +859,27 @@ function StreamingPane({
               {layer}
             </button>
           ))}
-          <span className={`readiness ${ready ? 'ready' : 'blocked'}`}>{ready ? 'ready for UE hookup' : 'blocked prerequisite'}</span>
+          <button type="button" onClick={() => onCameraViewChange(clampSceneCameraView({ ...cameraView, zoom: cameraView.zoom * 1.2 }))}>
+            Zoom In
+          </button>
+          <button type="button" onClick={() => onCameraViewChange(clampSceneCameraView({ ...cameraView, zoom: cameraView.zoom / 1.2 }))}>
+            Zoom Out
+          </button>
+          <button type="button" onClick={() => onCameraViewChange(clampSceneCameraView({ ...cameraView, yawOffsetRad: cameraView.yawOffsetRad - 0.28 }))}>
+            Rotate Left
+          </button>
+          <button type="button" onClick={() => onCameraViewChange(clampSceneCameraView({ ...cameraView, yawOffsetRad: cameraView.yawOffsetRad + 0.28 }))}>
+            Rotate Right
+          </button>
+          <button type="button" onClick={() => onCameraViewChange(DEFAULT_SCENE_CAMERA_VIEW)}>
+            Reset View
+          </button>
+          <span
+            className={`gpu-badge ${rendererInfo?.hardwareAccelerated === false ? 'software' : 'hardware'}`}
+            title={rendererInfo ? `${rendererInfo.vendor} / ${rendererInfo.renderer}` : 'Waiting for WebGL renderer'}
+          >
+            {formatRendererInfo(rendererInfo)}
+          </span>
         </div>
       </div>
       <div className="stream-placeholder">
@@ -794,6 +889,9 @@ function StreamingPane({
             state={state}
             layers={layers}
             selectedVehicleId={selectedVehicleId}
+            cameraView={cameraView}
+            onCameraViewChange={onCameraViewChange}
+            onRendererInfo={onRendererInfo}
           />
         </Suspense>
       </div>
@@ -845,6 +943,7 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
         <strong className={traffic?.collisionAvoidanceEnabled === false ? 'blocked' : 'ready'}>
           {traffic?.collisionAvoidanceEnabled === false ? 'Off' : 'On'}
         </strong>
+        <small>{traffic?.collisionAvoidanceEnabled === false ? 'UNSAFE DIAGNOSTIC - safety invalid' : 'safety gates active'}</small>
       </div>
       <div>
         <span>Waiting</span>
@@ -1140,6 +1239,7 @@ function ValidationPanel({
   const stressBottlenecks = stress
     ? [...new Set(stress.scenarios.flatMap((scenario) => scenario.observedBottleneckReasons))].slice(0, 4)
     : [];
+  const inboundStress = stress?.scenarios.find((scenario) => scenario.id === 'inbound-only-saturation') ?? null;
   const longRunTopBottleneck = topBottleneckCategory(longRun?.blockedTimeByCategorySec);
   const stressTopBottleneck = topBottleneckCategory(stress?.blockedTimeByCategorySec);
   const longRunStatus = (value: boolean | undefined, okLabel: string, blockedLabel: string): string => {
@@ -1279,6 +1379,34 @@ function ValidationPanel({
             <span>Stress reasons</span>
             <strong>{stressBottlenecks.length > 0 ? stressBottlenecks.join(', ') : '--'}</strong>
           </div>
+          <div>
+            <span>Inbound stress PPH gap</span>
+            <strong>
+              {inboundStress && inboundStress.inboundPphGapToTheoryMean !== null
+                ? `${formatNumber(inboundStress.inboundPphGapToTheoryMean, 1)} PPH`
+                : '--'}
+            </strong>
+          </div>
+          <div>
+            <span>Inbound actual / theory</span>
+            <strong>
+              {inboundStress && inboundStress.theoreticalFleetPphMean !== null
+                ? `${formatNumber(inboundStress.totalPphMean, 1)} / ${formatNumber(inboundStress.theoreticalFleetPphMean, 1)}`
+                : '--'}
+            </strong>
+          </div>
+          <div>
+            <span>Inbound stress utilization</span>
+            <strong>{inboundStress ? `${formatNumber(inboundStress.averageVehicleUtilizationPctMean, 1)}%` : '--'}</strong>
+          </div>
+          <div>
+            <span>Inbound productive / wait</span>
+            <strong>
+              {inboundStress
+                ? `${formatNumber(inboundStress.averageVehicleProductivePctMean, 1)}% / ${formatNumber(inboundStress.averageVehicleWaitingPctMean, 1)}%`
+                : '--'}
+            </strong>
+          </div>
         </div>
       ) : (
         <p className="muted">Run deterministic, seed-sweep, long-run, and stress gates before a Pixel Streaming test.</p>
@@ -1290,6 +1418,7 @@ function ValidationPanel({
 export function App() {
   const [scenario, setScenario] = useState<ShuttleScenario | null>(null);
   const [state, setState] = useState<ShuttleSimState | null>(null);
+  const [liveStream, setLiveStream] = useState<LiveStreamSnapshot | null>(null);
   const [events, setEvents] = useState<EventLogEntry[]>([]);
   const [prerequisites, setPrerequisites] = useState<PrerequisiteReport | null>(null);
   const [validation, setValidation] = useState<Phase0ValidationResult | null>(null);
@@ -1298,19 +1427,66 @@ export function App() {
   const [playbackSpeed, setPlaybackSpeedState] = useState(1);
   const [paramDraftValues, setParamDraftValues] = useState<Map<string, number>>(() => new Map());
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
+  const [rendererInfo, setRendererInfo] = useState<ShuttleSceneRendererInfo | null>(null);
   const [sceneLayers, setSceneLayers] = useState<SceneLayers>({
-    traffic: true,
-    physics: true,
+    traffic: false,
+    physics: false,
     loads: true,
-    routes: true
+    routes: false
   });
+  const [sceneCameraView, setSceneCameraView] = useState<ShuttleSceneCameraView>(DEFAULT_SCENE_CAMERA_VIEW);
   const [isPending, startTransition] = useTransition();
   const reconnectAttemptRef = useRef(0);
   const playbackSpeedChangedRef = useRef(false);
   const paramUpdateTimersRef = useRef<Map<string, number>>(new Map());
+  const pendingLiveStreamRef = useRef<LiveStreamSnapshot | null>(null);
+  const liveStreamFrameRef = useRef<number | null>(null);
 
-  const kpis = state?.kpis ?? null;
-  const vehicles = state?.vehicles ?? [];
+  function commitLiveStreamFromState(nextState: ShuttleSimState): void {
+    const snapshot = {
+      simTimeSec: nextState.simTimeSec,
+      vehicles: nextState.vehicles,
+      kpis: nextState.kpis
+    };
+    pendingLiveStreamRef.current = snapshot;
+    setLiveStream(snapshot);
+  }
+
+  function scheduleLiveStreamPatch(patch: Partial<LiveStreamSnapshot> & { simTimeSec: number }): void {
+    const previous = pendingLiveStreamRef.current ?? liveStream ?? {
+      simTimeSec: state?.simTimeSec ?? 0,
+      vehicles: state?.vehicles ?? null,
+      kpis: state?.kpis ?? null
+    };
+    if (patch.simTimeSec < previous.simTimeSec) {
+      return;
+    }
+    pendingLiveStreamRef.current = {
+      simTimeSec: patch.simTimeSec,
+      vehicles: patch.vehicles ?? previous.vehicles,
+      kpis: patch.kpis ?? previous.kpis
+    };
+    if (liveStreamFrameRef.current !== null) {
+      return;
+    }
+    liveStreamFrameRef.current = window.requestAnimationFrame(() => {
+      liveStreamFrameRef.current = null;
+      setLiveStream(pendingLiveStreamRef.current);
+    });
+  }
+
+  const liveClockSec = liveStream?.simTimeSec ?? state?.simTimeSec ?? 0;
+  const kpis = liveStream?.kpis ?? state?.kpis ?? null;
+  const vehicles = liveStream?.vehicles ?? state?.vehicles ?? [];
+  const sceneState = useMemo(() => {
+    if (!state) return null;
+    return {
+      ...state,
+      simTimeSec: liveClockSec,
+      vehicles,
+      kpis: kpis ?? state.kpis
+    };
+  }, [kpis, liveClockSec, state, vehicles]);
   const statusTone = state?.status === 'running' ? 'ok' : state?.status === 'paused' ? 'warn' : 'idle';
 
   useEffect(() => {
@@ -1335,6 +1511,7 @@ export function App() {
         if (cancelled) return;
         setScenario(nextScenario);
         setState(nextState);
+        commitLiveStreamFromState(nextState);
         setEvents(nextState.recentEvents);
         setPrerequisites(report);
         if (!playbackSpeedChangedRef.current) {
@@ -1360,20 +1537,17 @@ export function App() {
       socket.addEventListener('message', (event) => {
         const message = JSON.parse(event.data as string) as ShuttleStreamMessage;
         if (message.type === 'connectionRecovered' || message.type === 'simState') {
+          commitLiveStreamFromState(message.state);
           startTransition(() => {
             setState(message.state);
             setEvents(message.state.recentEvents);
           });
         }
         if (message.type === 'vehicleState') {
-          startTransition(() => {
-            setState((previous) => mergeVehicleStateUpdate(previous, message.vehicles, message.simTimeSec));
-          });
+          scheduleLiveStreamPatch({ vehicles: message.vehicles, simTimeSec: message.simTimeSec });
         }
         if (message.type === 'kpiUpdate') {
-          startTransition(() => {
-            setState((previous) => mergeKpiUpdate(previous, message.kpis, message.simTimeSec));
-          });
+          scheduleLiveStreamPatch({ kpis: message.kpis, simTimeSec: message.simTimeSec });
         }
         if (message.type === 'taskEvent') {
           setEvents((previous) => mergeEvents(previous, message.events));
@@ -1394,6 +1568,10 @@ export function App() {
     return () => {
       closed = true;
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      if (liveStreamFrameRef.current !== null) {
+        window.cancelAnimationFrame(liveStreamFrameRef.current);
+        liveStreamFrameRef.current = null;
+      }
       socket?.close();
     };
   }, []);
@@ -1431,6 +1609,7 @@ export function App() {
       });
       if (response.state) {
         setState(response.state);
+        commitLiveStreamFromState(response.state);
       }
       const elapsedMs = Math.round(performance.now() - startedAt);
       setCommandStatus({ label: `ack ${elapsedMs} ms`, tone: 'ok' });
@@ -1445,15 +1624,24 @@ export function App() {
     const resetRun = shouldResetAfterParamUpdate(path, state?.status);
     const resumeRun = shouldResumeAfterParamUpdate(path, state?.status);
     const seed = state?.seed;
-    const updated = await postCommand('/api/shuttle/setParam', { path, value });
-    if (!updated) {
-      return;
-    }
-    if (resetRun) {
+    const resetBeforeUpdate = path === COLLISION_AVOIDANCE_PARAM && (state?.simTimeSec ?? 0) > 0;
+    if (resetBeforeUpdate) {
       const reset = await postCommand('/api/shuttle/reset', { seed });
       if (!reset) {
         return;
       }
+    }
+    const updated = await postCommand('/api/shuttle/setParam', { path, value });
+    if (!updated) {
+      return;
+    }
+    if (resetRun && !resetBeforeUpdate) {
+      const reset = await postCommand('/api/shuttle/reset', { seed });
+      if (!reset) {
+        return;
+      }
+    }
+    if (resetRun) {
       if (resumeRun) {
         const resumed = await postCommand('/api/shuttle/resume');
         if (!resumed) {
@@ -1513,6 +1701,7 @@ export function App() {
       setPlaybackSpeedState(response.speed);
       if (response.state) {
         setState(response.state);
+        commitLiveStreamFromState(response.state);
       }
       const elapsedMs = Math.round(performance.now() - startedAt);
       setCommandStatus({ label: `ack ${elapsedMs} ms`, tone: 'ok' });
@@ -1554,8 +1743,8 @@ export function App() {
         <div className="brand-block">
           <div className="mark" aria-hidden="true">S0</div>
           <div>
-            <h1>Shuttle Phase 0</h1>
-            <p>Authoritative SimCore protocol with Unreal visual twin hook points.</p>
+            <h1>Shuttle Sim</h1>
+            <p>Local 3D operations test bench.</p>
           </div>
         </div>
 
@@ -1585,7 +1774,7 @@ export function App() {
         </section>
 
         <section className="control-block param-block">
-          <h2>Scenario Parameters</h2>
+          <h2>Scenario</h2>
           <div className="mode-toggle">
             <span>
               Collision avoidance
@@ -1609,6 +1798,11 @@ export function App() {
                 Off
               </button>
             </div>
+            {!collisionAvoidanceEnabled && (
+              <p className="unsafe-note">
+                UNSAFE DIAGNOSTIC - collision checks are bypassed. Physical and reservation audits still run; do not treat this as a safety pass.
+              </p>
+            )}
           </div>
           {CONTROLLED_PARAMS.map((param) => {
             const value = paramValues.get(param.path) ?? 0;
@@ -1631,9 +1825,12 @@ export function App() {
           })}
         </section>
 
-        <PrerequisitePanel report={prerequisites} />
-        <CalibrationPanel scenario={scenario} />
-        <ValidationPanel validation={validation} validating={validating} onRun={runValidation} />
+        <details className="details-block">
+          <summary>System details</summary>
+          <PrerequisitePanel report={prerequisites} />
+          <CalibrationPanel scenario={scenario} />
+          <ValidationPanel validation={validation} validating={validating} onRun={runValidation} />
+        </details>
       </aside>
 
       <section className="workspace">
@@ -1643,32 +1840,41 @@ export function App() {
             <h2>{scenario?.name ?? 'Phase 0 Scenario'}</h2>
           </div>
           <div className={`runtime-badge ${statusTone}`}>
-            <span>{formatClock(state?.simTimeSec ?? 0)}</span>
-            <strong>{state ? `${Math.round((state.simTimeSec / state.durationSec) * 100)}%` : '--'}</strong>
+            <span>{formatClock(liveClockSec)}</span>
+            <strong>{state ? `${Math.round((liveClockSec / state.durationSec) * 100)}%` : '--'}</strong>
           </div>
         </header>
 
         <StreamingPane
-          prerequisites={prerequisites}
           scenario={scenario}
-          state={state}
+          state={sceneState}
           layers={sceneLayers}
           selectedVehicleId={selectedVehicleId}
+          cameraView={sceneCameraView}
+          rendererInfo={rendererInfo}
+          onCameraViewChange={(view) => setSceneCameraView(clampSceneCameraView(view))}
           onToggleLayer={toggleSceneLayer}
+          onRendererInfo={setRendererInfo}
         />
         <KpiStrip kpis={kpis} />
         <CapacityTheoryPanel kpis={kpis} />
         <ResourceUtilizationPanel scenario={scenario} state={state} />
         <TrafficDiagnosticsPanel state={state} />
-        <FifoInventoryPanel scenario={scenario} state={state} />
         <div className="main-grid">
           <VehicleTable
             vehicles={vehicles}
             selectedVehicleId={selectedVehicleId}
             onSelectVehicle={setSelectedVehicleId}
           />
-          <EventLog events={events} />
+          <details className="diagnostics-details">
+            <summary>Event log</summary>
+            <EventLog events={events} />
+          </details>
         </div>
+        <details className="workspace-details">
+          <summary>Inventory / FIFO details</summary>
+          <FifoInventoryPanel scenario={scenario} state={state} />
+        </details>
       </section>
     </main>
   );

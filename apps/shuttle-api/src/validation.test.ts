@@ -76,6 +76,37 @@ function putStoppedVehicleOnPortalNode(candidate: InspectionFixture): void {
   candidate.state.reservations = [];
 }
 
+function collisionAvoidanceOffMergeScenario(): ShuttleScenario {
+  return createDefaultShuttleScenario({
+    vehicles: { count: 2, safetyRadiusM: 0.4, lengthM: 1, widthM: 1 },
+    trafficPolicy: { collisionAvoidanceEnabled: false },
+    layout: {
+      units: 'meter',
+      calibrationProfile: null,
+      nodes: [
+        { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+        { id: 'B', type: 'parking', x: 1, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+        { id: 'C', type: 'parking', x: 2, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
+      ],
+      edges: [
+        { id: 'A-B', from: 'A', to: 'B', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'A-B', noParking: true },
+        { id: 'C-B', from: 'C', to: 'B', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'C-B', noParking: true }
+      ],
+      zones: []
+    },
+    physicsParams: {
+      emptySpeedMps: 1,
+      loadedSpeedMps: 1,
+      accelerationMps2: 4,
+      switchDirectionSec: 0,
+      liftTimeSec: 0,
+      lowerTimeSec: 0,
+      loadedClearanceM: 0.2,
+      reservationClearanceSec: 0.05
+    }
+  });
+}
+
 describe('phase 0 validation', () => {
   it('checks same-seed hash stability and seed sweep health', () => {
     const result = validatePhase0Scenario(createDefaultShuttleScenario({ durationSec: 60 }), {
@@ -134,6 +165,24 @@ describe('phase 0 validation', () => {
     expect(result.acceptance.ieValidationPass).toBe(false);
     expect(result.acceptance.pass).toBe(false);
   }, 120000);
+
+  it('keeps reservation-overlap audit active when collision avoidance is disabled', () => {
+    const scenario = collisionAvoidanceOffMergeScenario();
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['A', 'B']);
+    sim.setVehicleRouteForTest('SH-02', ['C', 'B']);
+
+    const state = sim.step(0.1);
+    const nodeBReservations = state.reservations.filter(
+      (reservationItem) => reservationItem.resourceType === 'node' && reservationItem.resourceId === 'B'
+    );
+    const result = inspectPhase0StateSnapshot(scenario, state, sim.getDebugState());
+
+    expect(nodeBReservations).toHaveLength(2);
+    expect(result.ieBehaviorAudit.reservation.violationCount).toBeGreaterThan(0);
+    expect(result.ieBehaviorAudit.reservation.violationsByCode.activeResourceOverlap).toBeGreaterThan(0);
+    expect(result.ieBehaviorAudit.reservation.violationsByCode.resourceWindowOverlap).toBeGreaterThan(0);
+  });
 
   it('fails long-run acceptance when explicit throughput and queue thresholds are missed', () => {
     const result = validatePhase0Scenario(createDefaultShuttleScenario({

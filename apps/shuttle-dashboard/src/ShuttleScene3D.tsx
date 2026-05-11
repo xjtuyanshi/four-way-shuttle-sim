@@ -24,6 +24,14 @@ type SceneRuntime = {
   nodeById: Map<string, ShuttleNode>;
   edgeById: Map<string, ShuttleEdge>;
   vehicleObjects: Map<string, THREE.Group>;
+  loadOverlayKey: string;
+  reservationOverlayKey: string;
+  routeOverlayKey: string;
+  cameraTarget: THREE.Vector3;
+  baseCameraDistance: number;
+  baseCameraYaw: number;
+  baseCameraPitch: number;
+  lastFrameMs: number;
   frameId: number;
   resizeObserver: ResizeObserver;
 };
@@ -33,6 +41,19 @@ export type ShuttleSceneLayers = {
   physics: boolean;
   loads: boolean;
   routes: boolean;
+};
+
+export type ShuttleSceneCameraView = {
+  zoom: number;
+  yawOffsetRad: number;
+  pitchOffsetRad: number;
+};
+
+export type ShuttleSceneRendererInfo = {
+  vendor: string;
+  renderer: string;
+  hardwareAccelerated: boolean;
+  webglVersion: 'WebGL1' | 'WebGL2';
 };
 
 type VehicleObjectUserData = {
@@ -49,6 +70,7 @@ const VEHICLE_BASE_Y = 0.08;
 const CAD_CANVAS_WIDTH = 2048;
 const CAD_CANVAS_HEIGHT = 1536;
 const STORAGE_MARKER_HEIGHT_M = 0.16;
+const TARGET_RENDER_FPS = 30;
 const CAD_STORAGE_FILL = 'rgba(103, 72, 176, 0.2)';
 const CAD_STORAGE_STROKE = 'rgba(176, 111, 255, 0.86)';
 const CAD_AISLE_FILL = 'rgba(231, 190, 44, 0.22)';
@@ -56,6 +78,18 @@ const CAD_AISLE_STROKE = 'rgba(246, 214, 62, 0.92)';
 const CAD_BLOCKED_FILL = 'rgba(101, 118, 111, 0.26)';
 const CAD_BLOCKED_STROKE = 'rgba(151, 183, 167, 0.88)';
 const CAD_DIMENSION_STROKE = 'rgba(222, 231, 236, 0.76)';
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function clampCameraView(view: ShuttleSceneCameraView): ShuttleSceneCameraView {
+  return {
+    zoom: clamp(view.zoom, 0.45, 4),
+    yawOffsetRad: view.yawOffsetRad,
+    pitchOffsetRad: clamp(view.pitchOffsetRad, -0.78, 0.78)
+  };
+}
 
 function computeBounds(nodes: ShuttleNode[]): {
   minX: number;
@@ -89,8 +123,37 @@ function computeBounds(nodes: ShuttleNode[]): {
   };
 }
 
+function applyCameraView(runtime: SceneRuntime, view: ShuttleSceneCameraView): void {
+  const nextView = clampCameraView(view);
+  const distance = runtime.baseCameraDistance / nextView.zoom;
+  const yaw = runtime.baseCameraYaw + nextView.yawOffsetRad;
+  const pitch = clamp(runtime.baseCameraPitch + nextView.pitchOffsetRad, 0.28, 1.38);
+  const horizontalDistance = Math.cos(pitch) * distance;
+
+  runtime.camera.position.set(
+    runtime.cameraTarget.x + Math.sin(yaw) * horizontalDistance,
+    runtime.cameraTarget.y + Math.sin(pitch) * distance,
+    runtime.cameraTarget.z + Math.cos(yaw) * horizontalDistance
+  );
+  runtime.camera.lookAt(runtime.cameraTarget);
+}
+
 function normalizeAngle(angle: number): number {
   return Math.atan2(Math.sin(angle), Math.cos(angle));
+}
+
+function detectRendererInfo(renderer: THREE.WebGLRenderer): ShuttleSceneRendererInfo {
+  const gl = renderer.getContext();
+  const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+  const vendor = debugInfo ? String(gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL)) : String(gl.getParameter(gl.VENDOR));
+  const rendererName = debugInfo ? String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)) : String(gl.getParameter(gl.RENDERER));
+  const softwarePattern = /swiftshader|software|llvmpipe|warp/i;
+  return {
+    vendor,
+    renderer: rendererName,
+    hardwareAccelerated: !softwarePattern.test(`${vendor} ${rendererName}`),
+    webglVersion: renderer.capabilities.isWebGL2 ? 'WebGL2' : 'WebGL1'
+  };
 }
 
 function disposeObject(object: THREE.Object3D): void {
@@ -866,7 +929,7 @@ function vehicleUserData(group: THREE.Group): VehicleObjectUserData {
 function applyVehicleState(group: THREE.Group, vehicle: VehicleState, layers: ShuttleSceneLayers, selected: boolean): void {
   const data = vehicleUserData(group);
   data.targetPosition.set(vehicle.x, 0, vehicle.z);
-  data.targetYaw = 0;
+  data.targetYaw = vehicle.yaw;
   data.loadedMesh.visible = vehicle.loaded;
   data.safetyRing.visible = layers.physics;
   data.ringMaterial.opacity = selected ? 0.46 : 0.22;
@@ -895,20 +958,35 @@ function createLoadMesh(load: LoadStateRecord, node: ShuttleNode, index: number)
   return loadMesh;
 }
 
-function createPendingInboundLoadMesh(taskId: string, node: ShuttleNode): THREE.Group {
-  const loadMesh = createPalletLoadObject(1.04, 0.88, 0xb98a4a);
-  loadMesh.position.set(node.x, 0.13, node.z);
-  loadMesh.userData.loadId = taskId;
-  loadMesh.traverse((child) => {
-    if (child instanceof THREE.Mesh) {
-      const materials = Array.isArray(child.material) ? child.material : [child.material];
-      for (const childMaterial of materials) {
-        childMaterial.transparent = true;
-        childMaterial.opacity = 0.58;
-      }
-    }
-  });
-  return loadMesh;
+function loadOverlayKey(state: ShuttleSimState | null, layers: ShuttleSceneLayers): string {
+  if (!layers.loads) return 'off';
+  return (state?.loads ?? [])
+    .filter((load) => load.nodeId && load.state !== 'carried')
+    .map((load) => `${load.id}:${load.state}:${load.nodeId ?? ''}:${load.vehicleId ?? ''}`)
+    .sort()
+    .join('|');
+}
+
+function reservationOverlayKey(state: ShuttleSimState | null, layers: ShuttleSceneLayers): string {
+  if (!layers.traffic) return 'off';
+  return (state?.reservations ?? [])
+    .map((reservation) =>
+      `${reservation.id}:${reservation.resourceType}:${reservation.resourceId}:${reservation.vehicleId}:${Math.round(reservation.endTimeSec * 10)}`
+    )
+    .sort()
+    .join('|');
+}
+
+function routeOverlayKey(
+  state: ShuttleSimState | null,
+  layers: ShuttleSceneLayers,
+  selectedVehicleId: string | null
+): string {
+  if (!layers.routes) return 'off';
+  return (state?.vehicles ?? [])
+    .filter((vehicle) => !selectedVehicleId || vehicle.id === selectedVehicleId)
+    .map((vehicle) => `${vehicle.id}:${vehicle.routeIndex}:${vehicle.routeNodeIds.slice(Math.max(0, vehicle.routeIndex)).join('>')}`)
+    .join('|');
 }
 
 function updateDynamicScene(
@@ -939,34 +1017,27 @@ function updateDynamicScene(
     applyVehicleState(object, vehicle, layers, selectedVehicleId === vehicle.id);
   }
 
-  clearGroup(runtime.loadGroup);
-  if (layers.loads) {
+  const nextLoadOverlayKey = loadOverlayKey(state, layers);
+  if (runtime.loadOverlayKey !== nextLoadOverlayKey) {
+    runtime.loadOverlayKey = nextLoadOverlayKey;
+    clearGroup(runtime.loadGroup);
+  }
+  if (layers.loads && runtime.loadGroup.children.length === 0) {
     const loads = (state?.loads ?? []).filter((load) => load.nodeId && load.state !== 'carried');
-    const occupiedLoadNodeIds = new Set(loads.flatMap((load) => load.nodeId ? [load.nodeId] : []));
     loads.forEach((load, index) => {
       const node = load.nodeId ? runtime.nodeById.get(load.nodeId) : null;
       if (node) {
         runtime.loadGroup.add(createLoadMesh(load, node, index));
       }
     });
-    for (const task of state?.tasks ?? []) {
-      if (
-        task.kind !== 'inbound' ||
-        task.state === 'completed' ||
-        task.state === 'failed' ||
-        occupiedLoadNodeIds.has(task.dropoffNodeId)
-      ) {
-        continue;
-      }
-      const node = runtime.nodeById.get(task.dropoffNodeId);
-      if (node?.type === 'storage') {
-        runtime.loadGroup.add(createPendingInboundLoadMesh(task.id, node));
-      }
-    }
   }
 
-  clearGroup(runtime.reservationGroup);
-  if (layers.traffic) {
+  const nextReservationOverlayKey = reservationOverlayKey(state, layers);
+  if (runtime.reservationOverlayKey !== nextReservationOverlayKey) {
+    runtime.reservationOverlayKey = nextReservationOverlayKey;
+    clearGroup(runtime.reservationGroup);
+  }
+  if (layers.traffic && runtime.reservationGroup.children.length === 0) {
     const activeReservations = state?.reservations ?? [];
     for (const reservation of activeReservations) {
       if (reservation.resourceType === 'edge') {
@@ -1004,8 +1075,12 @@ function updateDynamicScene(
     }
   }
 
-  clearGroup(runtime.routeGroup);
-  if (layers.routes) {
+  const nextRouteOverlayKey = routeOverlayKey(state, layers, selectedVehicleId);
+  if (runtime.routeOverlayKey !== nextRouteOverlayKey) {
+    runtime.routeOverlayKey = nextRouteOverlayKey;
+    clearGroup(runtime.routeGroup);
+  }
+  if (layers.routes && runtime.routeGroup.children.length === 0) {
     for (const vehicle of state?.vehicles ?? []) {
       if (selectedVehicleId && vehicle.id !== selectedVehicleId) {
         continue;
@@ -1038,12 +1113,15 @@ function updateDynamicScene(
   }
 }
 
-function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario): void {
+function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, cameraView: ShuttleSceneCameraView): void {
   clearGroup(runtime.staticGroup);
   clearGroup(runtime.routeGroup);
   clearGroup(runtime.reservationGroup);
   clearGroup(runtime.loadGroup);
   clearGroup(runtime.vehicleGroup);
+  runtime.loadOverlayKey = '';
+  runtime.reservationOverlayKey = '';
+  runtime.routeOverlayKey = '';
   runtime.vehicleObjects.clear();
   runtime.nodeById = new Map(scenario.layout.nodes.map((node) => [node.id, node]));
   runtime.edgeById = new Map(scenario.layout.edges.map((edge) => [edge.id, edge]));
@@ -1116,27 +1194,52 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario): voi
     runtime.staticGroup.add(nodeMesh);
   }
 
-  runtime.camera.position.set(
-    bounds.centerX - bounds.size * 0.18,
-    Math.max(13, bounds.size * 0.86),
-    bounds.centerZ + bounds.size * 0.28
-  );
-  runtime.camera.lookAt(bounds.centerX, 0, bounds.centerZ);
+  runtime.cameraTarget.set(bounds.centerX, 0, bounds.centerZ);
+  const defaultCameraOffset = new THREE.Vector3(-bounds.size * 0.18, Math.max(13, bounds.size * 0.86), bounds.size * 0.28);
+  runtime.baseCameraDistance = defaultCameraOffset.length();
+  runtime.baseCameraYaw = Math.atan2(defaultCameraOffset.x, defaultCameraOffset.z);
+  runtime.baseCameraPitch = Math.asin(defaultCameraOffset.y / Math.max(0.001, runtime.baseCameraDistance));
+  applyCameraView(runtime, cameraView);
 }
 
 export function ShuttleScene3D({
   scenario,
   state,
   layers,
-  selectedVehicleId
+  selectedVehicleId,
+  cameraView,
+  onCameraViewChange,
+  onRendererInfo
 }: {
   scenario: ShuttleScenario | null;
   state: ShuttleSimState | null;
   layers: ShuttleSceneLayers;
   selectedVehicleId: string | null;
+  cameraView: ShuttleSceneCameraView;
+  onCameraViewChange: (view: ShuttleSceneCameraView) => void;
+  onRendererInfo?: (info: ShuttleSceneRendererInfo) => void;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const runtimeRef = useRef<SceneRuntime | null>(null);
+  const cameraViewRef = useRef<ShuttleSceneCameraView>(cameraView);
+  const onCameraViewChangeRef = useRef(onCameraViewChange);
+  const onRendererInfoRef = useRef(onRendererInfo);
+
+  useEffect(() => {
+    cameraViewRef.current = cameraView;
+    const runtime = runtimeRef.current;
+    if (runtime) {
+      applyCameraView(runtime, cameraView);
+    }
+  }, [cameraView]);
+
+  useEffect(() => {
+    onCameraViewChangeRef.current = onCameraViewChange;
+  }, [onCameraViewChange]);
+
+  useEffect(() => {
+    onRendererInfoRef.current = onRendererInfo;
+  }, [onRendererInfo]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -1148,11 +1251,12 @@ export function ShuttleScene3D({
     scene.background = new THREE.Color(0x0d141b);
     scene.fog = new THREE.Fog(0x0d141b, 32, 86);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.shadowMap.enabled = true;
+    const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1));
+    renderer.shadowMap.enabled = false;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     host.appendChild(renderer.domElement);
+    onRendererInfoRef.current?.(detectRendererInfo(renderer));
 
     const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
     const root = new THREE.Group();
@@ -1170,7 +1274,7 @@ export function ShuttleScene3D({
     const key = new THREE.DirectionalLight(0xffffff, 1.6);
     key.position.set(-8, 18, 12);
     key.castShadow = true;
-    key.shadow.mapSize.set(1536, 1536);
+    key.shadow.mapSize.set(1024, 1024);
     key.shadow.camera.left = -28;
     key.shadow.camera.right = 28;
     key.shadow.camera.top = 28;
@@ -1198,27 +1302,88 @@ export function ShuttleScene3D({
       nodeById: new Map(),
       edgeById: new Map(),
       vehicleObjects: new Map(),
+      loadOverlayKey: '',
+      reservationOverlayKey: '',
+      routeOverlayKey: '',
+      cameraTarget: new THREE.Vector3(),
+      baseCameraDistance: 1,
+      baseCameraYaw: 0,
+      baseCameraPitch: 0.9,
+      lastFrameMs: performance.now(),
       frameId: 0,
       resizeObserver: new ResizeObserver(resize)
     };
     runtime.resizeObserver.observe(host);
     resize();
 
-    const render = () => {
+    let pointerDrag: { pointerId: number; x: number; y: number } | null = null;
+    const updateCameraFromPointer = (nextView: ShuttleSceneCameraView) => {
+      const clampedView = clampCameraView(nextView);
+      cameraViewRef.current = clampedView;
+      onCameraViewChangeRef.current(clampedView);
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      pointerDrag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+      renderer.domElement.setPointerCapture(event.pointerId);
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (!pointerDrag || pointerDrag.pointerId !== event.pointerId) return;
+      const dx = event.clientX - pointerDrag.x;
+      const dy = event.clientY - pointerDrag.y;
+      pointerDrag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+      const current = cameraViewRef.current;
+      updateCameraFromPointer({
+        ...current,
+        yawOffsetRad: current.yawOffsetRad - dx * 0.008,
+        pitchOffsetRad: current.pitchOffsetRad + dy * 0.006
+      });
+    };
+    const onPointerUp = (event: PointerEvent) => {
+      if (pointerDrag?.pointerId === event.pointerId) {
+        pointerDrag = null;
+      }
+    };
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const current = cameraViewRef.current;
+      updateCameraFromPointer({
+        ...current,
+        zoom: current.zoom * (event.deltaY > 0 ? 0.9 : 1.1)
+      });
+    };
+    renderer.domElement.addEventListener('pointerdown', onPointerDown);
+    renderer.domElement.addEventListener('pointermove', onPointerMove);
+    renderer.domElement.addEventListener('pointerup', onPointerUp);
+    renderer.domElement.addEventListener('pointercancel', onPointerUp);
+    renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
+
+    const render = (nowMs: number) => {
       runtime.frameId = window.requestAnimationFrame(render);
+      if (nowMs - runtime.lastFrameMs < 1000 / TARGET_RENDER_FPS) {
+        return;
+      }
+      const dtSec = Math.min(0.05, Math.max(0.001, (nowMs - runtime.lastFrameMs) / 1000));
+      runtime.lastFrameMs = nowMs;
+      const positionAlpha = 1 - Math.exp(-dtSec * 12);
+      const yawAlpha = 1 - Math.exp(-dtSec * 14);
       for (const object of runtime.vehicleObjects.values()) {
         const data = vehicleUserData(object);
-        object.position.lerp(data.targetPosition, 0.22);
-        object.rotation.y += normalizeAngle(data.targetYaw - object.rotation.y) * 0.24;
+        object.position.lerp(data.targetPosition, positionAlpha);
+        object.rotation.y += normalizeAngle(data.targetYaw - object.rotation.y) * yawAlpha;
       }
       renderer.render(scene, camera);
     };
-    render();
+    runtime.frameId = window.requestAnimationFrame(render);
     runtimeRef.current = runtime;
 
     return () => {
       window.cancelAnimationFrame(runtime.frameId);
       runtime.resizeObserver.disconnect();
+      renderer.domElement.removeEventListener('pointerdown', onPointerDown);
+      renderer.domElement.removeEventListener('pointermove', onPointerMove);
+      renderer.domElement.removeEventListener('pointerup', onPointerUp);
+      renderer.domElement.removeEventListener('pointercancel', onPointerUp);
+      renderer.domElement.removeEventListener('wheel', onWheel);
       clearGroup(staticGroup);
       clearGroup(routeGroup);
       clearGroup(reservationGroup);
@@ -1235,7 +1400,7 @@ export function ShuttleScene3D({
     if (!runtime || !scenario) {
       return;
     }
-    buildStaticScene(runtime, scenario);
+    buildStaticScene(runtime, scenario, cameraViewRef.current);
     updateDynamicScene(runtime, scenario, state, layers, selectedVehicleId);
   }, [scenario]);
 

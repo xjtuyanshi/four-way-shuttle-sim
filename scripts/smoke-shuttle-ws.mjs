@@ -213,9 +213,14 @@ async function collectStream(baseUrl, port) {
 }
 
 function startApi(port) {
-  const child = spawn('pnpm', ['--filter', 'shuttle-api', 'dev'], {
+  const child = spawn(
+    process.platform === 'win32' ? 'cmd.exe' : 'corepack',
+    process.platform === 'win32'
+      ? ['/d', '/s', '/c', 'corepack pnpm --filter shuttle-api dev']
+      : ['pnpm', '--filter', 'shuttle-api', 'dev'],
+    {
     cwd: repoRoot,
-    detached: true,
+    detached: process.platform !== 'win32',
     env: {
       ...process.env,
       SHUTTLE_PORT: String(port),
@@ -223,7 +228,8 @@ function startApi(port) {
       SHUTTLE_SPEED: '4'
     },
     stdio: ['ignore', 'pipe', 'pipe']
-  });
+    }
+  );
 
   let output = '';
   child.stdout.on('data', (chunk) => {
@@ -249,6 +255,14 @@ function startApi(port) {
 
 async function stopApi(child) {
   if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  if (process.platform === 'win32') {
+    spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore' });
+    await Promise.race([
+      new Promise((resolve) => child.once('exit', resolve)),
+      delay(3_000)
+    ]);
     return;
   }
   try {
