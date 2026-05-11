@@ -518,7 +518,7 @@ function buildStressScenarioSpecs(baseScenario: ShuttleScenario): Phase0StressSc
       }),
       initialStoredNodeIds: [],
       expectedBottleneckReasonPrefixes: ['storage-empty', 'fifo-'],
-      expectedDominantBottleneckCategories: ['fifoLane', 'storageInventory', 'intersectionToken', 'clearThrough', 'segmentCapacity', 'headway', 'routing'],
+      expectedDominantBottleneckCategories: ['fifoLane', 'storageInventory', 'sideAisleNetwork', 'intersectionToken', 'clearThrough', 'segmentCapacity', 'headway', 'routing'],
       requiresPositiveThroughput: true
     },
     {

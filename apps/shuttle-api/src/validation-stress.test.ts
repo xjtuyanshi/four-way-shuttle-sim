@@ -43,7 +43,7 @@ describe('phase 0 stress validation', () => {
     expect(result.stress.expectedBottlenecksObserved).toBe(true);
     expect(result.stress.expectedDominantBottlenecksObserved).toBe(true);
     expect(result.stress.positiveThroughputWhereRequired).toBe(true);
-    expect(inboundOnly!.runs.some((run) => run.physicalViolationsByCode.minSeparation > 0)).toBe(true);
+    expect(inboundOnly!.runs.every((run) => run.physicalViolationsByCode.minSeparation === 0)).toBe(true);
     expect(result.acceptance.stressPass).toBe(false);
     expect(result.acceptance.flowDebugObservationPass).toBe(true);
     expect(result.acceptance.segmentSafeValidationPass).toBe(false);

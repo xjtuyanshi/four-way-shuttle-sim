@@ -300,7 +300,7 @@ describe('shuttle phase 0 SimCore', () => {
       'parking-g',
       'parking-h'
     ]);
-    expect(parsed.layout.nodes.filter((node) => node.id.includes('-stage-') && node.type === 'parking' && node.noParking)).toHaveLength(12);
+    expect(parsed.layout.nodes.filter((node) => node.id.includes('-stage-'))).toHaveLength(0);
     expect(parsed.layout.zones.some((zone) => zone.noStop && zone.noParking)).toBe(true);
     expect(parsed.layout.calibrationProfile).toMatchObject({
       id: 'phase0-cad-assumption-v1',
@@ -319,7 +319,7 @@ describe('shuttle phase 0 SimCore', () => {
     ]);
   });
 
-  it('can create an all-inbound lift layout with staging for every lift position', () => {
+  it('can create an all-inbound lift layout without connector staging queues', () => {
     const scenario = createDefaultShuttleScenario({ liftMode: 'all-inbound', vehicles: { count: 8 } });
     const parsed = ShuttleScenarioSchema.parse(scenario);
     const liftNodes = parsed.layout.nodes.filter((node) => node.type === 'lift-blackbox');
@@ -327,10 +327,8 @@ describe('shuttle phase 0 SimCore', () => {
     expect(liftNodes).toHaveLength(8);
     expect(liftNodes.every((node) => node.liftKind === 'inbound')).toBe(true);
     expect(parsed.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'outbound')).toHaveLength(0);
-    expect(parsed.layout.nodes.filter((node) => node.id.includes('-stage-') && node.type === 'parking' && node.noParking)).toHaveLength(24);
-    for (const lift of liftNodes) {
-      expect(parsed.layout.nodes.filter((node) => node.id.startsWith(`${lift.id}-stage-`))).toHaveLength(3);
-    }
+    expect(parsed.layout.nodes.filter((node) => /-stage-\d\d$/.test(node.id))).toHaveLength(0);
+    expect(parsed.layout.edges.filter((edge) => edge.from.includes('-stage-') || edge.to.includes('-stage-'))).toHaveLength(0);
 
     const state = new ShuttleSimCore(scenario).getState();
     expect(state.traffic.liftPorts.filter((port) => port.kind === 'inbound')).toHaveLength(8);
@@ -596,6 +594,164 @@ describe('shuttle phase 0 SimCore', () => {
     expectNoTrafficSafetyFailures(state);
   }, 30000);
 
+  it('does not place inbound approach queues on lift connector footprints', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        liftApproachCapacity: 8,
+        minimumClearanceSec: 0.4
+      }
+    });
+    const stageNodes = scenario.layout.nodes.filter((node) => /-stage-\d\d$/.test(node.id));
+    const stagingEdges = scenario.layout.edges.filter((edge) => edge.from.includes('-stage-') || edge.to.includes('-stage-'));
+
+    expect(stageNodes).toHaveLength(0);
+    expect(stagingEdges).toHaveLength(0);
+  });
+
+  it('brakes a moving side-aisle shuttle before its footprint reaches a newly occupied node', () => {
+    const scenario = createDefaultShuttleScenario({
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        liftApproachCapacity: 8,
+        minimumClearanceSec: 0.4
+      },
+      physicsParams: {
+        emptySpeedMps: 2,
+        loadedSpeedMps: 2,
+        accelerationMps2: 4
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['left-row-06', 'left-row-07']);
+    sim.setVehicleRouteForTest('SH-02', ['parking-a']);
+    sim.step(0.2);
+    sim.setVehicleRouteForTest('SH-02', ['left-row-07']);
+
+    const state = sim.step(0.2);
+    const movingVehicle = state.vehicles.find((vehicle) => vehicle.id === 'SH-01');
+    const stoppedVehicle = state.vehicles.find((vehicle) => vehicle.id === 'SH-02');
+
+    expect(movingVehicle).toMatchObject({
+      state: 'waiting-blocked',
+      currentEdgeId: 'left-row-06-left-row-07',
+      waitReason: 'min-separation',
+      blockingVehicleId: 'SH-02'
+    });
+    expect(Math.abs((movingVehicle?.x ?? 0) - (stoppedVehicle?.x ?? 0))).toBeLessThan(scenario.vehicles.widthM);
+    expect(Math.abs((movingVehicle?.z ?? 0) - (stoppedVehicle?.z ?? 0))).toBeGreaterThanOrEqual(scenario.vehicles.lengthM);
+  });
+
+  it('prefers an empty storage refuge over backing down the side aisle for head-on yield', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['left-row-06', 'left-row-07']);
+    sim.setVehicleRouteForTest('SH-02', ['left-row-07', 'left-row-06']);
+
+    const state = sim.step(0.1);
+    const lowerVehicle = state.vehicles.find((vehicle) => vehicle.id === 'SH-01');
+    const upperVehicle = state.vehicles.find((vehicle) => vehicle.id === 'SH-02');
+
+    expect(lowerVehicle?.targetNodeId).toBe('storage-r06-c01');
+    expect(lowerVehicle?.routeNodeIds.slice(0, 4)).toEqual([
+      'left-row-06',
+      'storage-r06-c01',
+      'left-row-06',
+      'left-row-07'
+    ]);
+    expect(upperVehicle?.targetNodeId).toBe('storage-r07-c01');
+    expect(upperVehicle?.routeNodeIds.slice(0, 4)).toEqual([
+      'left-row-07',
+      'storage-r07-c01',
+      'left-row-07',
+      'left-row-06'
+    ]);
+    expect(lowerVehicle?.targetNodeId).not.toBe('left-row-05');
+    expect(upperVehicle?.targetNodeId).not.toBe('left-row-08');
+  });
+
+  it('moves a storage refuge occupant deeper so an aisle shuttle can enter the pocket', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['storage-r06-c01', 'left-row-06']);
+    sim.setVehicleRouteForTest('SH-02', ['left-row-06', 'storage-r06-c01']);
+
+    const state = sim.step(0.1);
+    const refugeOccupant = state.vehicles.find((vehicle) => vehicle.id === 'SH-01');
+    const aisleVehicle = state.vehicles.find((vehicle) => vehicle.id === 'SH-02');
+
+    expect(refugeOccupant).toMatchObject({
+      state: 'returning',
+      currentNodeId: 'storage-r06-c01',
+      targetNodeId: 'storage-r06-c02',
+      waitReason: null
+    });
+    expect(aisleVehicle?.targetNodeId).toBe('storage-r06-c01');
+  });
+
+  it('moves an empty storage-refuge shuttle deeper when the side-aisle continuation is blocked', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['left-row-06', 'storage-r06-c01', 'left-row-06', 'left-row-07']);
+    sim.setVehicleRouteForTest('SH-02', ['left-row-07']);
+
+    const state = runFor(sim, 3);
+    const refugeVehicle = state.vehicles.find((vehicle) => vehicle.id === 'SH-01');
+
+    expect(refugeVehicle).toMatchObject({
+      state: 'returning',
+      currentNodeId: 'storage-r06-c01',
+      targetNodeId: 'storage-r06-c02',
+      waitReason: null
+    });
+    expect(refugeVehicle?.currentEdgeId).toMatch(/^storage-r06-c0[12]-storage-r06-c0[12]$/);
+  });
+
   it('does not allocate inbound dropoff cells currently occupied by parked shuttles', () => {
     const scenario = createDefaultShuttleScenario({
       vehicles: { count: 9 },
@@ -753,17 +909,17 @@ describe('shuttle phase 0 SimCore', () => {
       storageCellCount: 384,
       blockedCellCount: 0,
       structuralCellCount: 0,
-      trackBedCount: 494,
+      trackBedCount: 478,
       storageLaneTrackCount: 400,
       sideAisleTrackCount: 42,
       crossAisleTrackCount: 12,
       inboundConnectorTrackCount: 8,
       outboundConnectorTrackCount: 8,
-      parkingConnectorTrackCount: 24,
+      parkingConnectorTrackCount: 8,
       diagonalTrackCount: 0,
       inboundLiftPadCount: 4,
       outboundLiftPadCount: 4,
-      parkingPadCount: 20,
+      parkingPadCount: 8,
       singleLevel: true,
       storageIslandCount: 8,
       denseStorageIslands: true,
@@ -889,7 +1045,7 @@ describe('shuttle phase 0 SimCore', () => {
       'parking-g',
       'parking-h'
     ]);
-    expect(contract.parkingPads.filter((pad) => pad.id.includes('-stage-'))).toHaveLength(12);
+    expect(contract.parkingPads.filter((pad) => pad.id.includes('-stage-'))).toHaveLength(0);
   });
 
   it('rejects vertical travel edges that cut through storage-cell footprints', () => {
@@ -1391,7 +1547,7 @@ describe('shuttle phase 0 SimCore', () => {
 
     expect(sim.getState().vehicles.find((vehicle) => vehicle.id === 'SH-02')).toMatchObject({
       state: 'waiting-blocked',
-      waitReason: 'no-stop-continuation-blocked',
+      waitReason: 'zone-reserved',
       currentNodeId: 'outbound-lift-top-01'
     });
   });
@@ -1492,6 +1648,62 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.reservations).toContainEqual(expect.objectContaining({ vehicleId: 'SH-01', resourceType: 'zone', resourceId: 'zone-edge-only' }));
     expect(state.reservations).toContainEqual(expect.objectContaining({ vehicleId: 'SH-01', resourceType: 'edge', resourceId: 'B-C' }));
     expect(state.reservations).toContainEqual(expect.objectContaining({ vehicleId: 'SH-01', resourceType: 'node', resourceId: 'C' }));
+  });
+
+  it('keeps a no-stop clear-through grant valid across one simulation tick of arrival rounding', () => {
+    const scenario = testScenario({
+      vehicles: {
+        count: 2,
+        lengthM: 1,
+        widthM: 1,
+        heightM: 0.2,
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.4,
+        accelerationMps2: 10,
+        switchDirectionSec: 0,
+        liftTimeSec: 0,
+        lowerTimeSec: 0,
+        maxLoadKg: 1000,
+        safetyRadiusM: 0.4,
+        batteryEnabled: false,
+        initialSoc: 1
+      },
+      physicsParams: {
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.4,
+        accelerationMps2: 10,
+        switchDirectionSec: 0,
+        liftTimeSec: 0,
+        lowerTimeSec: 0,
+        loadedClearanceM: 0.2,
+        reservationClearanceSec: 0.2
+      },
+      layout: {
+        units: 'meter',
+        calibrationProfile: null,
+        nodes: [
+          { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'X', type: 'intersection', x: 1.4, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'C', type: 'parking', x: 18.2, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'P', type: 'parking', x: 0, y: 0, z: 4, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
+        ],
+        edges: [
+          { id: 'A-X', from: 'A', to: 'X', lengthM: 1.4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'A-X', noParking: true },
+          { id: 'X-C', from: 'X', to: 'C', lengthM: 16.8, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'X-C', noParking: true }
+        ],
+        zones: []
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-02', ['P']);
+    sim.setVehicleRouteForTest('SH-01', ['A', 'X', 'C']);
+
+    const state = runFor(sim, 0.8);
+    const vehicle = state.vehicles.find((candidate) => candidate.id === 'SH-01');
+
+    expect(vehicle?.waitReason).not.toBe('no-stop-continuation-blocked');
+    expect(vehicle?.currentEdgeId).toBe('X-C');
+    expect(vehicle?.targetNodeId).toBe('C');
   });
 
   it('does not use a node-zone no-stop target as an exit buffer', () => {

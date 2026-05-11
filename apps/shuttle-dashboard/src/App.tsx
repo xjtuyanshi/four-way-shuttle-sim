@@ -189,6 +189,11 @@ type Phase0ValidationResult = {
     noStressReservationCoverageViolations?: boolean;
     expectedStressBottlenecksObserved?: boolean;
     positiveStressThroughputWhereRequired?: boolean;
+    flowDebugObservationPass?: boolean;
+    segmentSafeValidationPass?: boolean;
+    ieValidationPass?: boolean;
+    physicalSafetyPass?: boolean;
+    stressPhysicalSafetyPass?: boolean;
     pass: boolean;
   };
 };
@@ -277,7 +282,7 @@ const CONTROLLED_PARAMS = [
     unit: 's'
   },
   {
-    label: 'Lift staging',
+    label: 'Lift approach',
     path: '/trafficPolicy/liftApproachCapacity',
     min: 1,
     max: 8,
@@ -1598,6 +1603,13 @@ export function App() {
     return values;
   }, [paramDraftValues, scenarioParamValues]);
   const collisionAvoidanceEnabled = scenario?.trafficPolicy.collisionAvoidanceEnabled ?? true;
+  const validationMode = validation?.acceptance.ieValidationPass
+    ? { label: 'IE pass', tone: 'ok' }
+    : validation?.acceptance.segmentSafeValidationPass
+      ? { label: 'Segment safe', tone: 'ok' }
+      : validation?.acceptance.flowDebugObservationPass
+        ? { label: 'Flow debug only', tone: 'warn' }
+        : { label: 'Not validated', tone: 'idle' };
 
   async function postCommand(path: string, body: unknown = {}): Promise<boolean> {
     const startedAt = performance.now();
@@ -1839,9 +1851,19 @@ export function App() {
             <p className="caption">SimCore / WCS-lite is source of truth</p>
             <h2>{scenario?.name ?? 'Phase 0 Scenario'}</h2>
           </div>
-          <div className={`runtime-badge ${statusTone}`}>
-            <span>{formatClock(liveClockSec)}</span>
-            <strong>{state ? `${Math.round((liveClockSec / state.durationSec) * 100)}%` : '--'}</strong>
+          <div className="header-status">
+            <div className={`safety-chip ${collisionAvoidanceEnabled ? 'ok' : 'danger'}`}>
+              <span>Avoidance</span>
+              <strong>{collisionAvoidanceEnabled ? 'On' : 'Off'}</strong>
+            </div>
+            <div className={`safety-chip ${validationMode.tone}`}>
+              <span>Validation</span>
+              <strong>{validationMode.label}</strong>
+            </div>
+            <div className={`runtime-badge ${statusTone}`}>
+              <span>{formatClock(liveClockSec)}</span>
+              <strong>{state ? `${Math.round((liveClockSec / state.durationSec) * 100)}%` : '--'}</strong>
+            </div>
           </div>
         </header>
 

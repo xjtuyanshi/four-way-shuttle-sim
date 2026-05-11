@@ -1,19 +1,19 @@
 :root {
   color-scheme: dark;
-  --bg: #0d1116;
-  --bg-2: #131921;
-  --panel: #171f28;
-  --panel-2: #1c2630;
-  --line: #2b3744;
-  --line-strong: #435263;
-  --text: #eef3f7;
-  --muted: #9aa8b5;
-  --muted-2: #6f7e8d;
-  --green: #4fc190;
-  --amber: #e2b84b;
-  --red: #e06b5c;
-  --cyan: #56a9c9;
-  --teal: #287f78;
+  --bg: #10100f;
+  --bg-2: #151513;
+  --panel: #1a1b18;
+  --panel-2: #20211e;
+  --line: #30322e;
+  --line-strong: #4a4d46;
+  --text: #f2f0e9;
+  --muted: #aaa89f;
+  --muted-2: #77766e;
+  --green: #5fc28d;
+  --amber: #d8b24d;
+  --red: #e16f5d;
+  --cyan: #62b6c8;
+  --teal: #2f8c75;
   font-family: Inter, "Avenir Next", "Segoe UI", sans-serif;
 }
 
@@ -41,7 +41,7 @@ input {
 button {
   border: 1px solid var(--line-strong);
   border-radius: 6px;
-  background: #202b36;
+  background: #242923;
   color: var(--text);
   min-height: 38px;
   padding: 0 12px;
@@ -49,8 +49,8 @@ button {
 }
 
 button:hover {
-  background: #263442;
-  border-color: #5b6b7a;
+  background: #2b3129;
+  border-color: #62665d;
 }
 
 button:focus-visible,
@@ -67,7 +67,7 @@ input:focus-visible {
 
 .sidebar {
   border-right: 1px solid var(--line);
-  background: #0f151c;
+  background: #121311;
   padding: 18px;
   display: flex;
   flex-direction: column;
@@ -78,7 +78,7 @@ input:focus-visible {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding-bottom: 10px;
+  padding: 2px 0 14px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -91,7 +91,7 @@ input:focus-visible {
   font-weight: 800;
   letter-spacing: 0.02em;
   color: #071113;
-  background: linear-gradient(135deg, var(--amber), #78c6b7);
+  background: linear-gradient(135deg, var(--amber), #6fc2a1);
 }
 
 .brand-block h1,
@@ -123,6 +123,7 @@ input:focus-visible {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.18);
 }
 
 .control-block {
@@ -152,8 +153,8 @@ input:focus-visible {
 .speed-row button.active,
 .mode-row button.active {
   color: var(--text);
-  border-color: rgba(86, 169, 201, 0.78);
-  background: rgba(86, 169, 201, 0.16);
+  border-color: rgba(95, 194, 141, 0.78);
+  background: rgba(95, 194, 141, 0.15);
 }
 
 .mode-row button.danger {
@@ -241,9 +242,9 @@ input:focus-visible {
 
 .unsafe-note {
   margin: 0;
-  border: 1px solid rgba(226, 184, 75, 0.58);
+  border: 1px solid rgba(216, 178, 77, 0.58);
   border-radius: 6px;
-  background: rgba(226, 184, 75, 0.12);
+  background: rgba(216, 178, 77, 0.12);
   color: var(--amber);
   font-size: 12px;
   line-height: 1.35;
@@ -271,7 +272,7 @@ input[type="range"] {
   min-height: 38px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #111820;
+  background: #141613;
   color: var(--muted);
   cursor: pointer;
   display: flex;
@@ -339,6 +340,14 @@ input[type="range"] {
   gap: 20px;
 }
 
+.header-status {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .caption {
   margin: 0 0 6px;
 }
@@ -348,7 +357,8 @@ input[type="range"] {
   line-height: 1.05;
 }
 
-.runtime-badge {
+.runtime-badge,
+.safety-chip {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
@@ -358,21 +368,34 @@ input[type="range"] {
   gap: 2px;
 }
 
-.runtime-badge span {
+.runtime-badge span,
+.safety-chip span {
   color: var(--muted);
   font-size: 12px;
 }
 
-.runtime-badge strong {
+.runtime-badge strong,
+.safety-chip strong {
   font-size: 22px;
 }
 
-.runtime-badge.ok strong {
+.runtime-badge.ok strong,
+.safety-chip.ok strong {
   color: var(--green);
 }
 
-.runtime-badge.warn strong {
+.runtime-badge.warn strong,
+.safety-chip.warn strong {
   color: var(--amber);
+}
+
+.safety-chip.danger {
+  border-color: rgba(225, 111, 93, 0.74);
+  background: rgba(225, 111, 93, 0.1);
+}
+
+.safety-chip.danger strong {
+  color: var(--red);
 }
 
 .kpi-strip {
@@ -687,6 +710,8 @@ input[type="range"] {
   padding: 12px;
   display: grid;
   gap: 4px;
+  min-height: 78px;
+  align-content: space-between;
 }
 
 .traffic-diagnostics span,
@@ -697,12 +722,14 @@ input[type="range"] {
 
 .traffic-diagnostics strong {
   font-size: 20px;
+  line-height: 1.05;
 }
 
 .traffic-wait-list,
 .traffic-lift-list {
   align-content: start;
   grid-column: span 2;
+  background: #151613;
 }
 
 .traffic-wait-list small,
@@ -1000,6 +1027,15 @@ th {
   .panel-head {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .header-status {
+    justify-content: stretch;
+  }
+
+  .runtime-badge,
+  .safety-chip {
+    min-width: 0;
   }
 
   .kpi-strip {

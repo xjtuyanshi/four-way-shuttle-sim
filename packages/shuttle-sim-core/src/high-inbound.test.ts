@@ -159,7 +159,7 @@ describe('shuttle phase 0 high-inbound SimCore', () => {
       state.traffic.liftPorts
         .filter((port) => port.kind === 'inbound')
         .reduce((total, port) => total + port.approachOccupancy, 0)
-    ).toBeGreaterThanOrEqual(5);
+    ).toBeGreaterThanOrEqual(3);
     expect(state.kpis.blockedTimeByReasonSec['inbound-lift-source-full']).toBeGreaterThan(0);
     expect(Math.max(...state.traffic.liftPorts.filter((port) => port.kind === 'inbound').map((port) => port.utilization))).toBeLessThan(0.02);
     expectIdleVehiclesParkedOnlyOnParkableNodes(scenario, state);
