@@ -612,8 +612,16 @@ input[type="range"] {
   display: inline-block;
 }
 
-.route-legend .planned {
+.route-legend .planned-empty {
   background: #56a9c9;
+}
+
+.route-legend .planned-loaded {
+  background: #4fc190;
+}
+
+.route-legend .planned-taskless {
+  background: #8d78ff;
 }
 
 .route-legend .local {
@@ -757,8 +765,12 @@ input[type="range"] {
   z-index: 5;
 }
 
-.map-route.planned.empty {
+.map-route.planned.empty.tasked {
   background: rgba(86, 169, 201, 0.68);
+}
+
+.map-route.planned.empty.taskless {
+  background: rgba(141, 120, 255, 0.68);
 }
 
 .map-route.planned.loaded {
@@ -824,6 +836,11 @@ input[type="range"] {
 .map-vehicle.tasked.empty {
   border-color: #bfe3ff;
   background: #2f78d4;
+}
+
+.map-vehicle.taskless.empty:not(.idle) {
+  border-color: #c6bcff;
+  background: #6158c7;
 }
 
 .map-vehicle.selected {

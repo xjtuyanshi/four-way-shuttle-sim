@@ -2975,7 +2975,7 @@ export class ShuttleSimCore {
       }
 
       open.delete(current);
-      for (const neighbor of this.agentNeighbors(current)) {
+      for (const neighbor of this.agentNeighbors(current, toNodeId)) {
         if (blockedNodeIds.has(neighbor.nodeId)) {
           continue;
         }
@@ -2995,11 +2995,11 @@ export class ShuttleSimCore {
     return this.neighborByNodeId.get(nodeId) ?? [];
   }
 
-  private agentNeighbors(nodeId: string): Array<{ nodeId: string; lengthM: number }> {
-    return this.neighbors(nodeId).filter((neighbor) => this.agentEdgeDirectionAllowed(nodeId, neighbor.nodeId));
+  private agentNeighbors(nodeId: string, goalNodeId: string): Array<{ nodeId: string; lengthM: number }> {
+    return this.neighbors(nodeId).filter((neighbor) => this.agentEdgeDirectionAllowed(nodeId, neighbor.nodeId, goalNodeId));
   }
 
-  private agentEdgeDirectionAllowed(fromNodeId: string, toNodeId: string): boolean {
+  private agentEdgeDirectionAllowed(fromNodeId: string, toNodeId: string, goalNodeId: string): boolean {
     const fromMain = /^main-(north|south)-(\d+)$/.exec(fromNodeId);
     const toMain = /^main-(north|south)-(\d+)$/.exec(toNodeId);
     if (!fromMain || !toMain || fromMain[1] !== toMain[1]) {
@@ -3007,7 +3007,13 @@ export class ShuttleSimCore {
     }
     const fromIndex = Number(fromMain[2]);
     const toIndex = Number(toMain[2]);
-    return fromMain[1] === 'north' ? toIndex >= fromIndex : toIndex <= fromIndex;
+    const preferredDirection = fromMain[1] === 'north' ? toIndex >= fromIndex : toIndex <= fromIndex;
+    if (preferredDirection) {
+      return true;
+    }
+    const goalNode = this.layoutNode(goalNodeId);
+    const goalIsLiftPort = goalNode?.type === 'inbound' || goalNode?.type === 'outbound' || goalNode?.type === 'lift-blackbox';
+    return goalIsLiftPort && this.neighbors(toNodeId).some((neighbor) => neighbor.nodeId === goalNodeId);
   }
 
   private rebuildGraphNeighbors(): void {

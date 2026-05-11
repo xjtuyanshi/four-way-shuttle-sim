@@ -797,6 +797,48 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.vehicles[0]?.plannedRouteNodeIds.at(-1)).toBe(task.pickupNodeId);
   });
 
+  it('agent-simple uses the direct adjacent main-lane hop to reach a nearby pickup', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-simple'
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['main-north-05']);
+    sim.addLoadForTest({ id: 'nearby-pickup-load', state: 'waiting', nodeId: 'outbound-lift-top-02', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'nearby-pickup',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'outbound-lift-top-02',
+      dropoffNodeId: 'storage-r08-c20',
+      loadId: 'nearby-pickup-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleTaskForTest('SH-01', 'nearby-pickup', false);
+
+    const state = sim.step(0.2);
+    const route = state.vehicles[0]?.plannedRouteNodeIds ?? [];
+
+    expect(route.slice(0, 3)).toEqual(['main-north-05', 'main-north-04', 'outbound-lift-top-02']);
+    expect(route).not.toEqual(expect.arrayContaining(['main-south-05', 'main-south-04']));
+  });
+
   it('agent-simple releases an inbound shuttle to the available pool after dropoff', () => {
     const scenario = createDefaultShuttleScenario({
       liftMode: 'all-inbound',

@@ -839,14 +839,13 @@ function AuthoritativeMap({
         );
       })}
       {layers.routes && (state?.vehicles ?? [])
-        .filter((vehicle) => !selectedVehicleId || vehicle.id === selectedVehicleId)
         .flatMap((vehicle) => [
           ...routeSegments(vehicle, vehicle.plannedRouteNodeIds.length >= 2 ? vehicle.plannedRouteNodeIds : vehicle.routeNodeIds.slice(Math.max(0, vehicle.routeIndex)), 'planned'),
           ...routeSegments(vehicle, vehicle.localRouteNodeIds, 'local')
         ])
         .map((segment) => (
           <span
-            className={`map-route ${segment.kind} ${segment.vehicle.loaded ? 'loaded' : 'empty'} ${selectedVehicleId === segment.vehicle.id ? 'selected' : ''}`}
+            className={`map-route ${segment.kind} ${segment.vehicle.loaded ? 'loaded' : 'empty'} ${segment.vehicle.taskId ? 'tasked' : 'taskless'} ${selectedVehicleId === segment.vehicle.id ? 'selected' : ''}`}
             key={segment.key}
             style={geometry.routeSegmentStyle(segment.from, segment.to)}
           />
@@ -981,7 +980,9 @@ function StreamingPane({
             Reset View
           </button>}
           <span className="route-legend" aria-label="Route legend">
-            <span><i className="planned" />Plan</span>
+            <span><i className="planned-empty" />To pickup</span>
+            <span><i className="planned-loaded" />Loaded</span>
+            <span><i className="planned-taskless" />No task</span>
             <span><i className="local" />Local</span>
             <span><i className="goal" />Goal</span>
             <span><i className="pickup" />Pickup</span>

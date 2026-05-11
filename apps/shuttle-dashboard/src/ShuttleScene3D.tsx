@@ -1090,8 +1090,14 @@ function applyVehicleState(group: THREE.Group, vehicle: VehicleState, layers: Sh
     return;
   }
 
-  data.bodyMaterial.color.setHex(0x2f8d86);
-  data.ringMaterial.color.setHex(0x56a9c9);
+  data.bodyMaterial.color.setHex(0x6158c7);
+  data.ringMaterial.color.setHex(0x8d78ff);
+}
+
+function vehicleRouteColor(vehicle: VehicleState): number {
+  if (vehicle.loaded) return 0x4fc190;
+  if (vehicle.taskId) return 0x56a9c9;
+  return 0x8d78ff;
 }
 
 function createLoadMesh(load: LoadStateRecord, node: ShuttleNode, index: number): THREE.Group {
@@ -1128,7 +1134,6 @@ function routeOverlayKey(
 ): string {
   if (!layers.routes) return 'off';
   const routeKey = (state?.vehicles ?? [])
-    .filter((vehicle) => !selectedVehicleId || vehicle.id === selectedVehicleId)
     .map((vehicle) => [
       vehicle.id,
       vehicle.routeIndex,
@@ -1143,7 +1148,7 @@ function routeOverlayKey(
     .map((task) => `${task.id}:${task.vehicleId}:${task.state}:${task.pickupNodeId}:${task.dropoffNodeId}`)
     .sort()
     .join('|');
-  return `${routeKey}::tasks:${pickupAssignmentKey}`;
+  return `${routeKey}::selected:${selectedVehicleId ?? ''}::tasks:${pickupAssignmentKey}`;
 }
 
 function routePointsForNodeIds(
@@ -1290,19 +1295,17 @@ function updateDynamicScene(
     }
 
     for (const vehicle of state?.vehicles ?? []) {
-      if (selectedVehicleId && vehicle.id !== selectedVehicleId) {
-        continue;
-      }
       const selected = selectedVehicleId === vehicle.id;
+      const routeColor = vehicleRouteColor(vehicle);
       const plannedRouteNodes = vehicle.plannedRouteNodeIds.length >= 2
         ? vehicle.plannedRouteNodeIds
         : vehicle.routeNodeIds.slice(Math.max(0, vehicle.routeIndex));
       const plannedRoutePoints = routePointsForNodeIds(runtime, vehicle, plannedRouteNodes);
       if (plannedRoutePoints.length >= 2) {
         addRoutePath(runtime.routeGroup, plannedRoutePoints, {
-          color: vehicle.loaded ? 0x4fc190 : 0x56a9c9,
+          color: routeColor,
           radius: selected ? 0.055 : 0.026,
-          opacity: selected ? 0.86 : 0.34,
+          opacity: selected ? 0.86 : 0.42,
           y: selected ? 0.255 : 0.205,
           arrows: selected,
           arrowScale: selected ? 1.15 : 0.85
@@ -1323,7 +1326,7 @@ function updateDynamicScene(
 
       const goalNode = vehicle.plannedGoalNodeId ? runtime.nodeById.get(vehicle.plannedGoalNodeId) : null;
       if (goalNode) {
-        runtime.routeGroup.add(createRouteGoalMarker(goalNode, vehicle.loaded ? 0x4fc190 : 0x56a9c9, selected));
+        runtime.routeGroup.add(createRouteGoalMarker(goalNode, routeColor, selected));
       }
     }
   }
