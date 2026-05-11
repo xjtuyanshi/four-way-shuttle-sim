@@ -766,6 +766,184 @@ describe('shuttle phase 0 SimCore', () => {
     expect(vehicle.currentEdgeId).toBe('right-row-08-storage-r08-c24');
   });
 
+  it('agent-simple assigns a pickup goal without installing a dispatcher route', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-simple'
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+
+    sim.start();
+    const state = sim.step(0.1);
+    const assigned = sim.getEventLog().find((event) => event.eventType === 'task-assigned');
+    const task = state.tasks[0]!;
+
+    expect(assigned?.reason).toBe('nearest-available-agent-goal');
+    expect(assigned?.details.dispatcherRouteInstalled).toBe(false);
+    expect(assigned?.details.route).toBeUndefined();
+    expect(assigned?.details.pickupNodeId).toBe(task.pickupNodeId);
+    expect(assigned?.details.dropoffNodeId).toBe(task.dropoffNodeId);
+  });
+
+  it('agent-simple releases an inbound shuttle to the available pool after dropoff', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      physicsParams: {
+        emptySpeedMps: 6,
+        loadedSpeedMps: 5,
+        accelerationMps2: 6,
+        switchDirectionSec: 0,
+        liftTimeSec: 0.05,
+        lowerTimeSec: 0.05
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-simple'
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+
+    sim.start();
+    let state = sim.getState();
+    for (let elapsedSec = 0; elapsedSec < 120 && state.kpis.completedInbound < 1; elapsedSec = Number((elapsedSec + 0.2).toFixed(6))) {
+      state = sim.step(0.2);
+    }
+    const vehicle = state.vehicles[0]!;
+
+    expect(state.kpis.completedInbound).toBe(1);
+    expect(vehicle.loaded).toBe(false);
+    expect(vehicle.taskId).toBeNull();
+    expect(vehicle.state).toBe('idle');
+    expect(vehicle.routeNodeIds).toEqual([vehicle.currentNodeId]);
+    expect(sim.getEventLog().some((event) => event.eventType === 'vehicle-standby-dispatched')).toBe(false);
+    expect(sim.getEventLog().some((event) => event.eventType === 'route-replanned' && event.reason === 'loaded-shortest-path')).toBe(false);
+  });
+
+  it('agent-simple makes an empty blocker follow a yield pocket before resuming its task goal', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-simple'
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['left-row-08']);
+    sim.setVehicleRouteForTest('SH-02', ['main-north-00']);
+    sim.addLoadForTest({ id: 'empty-pickup-load', state: 'waiting', nodeId: 'outbound-lift-bottom-01', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'loaded-drop-load', state: 'carried', nodeId: null, vehicleId: 'SH-02', weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'empty-pickup',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'outbound-lift-bottom-01',
+      dropoffNodeId: 'storage-r12-c01',
+      loadId: 'empty-pickup-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'loaded-drop',
+      kind: 'inbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'inbound-lift-bottom-01',
+      dropoffNodeId: 'storage-r08-c02',
+      loadId: 'loaded-drop-load',
+      vehicleId: 'SH-02',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleTaskForTest('SH-01', 'empty-pickup', false);
+    sim.setVehicleTaskForTest('SH-02', 'loaded-drop', true);
+
+    const state = sim.step(0.2);
+    const emptyVehicle = state.vehicles.find((vehicle) => vehicle.id === 'SH-01');
+    const yieldEvent = sim.getEventLog().find((event) => event.eventType === 'route-replanned' && event.vehicleId === 'SH-01' && event.reason === 'empty-yields-to-loaded');
+
+    expect(yieldEvent?.details.route).toBe('left-row-08>storage-r08-c01');
+    expect(emptyVehicle?.targetNodeId).toBe('storage-r08-c01');
+    expect(emptyVehicle?.currentEdgeId).toBe('storage-r08-c01-left-row-08');
+    expect(emptyVehicle?.waitReason).toBeNull();
+  });
+
+  it('agent-simple waits inside a storage row instead of reversing into a long obstacle reroute', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-simple'
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['storage-r07-c05']);
+    sim.setVehicleRouteForTest('SH-02', ['storage-r07-c06']);
+    sim.addLoadForTest({ id: 'blocked-pickup-load', state: 'waiting', nodeId: 'outbound-lift-top-02', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'blocked-pickup',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'outbound-lift-top-02',
+      dropoffNodeId: 'storage-r12-c01',
+      loadId: 'blocked-pickup-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleTaskForTest('SH-01', 'blocked-pickup', false);
+
+    const state = sim.step(0.2);
+    const vehicle = state.vehicles.find((candidate) => candidate.id === 'SH-01');
+
+    expect(vehicle?.state).toBe('waiting-blocked');
+    expect(vehicle?.targetNodeId).toBe('storage-r07-c06');
+    expect(vehicle?.blockingVehicleId).toBe('SH-02');
+    expect(sim.getEventLog().some((event) => event.eventType === 'route-replanned' && event.reason === 'empty-local-obstacle-reroute')).toBe(false);
+  });
+
   it('moves a storage refuge occupant deeper so an aisle shuttle can enter the pocket', () => {
     const scenario = createDefaultShuttleScenario({
       liftMode: 'all-inbound',

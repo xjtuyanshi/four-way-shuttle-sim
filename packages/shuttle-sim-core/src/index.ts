@@ -1414,6 +1414,17 @@ export class ShuttleSimCore {
     return this.getState();
   }
 
+  setVehicleTaskForTest(vehicleId: string, taskId: string | null, loaded: boolean): ShuttleSimState {
+    const vehicle = this.vehicles.find((candidate) => candidate.id === vehicleId);
+    if (!vehicle) {
+      throw new Error(`Unknown vehicle ${vehicleId}`);
+    }
+    vehicle.taskId = taskId;
+    vehicle.loaded = loaded;
+    vehicle.state = taskId ? 'assigned' : vehicle.routeNodeIds.length > 1 ? 'assigned' : 'idle';
+    return this.getState();
+  }
+
   private intervalForRate(ratePerHour: number): number {
     if (ratePerHour <= 0) {
       return Number.POSITIVE_INFINITY;
@@ -1975,10 +1986,15 @@ export class ShuttleSimCore {
     if (!vehicle.taskId) {
       this.clearTasklessRouteReservations(vehicle);
     }
+    const agentSimple = this.agentSimpleEnabled();
     vehicle.taskId = task.id;
-    vehicle.routeNodeIds = route;
-    vehicle.routeIndex = 0;
-    vehicle.targetNodeId = route[1] ?? null;
+    if (agentSimple) {
+      this.resetNavigationAtCurrentNode(vehicle);
+    } else {
+      vehicle.routeNodeIds = route;
+      vehicle.routeIndex = 0;
+      vehicle.targetNodeId = route[1] ?? null;
+    }
     vehicle.state = 'assigned';
     vehicle.waitReason = null;
     vehicle.blockingReservationId = null;
@@ -1988,9 +2004,30 @@ export class ShuttleSimCore {
     task.vehicleId = vehicle.id;
     task.assignedAtSec = this.simTimeSec;
     task.waitReason = null;
-    this.logEvent('task-assigned', vehicle.id, task.id, task.loadId, vehicle.currentNodeId, task.pickupNodeId, 'nearest-available', this.vehiclePosition(vehicle), {
-      route: route.join('>')
-    });
+    this.logEvent(
+      'task-assigned',
+      vehicle.id,
+      task.id,
+      task.loadId,
+      vehicle.currentNodeId,
+      task.pickupNodeId,
+      agentSimple ? 'nearest-available-agent-goal' : 'nearest-available',
+      this.vehiclePosition(vehicle),
+      agentSimple
+        ? { pickupNodeId: task.pickupNodeId, dropoffNodeId: task.dropoffNodeId, dispatcherRouteInstalled: false }
+        : { route: route.join('>') }
+    );
+  }
+
+  private resetNavigationAtCurrentNode(vehicle: MutableVehicle): void {
+    vehicle.routeNodeIds = [vehicle.currentNodeId];
+    vehicle.routeIndex = 0;
+    vehicle.targetNodeId = null;
+    vehicle.currentEdgeId = null;
+    vehicle.legRemainingM = 0;
+    vehicle.legElapsedSec = 0;
+    vehicle.legTravelSec = 0;
+    vehicle.targetSpeedMps = 0;
   }
 
   private clearTasklessRouteReservations(vehicle: MutableVehicle): void {
@@ -3320,12 +3357,20 @@ export class ShuttleSimCore {
         load.vehicleId = vehicle.id;
       }
       vehicle.state = 'assigned';
+      this.logEvent('lift-complete', vehicle.id, task.id, task.loadId, task.pickupNodeId, vehicle.currentNodeId, 'lift-time-elapsed', this.vehiclePosition(vehicle), {});
+      if (this.agentSimpleEnabled()) {
+        this.resetNavigationAtCurrentNode(vehicle);
+        vehicle.waitReason = null;
+        vehicle.blockingReservationId = null;
+        vehicle.blockingVehicleId = null;
+        vehicle.directionSwitchReadyNodeId = null;
+        return;
+      }
       const directLoadedRoute = this.planLoadedRouteToDropoff(vehicle.currentNodeId, task);
       vehicle.routeNodeIds = directLoadedRoute;
       vehicle.routeIndex = 0;
       vehicle.targetNodeId = directLoadedRoute[1] ?? null;
       vehicle.directionSwitchReadyNodeId = null;
-      this.logEvent('lift-complete', vehicle.id, task.id, task.loadId, task.pickupNodeId, vehicle.currentNodeId, 'lift-time-elapsed', this.vehiclePosition(vehicle), {});
       this.logEvent('route-replanned', vehicle.id, task.id, task.loadId, vehicle.currentNodeId, directLoadedRoute.at(-1) ?? null, 'loaded-shortest-path', this.vehiclePosition(vehicle), {
         route: directLoadedRoute.join('>')
       });
@@ -3350,6 +3395,16 @@ export class ShuttleSimCore {
         kind: task.kind
       });
       vehicle.taskId = null;
+      if (this.agentSimpleEnabled()) {
+        this.clearTasklessRouteReservations(vehicle);
+        vehicle.state = 'idle';
+        this.resetNavigationAtCurrentNode(vehicle);
+        vehicle.waitReason = null;
+        vehicle.blockingReservationId = null;
+        vehicle.blockingVehicleId = null;
+        vehicle.directionSwitchReadyNodeId = null;
+        return;
+      }
       if (task.kind === 'inbound' && this.isStorageNode(vehicle.currentNodeId)) {
         if (this.dispatchVehicleToInboundStandby(vehicle)) {
           return;
@@ -3527,6 +3582,14 @@ export class ShuttleSimCore {
       }
     }
 
+    const committedYieldRoute = this.agentCommittedYieldRoute(vehicle, goalNodeId);
+    if (committedYieldRoute) {
+      const committedNextNodeId = committedYieldRoute[1] ?? null;
+      if (committedNextNodeId && (!this.collisionAvoidanceEnabled() || !this.agentMoveBlocker(vehicle, committedNextNodeId))) {
+        return committedYieldRoute;
+      }
+    }
+
     const directRoute = this.agentShortestPath(
       vehicle.currentNodeId,
       goalNodeId,
@@ -3543,6 +3606,13 @@ export class ShuttleSimCore {
       return directRoute;
     }
     const blockedNodeId = directBlock ? directNextNodeId : lookaheadBlock!.nodeId;
+
+    if (vehicle.loaded) {
+      return directRoute;
+    }
+    if (this.isStorageNode(vehicle.currentNodeId)) {
+      return directRoute;
+    }
 
     try {
       if (!vehicle.loaded) {
@@ -3576,6 +3646,29 @@ export class ShuttleSimCore {
     }
     const route = vehicle.routeNodeIds.slice(currentIndex);
     if (route.length < 2 || route[0] !== vehicle.currentNodeId || route.at(-1) !== goalNodeId) {
+      return null;
+    }
+    const nextNodeId = route[1]!;
+    if (!this.traffic.findEdge(vehicle.currentNodeId, nextNodeId)) {
+      return null;
+    }
+    return route;
+  }
+
+  private agentCommittedYieldRoute(vehicle: MutableVehicle, goalNodeId: string): string[] | null {
+    if (vehicle.loaded) {
+      return null;
+    }
+    const currentIndex = vehicle.routeNodeIds.indexOf(vehicle.currentNodeId, Math.max(0, vehicle.routeIndex));
+    if (currentIndex < 0) {
+      return null;
+    }
+    const route = vehicle.routeNodeIds.slice(currentIndex);
+    if (route.length < 2 || route[0] !== vehicle.currentNodeId || route.at(-1) === goalNodeId) {
+      return null;
+    }
+    const routeGoal = route.at(-1)!;
+    if (!this.isStorageNode(routeGoal) && !routeGoal.startsWith('left-row-') && !routeGoal.startsWith('right-row-')) {
       return null;
     }
     const nextNodeId = route[1]!;
@@ -3831,7 +3924,7 @@ export class ShuttleSimCore {
     const goals = this.agentEmptyEscapeGoalCandidates(blocker, requester, blockedTargetNodeId);
     const taskGoal = this.agentGoalNodeId(blocker, task);
     if (taskGoal) {
-      goals.unshift(taskGoal);
+      goals.push(taskGoal);
     }
 
     const seen = new Set<string>();
