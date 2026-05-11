@@ -54,6 +54,7 @@ export type BottleneckBreakdown = Record<BottleneckCategory, number>;
 export type ReservationAuditCode =
   | 'invalidReservationWindow'
   | 'resourceWindowOverlap'
+  | 'selfWindowOverlap'
   | 'activeResourceOverlap'
   | 'staleReservation';
 
@@ -261,6 +262,9 @@ export type Phase0ValidationResult = {
     expectedStressBottlenecksObserved: boolean;
     expectedStressDominantBottlenecksObserved: boolean;
     positiveStressThroughputWhereRequired: boolean;
+    flowDebugObservationPass: boolean;
+    segmentSafeValidationPass: boolean;
+    ieValidationPass: boolean;
     pass: boolean;
   };
 };
@@ -299,6 +303,7 @@ const VIOLATION_CODES: PhysicalViolationCode[] = [
 const RESERVATION_AUDIT_CODES: ReservationAuditCode[] = [
   'invalidReservationWindow',
   'resourceWindowOverlap',
+  'selfWindowOverlap',
   'activeResourceOverlap',
   'staleReservation'
 ];
@@ -769,6 +774,22 @@ function reservationWindowsConflictForAudit(left: Reservation, right: Reservatio
   return (sameResource || sameZoneConflictGroup) && reservationWindowsOverlap(left, right);
 }
 
+function reservationWindowCoversForAudit(covering: Reservation, covered: Reservation): boolean {
+  return covering.startTimeSec <= covered.startTimeSec + 1e-6 && covering.endTimeSec >= covered.endTimeSec - 1e-6;
+}
+
+function selfReservationWindowsPartiallyOverlapForAudit(left: Reservation, right: Reservation): boolean {
+  if (left.id === right.id) return false;
+  if (left.vehicleId !== right.vehicleId) return false;
+  const sameResource = left.resourceType === right.resourceType && left.resourceId === right.resourceId;
+  return (
+    sameResource &&
+    reservationWindowsOverlap(left, right) &&
+    !reservationWindowCoversForAudit(left, right) &&
+    !reservationWindowCoversForAudit(right, left)
+  );
+}
+
 function inspectReservationAudit(
   scenario: ShuttleScenario,
   state: ShuttleSimState,
@@ -840,6 +861,24 @@ function inspectReservationAudit(
           observed: `${round(left.startTimeSec)}-${round(left.endTimeSec)} vs ${round(right.startTimeSec)}-${round(right.endTimeSec)}`,
           limit: 'non-overlapping single-capacity windows',
           message: 'Reservation time windows overlap for different vehicles on a single-capacity resource or conflict group.'
+        });
+      }
+    }
+
+    for (let leftIndex = 0; leftIndex < reservations.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < reservations.length; rightIndex += 1) {
+        const left = reservations[leftIndex]!;
+        const right = reservations[rightIndex]!;
+        if (!selfReservationWindowsPartiallyOverlapForAudit(left, right)) continue;
+        addAuditViolation(summary, {
+          code: 'selfWindowOverlap',
+          timeSec: state.simTimeSec,
+          resourceType: left.resourceType,
+          resourceId: left.resourceId,
+          vehicleIds: [left.vehicleId],
+          observed: `${round(left.startTimeSec)}-${round(left.endTimeSec)} vs ${round(right.startTimeSec)}-${round(right.endTimeSec)}`,
+          limit: 'self windows must be disjoint or one must fully cover the other',
+          message: 'A vehicle has partially overlapping self reservations on one resource, which can hide grant bookkeeping errors.'
         });
       }
     }
@@ -1800,6 +1839,27 @@ export function validatePhase0Scenario(
     RESERVATION_COVERAGE_CODES.every((code) => run.physicalViolationsByCode[code] === 0)
   );
   const noLongRunIeBehaviorAuditViolations = longRunRuns.every((run) => run.ieBehaviorAudit.pass);
+  const flowDebugThroughputObserved = longRunThroughputPositive || stress.positiveThroughputWhereRequired;
+  const flowDebugObservationPass =
+    sameSeedEventHashStable &&
+    noDeadlocksInSweep &&
+    noLivelocksInSweep &&
+    eventLogsPresent &&
+    noIeBehaviorAuditViolations &&
+    longRunEventLogsPresent &&
+    flowDebugThroughputObserved &&
+    noLongRunDeadlocks &&
+    noLongRunLivelocks &&
+    noLongRunIeBehaviorAuditViolations &&
+    stress.noStressDeadlocks &&
+    stress.noStressIeBehaviorAuditViolations &&
+    stress.expectedBottlenecksObserved &&
+    stress.expectedDominantBottlenecksObserved &&
+    stress.positiveThroughputWhereRequired;
+  const segmentSafeValidationPass = false;
+  const ieValidationPass =
+    segmentSafeValidationPass &&
+    layoutCalibrationReadiness.readyForIndustrialThroughputClaims === true;
 
   return {
     checkedAt: new Date().toISOString(),
@@ -1858,25 +1918,10 @@ export function validatePhase0Scenario(
       expectedStressBottlenecksObserved: stress.expectedBottlenecksObserved,
       expectedStressDominantBottlenecksObserved: stress.expectedDominantBottlenecksObserved,
       positiveStressThroughputWhereRequired: stress.positiveThroughputWhereRequired,
-      pass:
-        sameSeedEventHashStable &&
-        noDeadlocksInSweep &&
-        noLivelocksInSweep &&
-        eventLogsPresent &&
-        noPhysicalSafetyViolations &&
-        noReservationCoverageViolations &&
-        noIeBehaviorAuditViolations &&
-        longRunEventLogsPresent &&
-        longRunThroughputPositive &&
-        longRunThroughputFloorMet &&
-        longRunThroughputBySideMet &&
-        longRunQueuesBounded &&
-        noLongRunDeadlocks &&
-        noLongRunLivelocks &&
-        noLongRunPhysicalSafetyViolations &&
-        noLongRunReservationCoverageViolations &&
-        noLongRunIeBehaviorAuditViolations &&
-        stress.pass
+      flowDebugObservationPass,
+      segmentSafeValidationPass,
+      ieValidationPass,
+      pass: ieValidationPass
     }
   };
 }

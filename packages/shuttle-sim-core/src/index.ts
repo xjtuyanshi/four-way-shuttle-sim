@@ -2253,6 +2253,20 @@ export class ShuttleSimCore {
     return sameResource || sameZoneConflictGroup;
   }
 
+  private reservationsShareExactResource(left: Reservation, right: Reservation): boolean {
+    return left.resourceType === right.resourceType && left.resourceId === right.resourceId;
+  }
+
+  private mergeSelfReservationWindows(existing: Reservation, candidate: Reservation): Reservation {
+    return ReservationSchema.parse({
+      ...existing,
+      taskId: existing.taskId ?? candidate.taskId,
+      startTimeSec: Math.min(existing.startTimeSec, candidate.startTimeSec),
+      endTimeSec: Math.max(existing.endTimeSec, candidate.endTimeSec),
+      priority: Math.max(existing.priority, candidate.priority)
+    });
+  }
+
   private installMoveReservationsReplacingSelfOverlap(
     vehicle: MutableVehicle,
     reservations: Reservation[]
@@ -2262,20 +2276,33 @@ export class ShuttleSimCore {
     }
 
     const removed: Array<{ index: number; reservation: Reservation }> = [];
-    this.reservations = this.reservations.filter((existing, index) => {
-      const replace =
-        existing.vehicleId === vehicle.id &&
-        reservations.some(
-          (candidate) =>
-            this.reservationsShareBlockingResource(existing, candidate) &&
-            this.reservationWindowsOverlap(existing, candidate)
-        );
-      if (replace) {
-        removed.push({ index, reservation: existing });
+    const acceptedReservations: Reservation[] = [];
+    for (const reservation of reservations) {
+      let mergedReservation = reservation;
+      for (let index = acceptedReservations.length - 1; index >= 0; index -= 1) {
+        const existing = acceptedReservations[index]!;
+        if (
+          this.reservationsShareExactResource(existing, mergedReservation) &&
+          this.reservationWindowsOverlap(existing, mergedReservation)
+        ) {
+          acceptedReservations.splice(index, 1);
+          mergedReservation = this.mergeSelfReservationWindows(existing, mergedReservation);
+        }
       }
-      return !replace;
-    });
-    this.reservations.push(...reservations);
+      this.reservations = this.reservations.filter((existing, index) => {
+        const merge =
+          existing.vehicleId === vehicle.id &&
+          this.reservationsShareExactResource(existing, mergedReservation) &&
+          this.reservationWindowsOverlap(existing, mergedReservation);
+        if (merge) {
+          removed.push({ index, reservation: existing });
+          mergedReservation = this.mergeSelfReservationWindows(existing, mergedReservation);
+        }
+        return !merge;
+      });
+      acceptedReservations.push(mergedReservation);
+    }
+    this.reservations.push(...acceptedReservations);
     return removed;
   }
 

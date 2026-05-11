@@ -129,7 +129,10 @@ describe('phase 0 validation', () => {
     expect(result.acceptance.noLongRunLivelocks).toBe(true);
     expect(result.acceptance.noLongRunPhysicalSafetyViolations).toBe(true);
     expect(result.acceptance.noLongRunIeBehaviorAuditViolations).toBe(true);
-    expect(result.acceptance.pass).toBe(true);
+    expect(result.acceptance.flowDebugObservationPass).toBe(true);
+    expect(result.acceptance.segmentSafeValidationPass).toBe(false);
+    expect(result.acceptance.ieValidationPass).toBe(false);
+    expect(result.acceptance.pass).toBe(false);
   }, 120000);
 
   it('fails long-run acceptance when explicit throughput and queue thresholds are missed', () => {
@@ -163,6 +166,8 @@ describe('phase 0 validation', () => {
     expect(result.acceptance.longRunThroughputFloorMet).toBe(false);
     expect(result.acceptance.longRunThroughputBySideMet).toBe(false);
     expect(result.acceptance.longRunQueuesBounded).toBe(false);
+    expect(result.acceptance.segmentSafeValidationPass).toBe(false);
+    expect(result.acceptance.ieValidationPass).toBe(false);
     expect(result.acceptance.pass).toBe(false);
   }, 60000);
 

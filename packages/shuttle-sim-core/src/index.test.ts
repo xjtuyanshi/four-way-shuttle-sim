@@ -2483,6 +2483,53 @@ describe('shuttle phase 0 SimCore', () => {
     expect(sim.getDebugState().currentNodeOccupancy).toContainEqual({ nodeId: 'X', vehicleId: 'SH-01' });
   });
 
+  it('does not replace active self occupancy grants with partial rolling lookahead grants', () => {
+    const scenario = testScenario({
+      layout: {
+        units: 'meter',
+        calibrationProfile: null,
+        nodes: [
+          { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'X', type: 'intersection', x: 4, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'C', type: 'parking', x: 8, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'D', type: 'parking', x: 12, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
+        ],
+        edges: [
+          { id: 'A-X', from: 'A', to: 'X', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'west', noParking: true },
+          { id: 'X-C', from: 'X', to: 'C', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'east', noParking: true }
+        ],
+        zones: []
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['A', 'X', 'C']);
+    sim.setVehicleRouteForTest('SH-02', ['D']);
+    sim.addReservationForTest({
+      id: 'active-self-edge',
+      resourceType: 'edge',
+      resourceId: 'A-X',
+      vehicleId: 'SH-01',
+      taskId: null,
+      startTimeSec: 0,
+      endTimeSec: 60,
+      priority: 0,
+      conflictGroup: 'west',
+      reasonCode: 'test-active-self'
+    });
+
+    const state = sim.step(0.2);
+    const selfEdgeReservations = state.reservations.filter(
+      (reservation) =>
+        reservation.vehicleId === 'SH-01' &&
+        reservation.resourceType === 'edge' &&
+        reservation.resourceId === 'A-X'
+    );
+
+    expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-01')?.currentEdgeId).toBe('A-X');
+    expect(selfEdgeReservations.map((reservation) => reservation.id)).toEqual(['active-self-edge']);
+    expect(selfEdgeReservations[0]).toMatchObject({ startTimeSec: 0, endTimeSec: 60 });
+  });
+
   it('serializes crossing paths through a shared zone', () => {
     const scenario = testScenario({
       layout: {
