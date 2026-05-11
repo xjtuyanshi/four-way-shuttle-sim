@@ -540,16 +540,16 @@ describe('shuttle phase 0 SimCore', () => {
       durationSec: 7200,
       vehicles: {
         count: 8,
-        emptySpeedMps: 2,
-        loadedSpeedMps: 1.5,
-        accelerationMps2: 1.2,
+        emptySpeedMps: 3,
+        loadedSpeedMps: 2.25,
+        accelerationMps2: 3,
         liftTimeSec: 0.01,
         lowerTimeSec: 0.01
       },
       physicsParams: {
-        emptySpeedMps: 2,
-        loadedSpeedMps: 1.5,
-        accelerationMps2: 1.2,
+        emptySpeedMps: 3,
+        loadedSpeedMps: 2.25,
+        accelerationMps2: 3,
         liftTimeSec: 0.01,
         lowerTimeSec: 0.01
       },
@@ -724,6 +724,59 @@ describe('shuttle phase 0 SimCore', () => {
     expect(aisleVehicle?.targetNodeId).toBe('storage-r06-c01');
   });
 
+  it('does not bounce a task shuttle deeper into its own storage cell when its side aisle exit is occupied', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['storage-r06-c01', 'left-row-06']);
+    sim.setVehicleRouteForTest('SH-02', ['left-row-06']);
+
+    const state = sim.step(0.1);
+    const waitingVehicle = state.vehicles.find((vehicle) => vehicle.id === 'SH-01');
+
+    expect(waitingVehicle).toMatchObject({
+      state: 'waiting-blocked',
+      currentNodeId: 'storage-r06-c01',
+      targetNodeId: 'left-row-06'
+    });
+    expect(waitingVehicle?.routeNodeIds.slice(0, 3)).toEqual(['storage-r06-c01', 'left-row-06']);
+    expect(waitingVehicle?.targetNodeId).not.toBe('storage-r06-c02');
+  });
+
+  it('does not repeatedly insert the same side-aisle refuge after returning from it', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['left-row-06', 'storage-r06-c01', 'left-row-06', 'left-row-07']);
+    sim.setVehicleRouteForTest('SH-02', ['left-row-07']);
+
+    const state = runFor(sim, 4);
+    const vehicle = state.vehicles.find((candidate) => candidate.id === 'SH-01');
+    const route = vehicle?.routeNodeIds ?? [];
+    const refugeVisits = route.filter((nodeId) => nodeId === 'storage-r06-c01').length;
+
+    expect(refugeVisits).toBe(2);
+    expect(route.join('>')).not.toContain('storage-r06-c01>left-row-06>storage-r06-c01');
+  });
+
   it('moves an empty storage-refuge shuttle deeper when the side-aisle continuation is blocked', () => {
     const scenario = createDefaultShuttleScenario({
       liftMode: 'all-inbound',
@@ -744,12 +797,11 @@ describe('shuttle phase 0 SimCore', () => {
     const refugeVehicle = state.vehicles.find((vehicle) => vehicle.id === 'SH-01');
 
     expect(refugeVehicle).toMatchObject({
-      state: 'returning',
-      currentNodeId: 'storage-r06-c01',
-      targetNodeId: 'storage-r06-c02',
-      waitReason: null
+      state: 'waiting-blocked',
+      currentNodeId: 'storage-r06-c02',
+      targetNodeId: 'storage-r06-c01',
+      waitReason: 'refuge-exit-blocked'
     });
-    expect(refugeVehicle?.currentEdgeId).toMatch(/^storage-r06-c0[12]-storage-r06-c0[12]$/);
   });
 
   it('does not allocate inbound dropoff cells currently occupied by parked shuttles', () => {
@@ -1981,6 +2033,44 @@ describe('shuttle phase 0 SimCore', () => {
     expect(route.slice(route.indexOf('right-row-01') + 1).flatMap((nodeId) => storageColumn(nodeId) ?? [])).toEqual(
       expect.arrayContaining([1])
     );
+  });
+
+  it('recomputes a direct loaded shortest route after pickup', () => {
+    const scenario = createDefaultShuttleScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      physicsParams: {
+        liftTimeSec: 0.05,
+        lowerTimeSec: 0.05,
+        switchDirectionSec: 0
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+
+    sim.start();
+    let state = sim.getState();
+    for (let index = 0; index < 300 && !state.vehicles[0]?.loaded; index += 1) {
+      state = sim.step(0.2);
+    }
+
+    const vehicle = state.vehicles[0]!;
+    const task = state.tasks.find((candidate) => candidate.id === vehicle.taskId)!;
+    const loadedRouteEvent = sim.getEventLog().find((event) => event.eventType === 'route-replanned' && event.reason === 'loaded-shortest-path');
+    const loadedRoute = String(loadedRouteEvent?.details.route ?? '').split('>');
+
+    expect(vehicle.loaded).toBe(true);
+    expect(vehicle.routeIndex).toBe(0);
+    expect(vehicle.routeNodeIds[0]).toBe(task.pickupNodeId);
+    expect(vehicle.routeNodeIds.at(-1)).toBe(task.dropoffNodeId);
+    expect(loadedRoute[0]).toBe(task.pickupNodeId);
+    expect(loadedRoute.at(-1)).toBe(task.dropoffNodeId);
+    expect(vehicle.routeNodeIds.slice(1, -1)).not.toContain(task.pickupNodeId);
   });
 
   it('dispatches an unloaded inbound-only shuttle from dropoff to lift-near storage standby', () => {
