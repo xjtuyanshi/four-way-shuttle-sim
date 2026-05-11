@@ -944,6 +944,11 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
         <strong>{traffic?.activeReservationCount ?? '--'}</strong>
       </div>
       <div>
+        <span>Control</span>
+        <strong>{traffic?.trafficMode ?? '--'}</strong>
+        <small>{traffic?.trafficMode === 'agent-simple' ? 'vehicle-local routing' : 'reservation controller'}</small>
+      </div>
+      <div>
         <span>Avoidance</span>
         <strong className={traffic?.collisionAvoidanceEnabled === false ? 'blocked' : 'ready'}>
           {traffic?.collisionAvoidanceEnabled === false ? 'Off' : 'On'}
@@ -1603,6 +1608,7 @@ export function App() {
     return values;
   }, [paramDraftValues, scenarioParamValues]);
   const collisionAvoidanceEnabled = scenario?.trafficPolicy.collisionAvoidanceEnabled ?? true;
+  const controllerMode = scenario?.trafficPolicy.controllerMode ?? 'reservation-v2';
   const validationMode = validation?.acceptance.ieValidationPass
     ? { label: 'IE pass', tone: 'ok' }
     : validation?.acceptance.segmentSafeValidationPass
@@ -1781,7 +1787,7 @@ export function App() {
           </div>
           <div className={`status-line ${commandStatus.tone}`}>
             <span>{state?.status ?? 'loading'}</span>
-            <strong>{commandStatus.label} / {playbackSpeed}x{isPending ? ' / rendering' : ''}</strong>
+            <strong>{commandStatus.label} / {playbackSpeed}x / {controllerMode}{isPending ? ' / rendering' : ''}</strong>
           </div>
         </section>
 

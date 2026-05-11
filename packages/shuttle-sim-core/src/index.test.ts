@@ -72,6 +72,7 @@ function testScenario(overrides: Partial<ShuttleScenario>): ShuttleScenario {
       maxReplansPerTask: 3
     },
     trafficPolicy: {
+      controllerMode: 'reservation-v2',
       edgeCapacity: 1,
       nodeCapacity: 1,
       zoneCapacity: 1,
@@ -693,6 +694,36 @@ describe('shuttle phase 0 SimCore', () => {
     ]);
     expect(lowerVehicle?.targetNodeId).not.toBe('left-row-05');
     expect(upperVehicle?.targetNodeId).not.toBe('left-row-08');
+  });
+
+  it('agent-simple lets an empty shuttle bypass a blocked side aisle by crossing the storage row', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-simple'
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['left-row-06', 'left-row-08']);
+    sim.setVehicleRouteForTest('SH-02', ['left-row-07']);
+
+    const state = sim.step(0.1);
+    const bypassVehicle = state.vehicles.find((vehicle) => vehicle.id === 'SH-01');
+
+    expect(state.traffic.trafficMode).toBe('agent-simple');
+    expect(bypassVehicle?.targetNodeId).toBe('storage-r06-c01');
+    expect(bypassVehicle?.routeNodeIds.slice(0, 2)).toEqual(['left-row-06', 'storage-r06-c01']);
+    expect(bypassVehicle?.routeNodeIds).toContain('right-row-06');
+    expect(bypassVehicle?.routeNodeIds).toContain('right-row-08');
+    expect(bypassVehicle?.routeNodeIds.slice(0, 3)).not.toEqual(['left-row-06', 'storage-r06-c01', 'left-row-06']);
   });
 
   it('moves a storage refuge occupant deeper so an aisle shuttle can enter the pocket', () => {
