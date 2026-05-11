@@ -950,6 +950,67 @@ describe('shuttle phase 0 SimCore', () => {
     expect(sim.getEventLog().some((event) => event.eventType === 'route-replanned' && event.reason === 'empty-local-obstacle-reroute')).toBe(false);
   });
 
+  it('agent-simple makes the lower-priority empty shuttle clear a storage-row head-on conflict', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-simple'
+      }
+    }));
+    sim.setVehicleRouteForTest('SH-01', ['storage-r08-c17']);
+    sim.setVehicleRouteForTest('SH-02', ['storage-r08-c18']);
+    sim.addLoadForTest({ id: 'pickup-left-load', state: 'waiting', nodeId: 'inbound-lift-top-01', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'pickup-right-load', state: 'waiting', nodeId: 'inbound-lift-top-02', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'pickup-right',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'inbound-lift-top-02',
+      dropoffNodeId: 'storage-r08-c20',
+      loadId: 'pickup-right-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'pickup-left',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'inbound-lift-top-01',
+      dropoffNodeId: 'storage-r08-c21',
+      loadId: 'pickup-left-load',
+      vehicleId: 'SH-02',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleTaskForTest('SH-01', 'pickup-right', false);
+    sim.setVehicleTaskForTest('SH-02', 'pickup-left', false);
+
+    const state = sim.step(0.2);
+    const yieldingVehicle = state.vehicles.find((vehicle) => vehicle.id === 'SH-02');
+
+    expect(yieldingVehicle?.targetNodeId).toBe('storage-r08-c19');
+    expect(yieldingVehicle?.plannedRouteNodeIds).toContain('inbound-lift-top-01');
+    expect(yieldingVehicle?.localRouteReason).toBe('temporary-reroute');
+    expect(sim.getEventLog().some((event) => event.eventType === 'route-replanned' && event.reason === 'empty-storage-head-on-yield')).toBe(true);
+  });
+
   it('moves a storage refuge occupant deeper so an aisle shuttle can enter the pocket', () => {
     const scenario = createDefaultShuttleScenario({
       liftMode: 'all-inbound',
@@ -2326,6 +2387,48 @@ describe('shuttle phase 0 SimCore', () => {
     expect(loadedRoute[0]).toBe(task.pickupNodeId);
     expect(loadedRoute.at(-1)).toBe(task.dropoffNodeId);
     expect(vehicle.routeNodeIds.slice(1, -1)).not.toContain(task.pickupNodeId);
+  });
+
+  it('agent-simple takes the shorter left-side route through occupied storage cells when loaded', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-simple'
+      }
+    }));
+    sim.setVehicleRouteForTest('SH-01', ['main-north-03']);
+    sim.addLoadForTest({ id: 'stored-r05-c01', state: 'stored', nodeId: 'storage-r05-c01', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'stored-r05-c02', state: 'stored', nodeId: 'storage-r05-c02', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'carried-r05-c03', state: 'carried', nodeId: null, vehicleId: 'SH-01', weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'drop-r05-c03',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'inbound-lift-bottom-02',
+      dropoffNodeId: 'storage-r05-c03',
+      loadId: 'carried-r05-c03',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleTaskForTest('SH-01', 'drop-r05-c03', true);
+
+    const route = sim.step(0.2).vehicles[0]?.plannedRouteNodeIds ?? [];
+
+    expect(route).toEqual(expect.arrayContaining(['main-south-03', 'main-south-00', 'left-row-05', 'storage-r05-c01', 'storage-r05-c02', 'storage-r05-c03']));
+    expect(route).not.toContain('main-north-05');
+    expect(route).not.toContain('right-row-05');
   });
 
   it('dispatches an unloaded inbound-only shuttle from dropoff to lift-near storage standby', () => {

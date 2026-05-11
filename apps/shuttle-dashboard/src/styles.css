@@ -503,9 +503,14 @@ input[type="range"] {
   padding: 12px 14px;
 }
 
+.stream-header > div:first-child {
+  flex: 0 0 170px;
+}
+
 .stream-header h2,
 .panel h2 {
   font-size: 16px;
+  white-space: nowrap;
 }
 
 .stream-header p {
@@ -548,6 +553,24 @@ input[type="range"] {
   justify-content: flex-end;
   gap: 8px;
   align-items: center;
+}
+
+.view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(10, 18, 24, 0.72);
+}
+
+.view-toggle button {
+  border: 0;
+  border-radius: 0;
+  min-width: 42px;
+}
+
+.view-toggle button + button {
+  border-left: 1px solid var(--line);
 }
 
 .scene-layer-controls button {
@@ -604,6 +627,13 @@ input[type="range"] {
   background: transparent;
 }
 
+.route-legend .pickup {
+  width: 13px;
+  height: 13px;
+  border: 2px solid #82c7ff;
+  background: rgba(47, 120, 212, 0.8);
+}
+
 .stream-placeholder {
   position: relative;
   flex: 1;
@@ -618,9 +648,14 @@ input[type="range"] {
 
 .authoritative-map {
   position: absolute;
-  inset: 34px;
+  inset: 12px;
   border: 1px solid #334251;
-  background: rgba(9, 16, 22, 0.74);
+  background:
+    linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px),
+    linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+    rgba(9, 16, 22, 0.86);
+  background-size: 36px 36px;
+  overflow: hidden;
 }
 
 .shuttle-scene-3d {
@@ -650,9 +685,9 @@ input[type="range"] {
 .map-edge {
   position: absolute;
   display: block;
-  height: 4px;
+  height: 3px;
   border-radius: 999px;
-  background: rgba(111, 126, 141, 0.58);
+  background: rgba(111, 126, 141, 0.34);
   transform-origin: left center;
   z-index: 1;
 }
@@ -666,16 +701,16 @@ input[type="range"] {
   position: absolute;
   z-index: 2;
   transform: translate(-50%, -50%);
-  min-width: 58px;
-  min-height: 22px;
+  min-width: 38px;
+  min-height: 18px;
   border: 1px solid var(--line-strong);
   border-radius: 4px;
-  background: #17212b;
+  background: rgba(23, 33, 43, 0.86);
   color: var(--muted);
   display: grid;
   place-items: center;
-  padding: 3px 6px;
-  font-size: 10px;
+  padding: 2px 5px;
+  font-size: 9px;
   white-space: nowrap;
 }
 
@@ -685,7 +720,16 @@ input[type="range"] {
 }
 
 .map-node.storage {
-  color: #d0dae2;
+  min-width: 5px;
+  min-height: 5px;
+  width: 5px;
+  height: 5px;
+  padding: 0;
+  border-radius: 50%;
+  border-color: rgba(176, 111, 255, 0.46);
+  background: rgba(176, 111, 255, 0.18);
+  color: transparent;
+  overflow: hidden;
 }
 
 .map-node.parking {
@@ -695,28 +739,76 @@ input[type="range"] {
 .map-load {
   position: absolute;
   z-index: 3;
-  transform: translate(16px, 10px);
-  width: 22px;
-  height: 16px;
+  transform: translate(-50%, -50%);
+  width: 9px;
+  height: 9px;
   border-radius: 3px;
   border: 1px solid #e5c974;
   background: rgba(226, 184, 75, 0.36);
 }
 
+.map-route {
+  position: absolute;
+  display: block;
+  height: 4px;
+  border-radius: 999px;
+  transform-origin: left center;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.map-route.planned.empty {
+  background: rgba(86, 169, 201, 0.68);
+}
+
+.map-route.planned.loaded {
+  background: rgba(79, 193, 144, 0.7);
+}
+
+.map-route.local {
+  height: 6px;
+  background: rgba(226, 184, 75, 0.92);
+  z-index: 6;
+}
+
+.map-route.selected {
+  height: 7px;
+  box-shadow: 0 0 12px rgba(130, 199, 255, 0.34);
+}
+
+.map-task-badge {
+  position: absolute;
+  z-index: 8;
+  transform: translate(-50%, -135%);
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid rgba(192, 226, 255, 0.96);
+  background: rgba(47, 120, 212, 0.92);
+  color: #f8fbff;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 900;
+  box-shadow: 0 0 16px rgba(130, 199, 255, 0.34);
+}
+
 .map-vehicle {
   position: absolute;
-  z-index: 4;
-  width: 42px;
-  height: 26px;
+  z-index: 9;
+  width: 28px;
+  height: 22px;
   border-radius: 5px;
   border: 2px solid #77cec3;
   background: var(--teal);
   color: #eaf7f4;
   display: grid;
   place-items: center;
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 800;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+  padding: 0;
+  cursor: pointer;
 }
 
 .map-vehicle.waiting-blocked {
@@ -724,8 +816,19 @@ input[type="range"] {
   background: #7f6428;
 }
 
-.map-vehicle.loaded-moving {
-  border-color: #eef0ba;
+.map-vehicle.loaded {
+  border-color: #b9efcf;
+  background: #2d8462;
+}
+
+.map-vehicle.tasked.empty {
+  border-color: #bfe3ff;
+  background: #2f78d4;
+}
+
+.map-vehicle.selected {
+  outline: 2px solid #ffffff;
+  outline-offset: 2px;
 }
 
 .map-vehicle.idle {

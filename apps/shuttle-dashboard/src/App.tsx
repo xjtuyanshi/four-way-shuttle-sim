@@ -61,6 +61,8 @@ type LiveStreamSnapshot = {
   kpis: KpiSnapshot | null;
 };
 
+type MapViewMode = '3d' | '2d';
+
 type BottleneckBreakdown = Record<string, number>;
 
 type Phase0ValidationRun = {
@@ -747,7 +749,24 @@ function formatStorageFlow(flow: string): string {
   return flow;
 }
 
-function AuthoritativeMap({ scenario, state }: { scenario: ShuttleScenario | null; state: ShuttleSimState | null }) {
+function vehicleDisplayNumber(vehicleId: string): string {
+  const ordinal = Number(vehicleId.replace(/\D+/g, ''));
+  return Number.isFinite(ordinal) && ordinal > 0 ? String(ordinal) : vehicleId.replace(/^SH-?/i, '');
+}
+
+function AuthoritativeMap({
+  scenario,
+  state,
+  layers,
+  selectedVehicleId,
+  onSelectVehicle
+}: {
+  scenario: ShuttleScenario | null;
+  state: ShuttleSimState | null;
+  layers: SceneLayers;
+  selectedVehicleId: string | null;
+  onSelectVehicle: (vehicleId: string) => void;
+}) {
   const geometry = useMemo(() => {
     const nodes = scenario?.layout.nodes ?? [];
     const xValues = nodes.map((node) => node.x);
@@ -765,11 +784,44 @@ function AuthoritativeMap({ scenario, state }: { scenario: ShuttleScenario | nul
       top: `${(1 - (point.z - minZ) / depth) * 100}%`
     });
 
-    return { nodes, nodeMap, edges: scenario?.layout.edges ?? [], project };
+    const routeSegmentStyle = (from: { x: number; z: number }, to: { x: number; z: number }) => {
+      const fromPoint = project(from);
+      const toPoint = project(to);
+      const left = parseFloat(fromPoint.left);
+      const top = parseFloat(fromPoint.top);
+      const dx = parseFloat(toPoint.left) - left;
+      const dy = parseFloat(toPoint.top) - top;
+      return {
+        left: fromPoint.left,
+        top: fromPoint.top,
+        width: `${Math.hypot(dx, dy)}%`,
+        transform: `rotate(${Math.atan2(dy, dx)}rad)`
+      };
+    };
+
+    return { nodes, nodeMap, edges: scenario?.layout.edges ?? [], project, routeSegmentStyle };
   }, [scenario]);
 
   const loads = state?.loads.filter((load) => load.nodeId && load.state !== 'carried') ?? [];
   const activeReservations = state?.reservations ?? [];
+  const activeTasks = state?.tasks.filter((task) => task.vehicleId && task.state !== 'completed' && task.state !== 'failed') ?? [];
+  const vehicleById = new Map((state?.vehicles ?? []).map((vehicle) => [vehicle.id, vehicle]));
+  const routeSegments = (vehicle: VehicleState, nodeIds: string[], kind: 'planned' | 'local') => {
+    if (nodeIds.length < 2) {
+      return [];
+    }
+    const points = [
+      { x: vehicle.x, z: vehicle.z },
+      ...nodeIds.slice(1).map((nodeId) => geometry.nodeMap.get(nodeId)).filter((node): node is ShuttleScenario['layout']['nodes'][number] => Boolean(node))
+    ];
+    return points.slice(1).map((to, index) => ({
+      key: `${vehicle.id}-${kind}-${index}`,
+      vehicle,
+      kind,
+      from: points[index]!,
+      to
+    }));
+  };
 
   return (
     <div className="authoritative-map" aria-label="Authoritative state map">
@@ -777,48 +829,63 @@ function AuthoritativeMap({ scenario, state }: { scenario: ShuttleScenario | nul
         const from = geometry.nodeMap.get(edge.from);
         const to = geometry.nodeMap.get(edge.to);
         if (!from || !to) return null;
-        const fromPoint = geometry.project(from);
-        const toPoint = geometry.project(to);
-        const left = parseFloat(fromPoint.left);
-        const top = parseFloat(fromPoint.top);
-        const dx = parseFloat(toPoint.left) - left;
-        const dy = parseFloat(toPoint.top) - top;
-        const length = Math.hypot(dx, dy);
-        const angle = Math.atan2(dy, dx);
-        const reserved = activeReservations.some((reservation) => reservation.resourceId === edge.id);
+        const reserved = layers.traffic && activeReservations.some((reservation) => reservation.resourceId === edge.id);
         return (
           <span
             className={`map-edge ${reserved ? 'reserved' : ''}`}
             key={edge.id}
-            style={{
-              left: fromPoint.left,
-              top: fromPoint.top,
-              width: `${length}%`,
-              transform: `rotate(${angle}rad)`
-            }}
+            style={geometry.routeSegmentStyle(from, to)}
           />
         );
       })}
+      {layers.routes && (state?.vehicles ?? [])
+        .filter((vehicle) => !selectedVehicleId || vehicle.id === selectedVehicleId)
+        .flatMap((vehicle) => [
+          ...routeSegments(vehicle, vehicle.plannedRouteNodeIds.length >= 2 ? vehicle.plannedRouteNodeIds : vehicle.routeNodeIds.slice(Math.max(0, vehicle.routeIndex)), 'planned'),
+          ...routeSegments(vehicle, vehicle.localRouteNodeIds, 'local')
+        ])
+        .map((segment) => (
+          <span
+            className={`map-route ${segment.kind} ${segment.vehicle.loaded ? 'loaded' : 'empty'} ${selectedVehicleId === segment.vehicle.id ? 'selected' : ''}`}
+            key={segment.key}
+            style={geometry.routeSegmentStyle(segment.from, segment.to)}
+          />
+        ))}
       {geometry.nodes.map((node) => (
         <span className={`map-node ${node.type}`} key={node.id} style={geometry.project(node)}>
-          {node.id}
+          {node.type === 'storage' ? '' : node.id.replace('inbound-lift-', 'in-').replace('outbound-lift-', 'out-')}
         </span>
       ))}
-      {loads.map((load) => {
+      {layers.loads && loads.map((load) => {
         const node = load.nodeId ? geometry.nodeMap.get(load.nodeId) : null;
         return node ? <span className={`map-load ${load.state}`} key={load.id} style={geometry.project(node)} /> : null;
       })}
+      {activeTasks.map((task) => {
+        const vehicle = task.vehicleId ? vehicleById.get(task.vehicleId) : null;
+        const pickupNode = geometry.nodeMap.get(task.pickupNodeId);
+        if (!vehicle || !pickupNode || vehicle.loaded) {
+          return null;
+        }
+        return (
+          <span className="map-task-badge pickup" key={task.id} style={geometry.project(pickupNode)}>
+            {vehicleDisplayNumber(vehicle.id)}
+          </span>
+        );
+      })}
       {(state?.vehicles ?? []).map((vehicle) => (
-        <span
-          className={`map-vehicle ${vehicle.state}`}
+        <button
+          className={`map-vehicle ${vehicle.state} ${vehicle.loaded ? 'loaded' : 'empty'} ${vehicle.taskId ? 'tasked' : 'taskless'} ${selectedVehicleId === vehicle.id ? 'selected' : ''}`}
           key={vehicle.id}
+          type="button"
+          onClick={() => onSelectVehicle(vehicle.id)}
           style={{
             ...geometry.project(vehicle),
             transform: 'translate(-50%, -50%)'
           }}
+          title={`${vehicle.id} ${vehicle.loaded ? 'loaded' : vehicle.taskId ? 'to pickup' : 'available'} ${vehicle.currentNodeId}`}
         >
-          {vehicle.id}
-        </span>
+          {vehicleDisplayNumber(vehicle.id)}
+        </button>
       ))}
     </div>
   );
@@ -839,30 +906,54 @@ function StreamingPane({
   state,
   layers,
   selectedVehicleId,
+  viewMode,
   cameraView,
   rendererInfo,
   onCameraViewChange,
   onToggleLayer,
+  onSelectVehicle,
+  onViewModeChange,
   onRendererInfo
 }: {
   scenario: ShuttleScenario | null;
   state: ShuttleSimState | null;
   layers: SceneLayers;
   selectedVehicleId: string | null;
+  viewMode: MapViewMode;
   cameraView: ShuttleSceneCameraView;
   rendererInfo: ShuttleSceneRendererInfo | null;
   onCameraViewChange: (view: ShuttleSceneCameraView) => void;
   onToggleLayer: (layer: keyof SceneLayers) => void;
+  onSelectVehicle: (vehicleId: string) => void;
+  onViewModeChange: (mode: MapViewMode) => void;
   onRendererInfo: (info: ShuttleSceneRendererInfo) => void;
 }) {
   return (
     <section className="stream-pane">
       <div className="stream-header">
         <div>
-          <h2>3D Model</h2>
+          <h2>{viewMode === '3d' ? '3D Model' : '2D Debug Map'}</h2>
           <p>Live SimCore state stream.</p>
         </div>
         <div className="scene-layer-controls">
+          <div className="view-toggle" aria-label="Map view mode">
+            <button
+              className={viewMode === '3d' ? 'active' : ''}
+              type="button"
+              onClick={() => onViewModeChange('3d')}
+              aria-pressed={viewMode === '3d'}
+            >
+              3D
+            </button>
+            <button
+              className={viewMode === '2d' ? 'active' : ''}
+              type="button"
+              onClick={() => onViewModeChange('2d')}
+              aria-pressed={viewMode === '2d'}
+            >
+              2D Debug
+            </button>
+          </div>
           {(Object.keys(layers) as Array<keyof SceneLayers>).map((layer) => (
             <button
               className={layers[layer] ? 'active' : ''}
@@ -874,37 +965,47 @@ function StreamingPane({
               {layer}
             </button>
           ))}
-          <button type="button" onClick={() => onCameraViewChange(clampSceneCameraView({ ...cameraView, zoom: cameraView.zoom * 1.2 }))}>
+          {viewMode === '3d' && <button type="button" onClick={() => onCameraViewChange(clampSceneCameraView({ ...cameraView, zoom: cameraView.zoom * 1.2 }))}>
             Zoom In
-          </button>
-          <button type="button" onClick={() => onCameraViewChange(clampSceneCameraView({ ...cameraView, zoom: cameraView.zoom / 1.2 }))}>
+          </button>}
+          {viewMode === '3d' && <button type="button" onClick={() => onCameraViewChange(clampSceneCameraView({ ...cameraView, zoom: cameraView.zoom / 1.2 }))}>
             Zoom Out
-          </button>
-          <button type="button" onClick={() => onCameraViewChange(clampSceneCameraView({ ...cameraView, yawOffsetRad: cameraView.yawOffsetRad - 0.28 }))}>
+          </button>}
+          {viewMode === '3d' && <button type="button" onClick={() => onCameraViewChange(clampSceneCameraView({ ...cameraView, yawOffsetRad: cameraView.yawOffsetRad - 0.28 }))}>
             Rotate Left
-          </button>
-          <button type="button" onClick={() => onCameraViewChange(clampSceneCameraView({ ...cameraView, yawOffsetRad: cameraView.yawOffsetRad + 0.28 }))}>
+          </button>}
+          {viewMode === '3d' && <button type="button" onClick={() => onCameraViewChange(clampSceneCameraView({ ...cameraView, yawOffsetRad: cameraView.yawOffsetRad + 0.28 }))}>
             Rotate Right
-          </button>
-          <button type="button" onClick={() => onCameraViewChange(DEFAULT_SCENE_CAMERA_VIEW)}>
+          </button>}
+          {viewMode === '3d' && <button type="button" onClick={() => onCameraViewChange(DEFAULT_SCENE_CAMERA_VIEW)}>
             Reset View
-          </button>
+          </button>}
           <span className="route-legend" aria-label="Route legend">
             <span><i className="planned" />Plan</span>
             <span><i className="local" />Local</span>
             <span><i className="goal" />Goal</span>
+            <span><i className="pickup" />Pickup</span>
           </span>
-          <span
+          {viewMode === '3d' && <span
             className={`gpu-badge ${rendererInfo?.hardwareAccelerated === false ? 'software' : 'hardware'}`}
             title={rendererInfo ? `${rendererInfo.vendor} / ${rendererInfo.renderer}` : 'Waiting for WebGL renderer'}
           >
             {formatRendererInfo(rendererInfo)}
-          </span>
+          </span>}
         </div>
       </div>
       <div className="stream-placeholder">
-        <Suspense fallback={<div className="shuttle-scene-loading" />}>
-          <ShuttleScene3D
+        {viewMode === '2d' ? (
+          <AuthoritativeMap
+            scenario={scenario}
+            state={state}
+            layers={layers}
+            selectedVehicleId={selectedVehicleId}
+            onSelectVehicle={onSelectVehicle}
+          />
+        ) : (
+          <Suspense fallback={<div className="shuttle-scene-loading" />}>
+            <ShuttleScene3D
             scenario={scenario}
             state={state}
             layers={layers}
@@ -912,8 +1013,9 @@ function StreamingPane({
             cameraView={cameraView}
             onCameraViewChange={onCameraViewChange}
             onRendererInfo={onRendererInfo}
-          />
-        </Suspense>
+            />
+          </Suspense>
+        )}
       </div>
     </section>
   );
@@ -1459,6 +1561,7 @@ export function App() {
     loads: true,
     routes: true
   });
+  const [mapViewMode, setMapViewMode] = useState<MapViewMode>('3d');
   const [sceneCameraView, setSceneCameraView] = useState<ShuttleSceneCameraView>(DEFAULT_SCENE_CAMERA_VIEW);
   const [isPending, startTransition] = useTransition();
   const reconnectAttemptRef = useRef(0);
@@ -1893,10 +1996,13 @@ export function App() {
           state={sceneState}
           layers={sceneLayers}
           selectedVehicleId={selectedVehicleId}
+          viewMode={mapViewMode}
           cameraView={sceneCameraView}
           rendererInfo={rendererInfo}
           onCameraViewChange={(view) => setSceneCameraView(clampSceneCameraView(view))}
           onToggleLayer={toggleSceneLayer}
+          onSelectVehicle={setSelectedVehicleId}
+          onViewModeChange={setMapViewMode}
           onRendererInfo={setRendererInfo}
         />
         <KpiStrip kpis={kpis} />

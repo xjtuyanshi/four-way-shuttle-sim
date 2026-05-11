@@ -63,6 +63,8 @@ type VehicleObjectUserData = {
   bodyMaterial: THREE.MeshStandardMaterial;
   ringMaterial: THREE.MeshBasicMaterial;
   safetyRing: THREE.Mesh;
+  labelSprite: THREE.Sprite | null;
+  labelText: string;
 };
 
 const FLOOR_Y = 0;
@@ -169,6 +171,10 @@ function disposeObject(object: THREE.Object3D): void {
         material.dispose();
       }
     }
+    if (child instanceof THREE.Sprite) {
+      child.material.map?.dispose();
+      child.material.dispose();
+    }
   });
 }
 
@@ -181,6 +187,11 @@ function clearGroup(group: THREE.Group): void {
 
 function material(color: number, roughness = 0.72, metalness = 0.08): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ color, roughness, metalness });
+}
+
+function vehicleDisplayNumber(vehicleId: string): string {
+  const ordinal = Number(vehicleId.replace(/\D+/g, ''));
+  return Number.isFinite(ordinal) && ordinal > 0 ? String(ordinal) : vehicleId.replace(/^SH-?/i, '');
 }
 
 type LayoutBounds = ReturnType<typeof computeBounds>;
@@ -901,6 +912,65 @@ function createParkingPad(node: ShuttleNode, pad?: ShuttleStaticScenePad): THREE
   return group;
 }
 
+function createTextBillboard(
+  text: string,
+  options: { background: string; foreground?: string; border?: string; scale?: { x: number; y: number }; y?: number }
+): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 96;
+  const context = canvas.getContext('2d');
+  if (!context) {
+    throw new Error('Unable to create label canvas context.');
+  }
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = options.background;
+  context.strokeStyle = options.border ?? 'rgba(255,255,255,0.82)';
+  context.lineWidth = 6;
+  context.beginPath();
+  context.roundRect(20, 12, 88, 72, 18);
+  context.fill();
+  context.stroke();
+  context.fillStyle = options.foreground ?? '#f8fbff';
+  context.font = '700 46px Arial, sans-serif';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillText(text, 64, 50);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false
+  }));
+  const scale = options.scale ?? { x: 0.76, y: 0.54 };
+  sprite.scale.set(scale.x, scale.y, 1);
+  sprite.position.y = options.y ?? 0.72;
+  sprite.renderOrder = 200;
+  return sprite;
+}
+
+function createTaskAssignmentMarker(node: ShuttleNode, label: string): THREE.Group {
+  const group = new THREE.Group();
+  group.position.set(node.x, 0, node.z);
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.52, 0.66, 40),
+    new THREE.MeshBasicMaterial({ color: 0x82c7ff, transparent: true, opacity: 0.88, side: THREE.DoubleSide, depthWrite: false })
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.42;
+  group.add(ring);
+  group.add(createTextBillboard(label, {
+    background: 'rgba(47, 120, 212, 0.92)',
+    border: 'rgba(192, 226, 255, 0.96)',
+    scale: { x: 0.82, y: 0.58 },
+    y: 1.04
+  }));
+  return group;
+}
+
 function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   const group = new THREE.Group();
   const bodyMaterial = material(0x287f78, 0.5, 0.22);
@@ -958,7 +1028,9 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
     loadedMesh,
     bodyMaterial,
     ringMaterial,
-    safetyRing
+    safetyRing,
+    labelSprite: null,
+    labelText: ''
   } satisfies VehicleObjectUserData;
   return group;
 }
@@ -969,6 +1041,25 @@ function vehicleUserData(group: THREE.Group): VehicleObjectUserData {
 
 function applyVehicleState(group: THREE.Group, vehicle: VehicleState, layers: ShuttleSceneLayers, selected: boolean): void {
   const data = vehicleUserData(group);
+  const labelText = vehicleDisplayNumber(vehicle.id);
+  if (data.labelText !== labelText) {
+    if (data.labelSprite) {
+      group.remove(data.labelSprite);
+      disposeObject(data.labelSprite);
+    }
+    data.labelSprite = createTextBillboard(labelText, {
+      background: 'rgba(12, 20, 26, 0.88)',
+      border: selected ? 'rgba(130,199,255,0.96)' : 'rgba(216,240,237,0.82)',
+      scale: { x: 0.62, y: 0.45 },
+      y: 0.74
+    });
+    data.labelText = labelText;
+    group.add(data.labelSprite);
+  }
+  if (data.labelSprite) {
+    data.labelSprite.position.y = selected ? 0.86 : 0.74;
+    data.labelSprite.scale.set(selected ? 0.72 : 0.62, selected ? 0.52 : 0.45, 1);
+  }
   data.targetPosition.set(vehicle.x, 0, vehicle.z);
   data.targetYaw = vehicle.yaw;
   data.loadedMesh.visible = vehicle.loaded;
@@ -987,8 +1078,20 @@ function applyVehicleState(group: THREE.Group, vehicle: VehicleState, layers: Sh
     return;
   }
 
-  data.bodyMaterial.color.setHex(vehicle.loaded ? 0x3f9c77 : 0x2f8d86);
-  data.ringMaterial.color.setHex(vehicle.loaded ? 0x4fc190 : 0x56a9c9);
+  if (vehicle.loaded) {
+    data.bodyMaterial.color.setHex(0x3f9c77);
+    data.ringMaterial.color.setHex(0x4fc190);
+    return;
+  }
+
+  if (vehicle.taskId) {
+    data.bodyMaterial.color.setHex(0x2f78d4);
+    data.ringMaterial.color.setHex(0x82c7ff);
+    return;
+  }
+
+  data.bodyMaterial.color.setHex(0x2f8d86);
+  data.ringMaterial.color.setHex(0x56a9c9);
 }
 
 function createLoadMesh(load: LoadStateRecord, node: ShuttleNode, index: number): THREE.Group {
@@ -1024,7 +1127,7 @@ function routeOverlayKey(
   selectedVehicleId: string | null
 ): string {
   if (!layers.routes) return 'off';
-  return (state?.vehicles ?? [])
+  const routeKey = (state?.vehicles ?? [])
     .filter((vehicle) => !selectedVehicleId || vehicle.id === selectedVehicleId)
     .map((vehicle) => [
       vehicle.id,
@@ -1035,6 +1138,12 @@ function routeOverlayKey(
       vehicle.localRouteNodeIds.join('>')
     ].join(':'))
     .join('|');
+  const pickupAssignmentKey = (state?.tasks ?? [])
+    .filter((task) => task.vehicleId && task.state !== 'completed' && task.state !== 'failed')
+    .map((task) => `${task.id}:${task.vehicleId}:${task.state}:${task.pickupNodeId}:${task.dropoffNodeId}`)
+    .sort()
+    .join('|');
+  return `${routeKey}::tasks:${pickupAssignmentKey}`;
 }
 
 function routePointsForNodeIds(
@@ -1170,6 +1279,16 @@ function updateDynamicScene(
     clearGroup(runtime.routeGroup);
   }
   if (layers.routes && runtime.routeGroup.children.length === 0) {
+    const vehicleById = new Map((state?.vehicles ?? []).map((vehicle) => [vehicle.id, vehicle]));
+    for (const task of state?.tasks ?? []) {
+      const vehicle = task.vehicleId ? vehicleById.get(task.vehicleId) : null;
+      const pickupNode = runtime.nodeById.get(task.pickupNodeId);
+      if (!vehicle || !pickupNode || vehicle.loaded || task.state === 'completed' || task.state === 'failed') {
+        continue;
+      }
+      runtime.routeGroup.add(createTaskAssignmentMarker(pickupNode, vehicleDisplayNumber(vehicle.id)));
+    }
+
     for (const vehicle of state?.vehicles ?? []) {
       if (selectedVehicleId && vehicle.id !== selectedVehicleId) {
         continue;
@@ -1348,7 +1467,7 @@ export function ShuttleScene3D({
     scene.background = new THREE.Color(0x0c141a);
     scene.fog = new THREE.Fog(0x0c141a, 42, 112);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
