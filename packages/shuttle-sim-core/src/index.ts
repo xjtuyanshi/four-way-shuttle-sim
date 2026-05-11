@@ -926,10 +926,7 @@ class TrafficControllerV2 {
     }
 
     const endTimeSec = options.startTimeSec + options.travelSec + this.scenario.trafficPolicy.minimumClearanceSec;
-    const conflictTokenEndTimeSec =
-      options.startTimeSec +
-      Math.min(options.travelSec, Math.max(0.5, this.scenario.trafficPolicy.minimumClearanceSec)) +
-      this.scenario.trafficPolicy.minimumClearanceSec;
+    const conflictTokenEndTimeSec = endTimeSec;
     const nodeZonesForEdge = (nodeId: string) =>
       this.scenario.layout.zones.filter(
         (candidate) =>
@@ -2241,6 +2238,63 @@ export class ShuttleSimCore {
     return reservation.startTimeSec <= this.simTimeSec + 1e-6 && this.simTimeSec <= reservation.endTimeSec + 1e-6;
   }
 
+  private reservationWindowsOverlap(left: Reservation, right: Reservation): boolean {
+    return left.startTimeSec <= right.endTimeSec + 1e-6 && right.startTimeSec <= left.endTimeSec + 1e-6;
+  }
+
+  private reservationsShareBlockingResource(left: Reservation, right: Reservation): boolean {
+    const sameResource = left.resourceType === right.resourceType && left.resourceId === right.resourceId;
+    const sameZoneConflictGroup =
+      left.resourceType === 'zone' &&
+      right.resourceType === 'zone' &&
+      left.conflictGroup !== null &&
+      right.conflictGroup !== null &&
+      left.conflictGroup === right.conflictGroup;
+    return sameResource || sameZoneConflictGroup;
+  }
+
+  private installMoveReservationsReplacingSelfOverlap(
+    vehicle: MutableVehicle,
+    reservations: Reservation[]
+  ): Array<{ index: number; reservation: Reservation }> {
+    if (reservations.length === 0) {
+      return [];
+    }
+
+    const removed: Array<{ index: number; reservation: Reservation }> = [];
+    this.reservations = this.reservations.filter((existing, index) => {
+      const replace =
+        existing.vehicleId === vehicle.id &&
+        reservations.some(
+          (candidate) =>
+            this.reservationsShareBlockingResource(existing, candidate) &&
+            this.reservationWindowsOverlap(existing, candidate)
+        );
+      if (replace) {
+        removed.push({ index, reservation: existing });
+      }
+      return !replace;
+    });
+    this.reservations.push(...reservations);
+    return removed;
+  }
+
+  private rollbackMoveReservationInstall(
+    reservations: Reservation[],
+    removed: Array<{ index: number; reservation: Reservation }>
+  ): void {
+    if (reservations.length === 0 && removed.length === 0) {
+      return;
+    }
+
+    const addedIds = new Set(reservations.map((reservation) => reservation.id));
+    const restored = this.reservations.filter((reservation) => !addedIds.has(reservation.id));
+    for (const { index, reservation } of removed.sort((left, right) => left.index - right.index)) {
+      restored.splice(Math.min(index, restored.length), 0, reservation);
+    }
+    this.reservations = restored;
+  }
+
   private hasActiveSelfMoveAuthorization(
     vehicle: MutableVehicle,
     edgeId: string,
@@ -3215,7 +3269,7 @@ export class ShuttleSimCore {
       return;
     }
 
-    this.reservations.push(...authorization.reservations);
+    this.installMoveReservationsReplacingSelfOverlap(vehicle, authorization.reservations);
     this.releaseNodeOccupancy(vehicle, fromNodeId);
     vehicle.directionSwitchReadyNodeId = null;
     vehicle.waitingSinceSec = null;
@@ -3256,7 +3310,11 @@ export class ShuttleSimCore {
   }
 
   private mustClearNoStopNode(vehicle: MutableVehicle, task: TaskStateRecord | null, nodeId: string): boolean {
-    return this.layoutNode(nodeId)?.noStop === true && !this.mustStopAtNode(vehicle, task, nodeId);
+    const nodeRequiresClearThrough = this.layoutNode(nodeId)?.noStop === true;
+    const zoneRequiresClearThrough = this.zonesForNode(nodeId).some(
+      (zone) => zone.noStop && (zone.edgeIds.length === 0 || zone.id.startsWith('zone-main-portal-node'))
+    );
+    return (nodeRequiresClearThrough || zoneRequiresClearThrough) && !this.mustStopAtNode(vehicle, task, nodeId);
   }
 
   private noStopArrivalBlock(
@@ -3607,11 +3665,10 @@ export class ShuttleSimCore {
       ) {
         const authorization = this.authorizeRouteHorizon(vehicle, task);
         if (authorization.ok) {
-          this.reservations.push(...authorization.reservations);
+          const removedReservations = this.installMoveReservationsReplacingSelfOverlap(vehicle, authorization.reservations);
           noStopBlock = this.noStopArrivalBlock(vehicle, task, toNodeId);
           if (noStopBlock) {
-            const reservationIds = new Set(authorization.reservations.map((reservation) => reservation.id));
-            this.reservations = this.reservations.filter((reservation) => !reservationIds.has(reservation.id));
+            this.rollbackMoveReservationInstall(authorization.reservations, removedReservations);
           }
         }
       }
@@ -3965,6 +4022,9 @@ export class ShuttleSimCore {
       trafficMode: 'flow-debug',
       safetyValidated: false,
       longHorizonReservationEnabled: false,
+      clearThroughLookaheadEnabled: true,
+      clearThroughMaxLookaheadLegs: MAX_CLEAR_THROUGH_HORIZON_LEGS,
+      activeFutureGrantCount: this.reservations.filter((reservation) => reservation.startTimeSec > this.simTimeSec + 1e-6).length,
       legacyZoneHoldEnabled: false,
       activeReservationCount: this.reservations.length,
       waitingVehicles,

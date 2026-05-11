@@ -38,7 +38,14 @@ export type BottleneckCategory =
   | 'fifoLane'
   | 'sideAisleNetwork'
   | 'liftPort'
+  | 'liftSource'
   | 'vehicleFleet'
+  | 'legacyReservation'
+  | 'intersectionToken'
+  | 'clearThrough'
+  | 'segmentCapacity'
+  | 'headway'
+  | 'routing'
   | 'reservationControl'
   | 'other';
 
@@ -322,7 +329,14 @@ const BOTTLENECK_CATEGORIES: BottleneckCategory[] = [
   'fifoLane',
   'sideAisleNetwork',
   'liftPort',
+  'liftSource',
   'vehicleFleet',
+  'legacyReservation',
+  'intersectionToken',
+  'clearThrough',
+  'segmentCapacity',
+  'headway',
+  'routing',
   'reservationControl',
   'other'
 ];
@@ -345,21 +359,20 @@ function bottleneckCategoryForReason(reason: string): BottleneckCategory {
     reason.startsWith('inbound-lift-approach-full:') ||
     reason.startsWith('outbound-lift-approach-full:')
   ) return 'liftPort';
+  if (reason === 'inbound-lift-source-full' || reason === 'outbound-lift-unavailable') return 'liftSource';
   if (reason === 'vehicle-unavailable') return 'vehicleFleet';
+  if (reason === 'zone-hold' || reason === 'legacy-zone-reserved') return 'legacyReservation';
+  if (reason === 'zone-reserved') return 'intersectionToken';
+  if (reason === 'min-separation') return 'headway';
+  if (reason === 'no-stop-continuation-blocked' || reason === 'no-stop-clearance-incomplete') return 'clearThrough';
+  if (reason === 'route-unavailable' || reason === 'route-edge-missing') return 'routing';
   if (
     reason === 'edge-reserved' ||
     reason === 'node-reserved' ||
-    reason === 'zone-reserved' ||
     reason === 'opposite-direction' ||
-    reason === 'min-separation' ||
     reason === 'node-occupied' ||
-    reason === 'node-occupancy-mismatch' ||
-    reason === 'no-stop-continuation-blocked' ||
-    reason === 'no-stop-clearance-incomplete' ||
-    reason === 'route-unavailable'
-  ) {
-    return 'reservationControl';
-  }
+    reason === 'node-occupancy-mismatch'
+  ) return 'segmentCapacity';
   return 'other';
 }
 
@@ -493,13 +506,13 @@ function buildStressScenarioSpecs(baseScenario: ShuttleScenario): Phase0StressSc
       }),
       initialStoredNodeIds: [],
       expectedBottleneckReasonPrefixes: ['storage-empty', 'fifo-'],
-      expectedDominantBottleneckCategories: ['fifoLane', 'reservationControl', 'storageInventory'],
+      expectedDominantBottleneckCategories: ['fifoLane', 'storageInventory', 'intersectionToken', 'clearThrough', 'segmentCapacity', 'headway', 'routing'],
       requiresPositiveThroughput: true
     },
     {
       id: 'inbound-only-saturation',
       label: 'Inbound-only saturation',
-      description: 'All demand enters from dedicated inbound lifts so the shuttle fleet, lift-port queues, and reservation control must absorb the pressure without overbooking the dense FIFO grid.',
+      description: 'All demand enters from dedicated inbound lifts so the shuttle fleet, lift-port queues, and local traffic admission must absorb the pressure without overbooking the dense FIFO grid.',
       scenario: scenarioWithOperationalStressParams(baseScenario, {
         ...common,
         layout: createDefaultShuttleScenario({ liftMode: 'all-inbound' }).layout,
@@ -514,7 +527,7 @@ function buildStressScenarioSpecs(baseScenario: ShuttleScenario): Phase0StressSc
       }),
       initialStoredNodeIds: [],
       expectedBottleneckReasonPrefixes: ['vehicle-unavailable'],
-      expectedDominantBottleneckCategories: ['reservationControl', 'vehicleFleet'],
+      expectedDominantBottleneckCategories: ['vehicleFleet', 'intersectionToken', 'clearThrough', 'segmentCapacity', 'headway'],
       requiresPositiveThroughput: true
     },
     {
@@ -571,7 +584,7 @@ function buildStressScenarioSpecs(baseScenario: ShuttleScenario): Phase0StressSc
       }),
       initialStoredNodeIds: nearFullStoredNodes,
       expectedBottleneckReasonPrefixes: ['storage-full'],
-      expectedDominantBottleneckCategories: ['storageInventory', 'fifoLane'],
+      expectedDominantBottleneckCategories: ['storageInventory', 'fifoLane', 'intersectionToken', 'clearThrough', 'segmentCapacity', 'headway'],
       requiresPositiveThroughput: false
     }
   ];
@@ -726,14 +739,34 @@ function reservationsConflictForAudit(
   right: Reservation
 ): boolean {
   if (left.vehicleId === right.vehicleId) return false;
-  if (left.resourceType !== right.resourceType || left.resourceId !== right.resourceId) return false;
-  if (left.resourceType === 'zone') {
+  if (left.resourceType !== right.resourceType) return false;
+  const sameResource = left.resourceId === right.resourceId;
+  const sameZoneConflictGroup =
+    left.resourceType === 'zone' &&
+    left.conflictGroup !== null &&
+    right.conflictGroup !== null &&
+    left.conflictGroup === right.conflictGroup;
+  if (!sameResource && !sameZoneConflictGroup) return false;
+  if (sameResource && left.resourceType === 'zone') {
     const zone = scenario.layout.zones.find((candidate) => candidate.id === left.resourceId);
     if (zone && zoneReservationsArePhysicallyDisjoint(scenario, state, zone, left, right)) {
       return false;
     }
   }
   return true;
+}
+
+function reservationWindowsConflictForAudit(left: Reservation, right: Reservation): boolean {
+  if (left.id === right.id) return false;
+  if (left.vehicleId === right.vehicleId) return false;
+  const sameResource = left.resourceType === right.resourceType && left.resourceId === right.resourceId;
+  const sameZoneConflictGroup =
+    left.resourceType === 'zone' &&
+    right.resourceType === 'zone' &&
+    left.conflictGroup !== null &&
+    right.conflictGroup !== null &&
+    left.conflictGroup === right.conflictGroup;
+  return (sameResource || sameZoneConflictGroup) && reservationWindowsOverlap(left, right);
 }
 
 function inspectReservationAudit(
@@ -765,7 +798,9 @@ function inspectReservationAudit(
         message: 'Expired reservation remained in the active reservation set beyond the cleanup grace window.'
       });
     }
-    const key = `${reservation.resourceType}:${reservation.resourceId}`;
+    const key = reservation.resourceType === 'zone' && reservation.conflictGroup
+      ? `zone-conflict:${reservation.conflictGroup}`
+      : `${reservation.resourceType}:${reservation.resourceId}`;
     const bucket = byResource.get(key) ?? [];
     bucket.push(reservation);
     byResource.set(key, bucket);
@@ -791,12 +826,11 @@ function inspectReservationAudit(
       }
     }
 
-    for (let leftIndex = 0; leftIndex < activeReservations.length; leftIndex += 1) {
-      for (let rightIndex = leftIndex + 1; rightIndex < activeReservations.length; rightIndex += 1) {
-        const left = activeReservations[leftIndex]!;
-        const right = activeReservations[rightIndex]!;
-        if (!reservationsConflictForAudit(scenario, state, left, right)) continue;
-        if (!reservationWindowsOverlap(left, right)) continue;
+    for (let leftIndex = 0; leftIndex < reservations.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < reservations.length; rightIndex += 1) {
+        const left = reservations[leftIndex]!;
+        const right = reservations[rightIndex]!;
+        if (!reservationWindowsConflictForAudit(left, right)) continue;
         addAuditViolation(summary, {
           code: 'resourceWindowOverlap',
           timeSec: state.simTimeSec,
@@ -805,7 +839,7 @@ function inspectReservationAudit(
           vehicleIds: [left.vehicleId, right.vehicleId].sort(),
           observed: `${round(left.startTimeSec)}-${round(left.endTimeSec)} vs ${round(right.startTimeSec)}-${round(right.endTimeSec)}`,
           limit: 'non-overlapping single-capacity windows',
-          message: 'Reservation time windows overlap for different vehicles on the same resource.'
+          message: 'Reservation time windows overlap for different vehicles on a single-capacity resource or conflict group.'
         });
       }
     }
@@ -1382,7 +1416,7 @@ function runOnce(scenario: ShuttleScenario, seed: number, durationSec: number): 
       physicalViolationExamples,
       {
         requireReservationCoverage: requiresStrictReservationCoverage(state),
-        requireMotionSafety: requiresStrictReservationCoverage(state)
+        requireMotionSafety: true
       }
     );
     maxObservedSpeedMps = Math.max(maxObservedSpeedMps, physical.maxObservedSpeedMps);
@@ -1507,7 +1541,7 @@ function runStressOnce(
       physicalViolationExamples,
       {
         requireReservationCoverage: requiresStrictReservationCoverage(state),
-        requireMotionSafety: requiresStrictReservationCoverage(state)
+        requireMotionSafety: true
       }
     );
     maxObservedSpeedMps = Math.max(maxObservedSpeedMps, physical.maxObservedSpeedMps);

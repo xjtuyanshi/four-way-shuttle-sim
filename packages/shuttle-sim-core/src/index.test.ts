@@ -527,6 +527,8 @@ describe('shuttle phase 0 SimCore', () => {
       trafficMode: 'flow-debug',
       safetyValidated: false,
       longHorizonReservationEnabled: false,
+      clearThroughLookaheadEnabled: true,
+      clearThroughMaxLookaheadLegs: 8,
       legacyZoneHoldEnabled: false
     });
     expect(dispatchedState.reservations.some((reservation) => reservation.reasonCode === 'zone-hold')).toBe(false);
@@ -588,7 +590,8 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.traffic.waitingVehicles.length).toBeLessThan(8);
     expect(state.traffic.deadlockCandidateVehicleIds).toEqual([]);
     expect(state.reservations.some((reservation) => reservation.reasonCode === 'zone-hold')).toBe(false);
-    expect(state.kpis.blockedTimeByReasonSec['zone-reserved'] ?? 0).toBeLessThan(20);
+    expect(state.kpis.blockedTimeByReasonSec['zone-reserved'] ?? 0).toBeGreaterThan(0);
+    expect(state.kpis.blockedTimeByReasonSec['zone-reserved'] ?? 0).toBeLessThan(state.kpis.blockedTimeByReasonSec['vehicle-unavailable'] ?? Number.POSITIVE_INFINITY);
     expectNoTrafficSafetyFailures(state);
   }, 30000);
 
@@ -2523,7 +2526,7 @@ describe('shuttle phase 0 SimCore', () => {
         ],
         zones: [
           { id: 'zone-edge', type: 'intersection', nodeIds: [], edgeIds: ['A-B'], noStop: true, noParking: true, capacity: 1, conflictGroup: 'zone-edge' },
-          { id: 'zone-node', type: 'intersection', nodeIds: ['B'], edgeIds: [], noStop: true, noParking: true, capacity: 1, conflictGroup: 'zone-node' }
+          { id: 'zone-node', type: 'intersection', nodeIds: ['B'], edgeIds: [], noStop: false, noParking: true, capacity: 1, conflictGroup: 'zone-node' }
         ]
       }
     });
