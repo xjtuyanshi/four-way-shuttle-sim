@@ -3363,11 +3363,10 @@ export class ShuttleSimCore {
   }
 
   private targetNodeCanServeAsExitBuffer(vehicle: MutableVehicle, task: TaskStateRecord | null, nodeId: string): boolean {
-    if (this.mustStopAtNode(vehicle, task, nodeId)) {
-      return true;
+    if (!this.layoutNode(nodeId)) {
+      return false;
     }
-    const node = this.layoutNode(nodeId);
-    return node ? !node.noStop : false;
+    return !this.mustClearNoStopNode(vehicle, task, nodeId);
   }
 
   private mustClearNoStopNode(vehicle: MutableVehicle, task: TaskStateRecord | null, nodeId: string): boolean {

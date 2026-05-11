@@ -1493,6 +1493,74 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.reservations).toContainEqual(expect.objectContaining({ vehicleId: 'SH-01', resourceType: 'node', resourceId: 'C' }));
   });
 
+  it('does not use a node-zone no-stop target as an exit buffer', () => {
+    const scenario = testScenario({
+      layout: {
+        units: 'meter',
+        calibrationProfile: null,
+        nodes: [
+          { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'B', type: 'aisle', x: 4, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'C', type: 'parking', x: 8, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'P', type: 'parking', x: 0, y: 0, z: 4, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
+        ],
+        edges: [
+          { id: 'A-B', from: 'A', to: 'B', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'A-B', noParking: true },
+          { id: 'B-C', from: 'B', to: 'C', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'B-C', noParking: true }
+        ],
+        zones: [
+          { id: 'zone-node-b', type: 'intersection', nodeIds: ['B'], edgeIds: [], noStop: true, noParking: true, capacity: 1, conflictGroup: 'zone-node-b' }
+        ]
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-02', ['P']);
+    sim.setVehicleRouteForTest('SH-01', ['A', 'B', 'C']);
+
+    const state = sim.step(0.2);
+
+    expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-01')?.currentEdgeId).toBe('A-B');
+    expect(state.reservations).toContainEqual(expect.objectContaining({ vehicleId: 'SH-01', resourceType: 'zone', resourceId: 'zone-node-b' }));
+    expect(state.reservations).toContainEqual(expect.objectContaining({ vehicleId: 'SH-01', resourceType: 'edge', resourceId: 'B-C' }));
+    expect(state.reservations).toContainEqual(expect.objectContaining({ vehicleId: 'SH-01', resourceType: 'node', resourceId: 'C' }));
+  });
+
+  it('waits upstream when a no-stop movement cannot reserve its downstream exit buffer', () => {
+    const scenario = testScenario({
+      layout: {
+        units: 'meter',
+        calibrationProfile: null,
+        nodes: [
+          { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'B', type: 'aisle', x: 4, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'C', type: 'parking', x: 8, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
+        ],
+        edges: [
+          { id: 'A-B', from: 'A', to: 'B', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'A-B', noParking: true },
+          { id: 'B-C', from: 'B', to: 'C', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'B-C', noParking: true }
+        ],
+        zones: [
+          { id: 'zone-node-b', type: 'intersection', nodeIds: ['B'], edgeIds: [], noStop: true, noParking: true, capacity: 1, conflictGroup: 'zone-node-b' }
+        ]
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-02', ['C']);
+    sim.setVehicleRouteForTest('SH-01', ['A', 'B', 'C']);
+
+    const state = sim.step(0.2);
+    const vehicle = state.vehicles.find((candidate) => candidate.id === 'SH-01');
+
+    expect(vehicle).toMatchObject({
+      state: 'waiting-blocked',
+      currentNodeId: 'A',
+      currentEdgeId: null,
+      targetNodeId: 'B',
+      waitReason: 'no-stop-continuation-blocked'
+    });
+    expect(state.reservations).not.toContainEqual(expect.objectContaining({ vehicleId: 'SH-01', resourceId: 'zone-node-b' }));
+  });
+
   it('defers outbound work instead of creating phantom pallets when contiguous lane-fill storage is empty', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       durationSec: 10,
