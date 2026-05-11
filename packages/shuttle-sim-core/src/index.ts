@@ -3519,6 +3519,14 @@ export class ShuttleSimCore {
   }
 
   private agentRouteToGoal(vehicle: MutableVehicle, task: TaskStateRecord | null, goalNodeId: string): string[] {
+    const committedRoute = this.agentCommittedRoute(vehicle, goalNodeId);
+    if (committedRoute) {
+      const committedNextNodeId = committedRoute[1] ?? null;
+      if (committedNextNodeId && (!this.collisionAvoidanceEnabled() || !this.agentMoveBlocker(vehicle, committedNextNodeId))) {
+        return committedRoute;
+      }
+    }
+
     const directRoute = this.agentShortestPath(
       vehicle.currentNodeId,
       goalNodeId,
@@ -3559,6 +3567,22 @@ export class ShuttleSimCore {
     }
 
     return directRoute;
+  }
+
+  private agentCommittedRoute(vehicle: MutableVehicle, goalNodeId: string): string[] | null {
+    const currentIndex = vehicle.routeNodeIds.indexOf(vehicle.currentNodeId, Math.max(0, vehicle.routeIndex));
+    if (currentIndex < 0) {
+      return null;
+    }
+    const route = vehicle.routeNodeIds.slice(currentIndex);
+    if (route.length < 2 || route[0] !== vehicle.currentNodeId || route.at(-1) !== goalNodeId) {
+      return null;
+    }
+    const nextNodeId = route[1]!;
+    if (!this.traffic.findEdge(vehicle.currentNodeId, nextNodeId)) {
+      return null;
+    }
+    return route;
   }
 
   private agentStaticBlockedNodeIds(

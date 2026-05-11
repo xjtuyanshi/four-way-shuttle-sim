@@ -726,6 +726,46 @@ describe('shuttle phase 0 SimCore', () => {
     expect(bypassVehicle?.routeNodeIds.slice(0, 3)).not.toEqual(['left-row-06', 'storage-r06-c01', 'left-row-06']);
   });
 
+  it('agent-simple commits to a chosen storage bypass instead of bouncing back to the main lane', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-simple'
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', [
+      'main-north-05',
+      'right-row-08',
+      'storage-r08-c24',
+      'outbound-lift-top-02'
+    ]);
+
+    sim.start();
+    let state = sim.getState();
+    for (let step = 0; step < 30; step += 1) {
+      state = sim.step(0.1);
+      const vehicle = state.vehicles[0]!;
+      if (vehicle.currentNodeId === 'right-row-08' && vehicle.currentEdgeId === null) {
+        break;
+      }
+    }
+    state = sim.step(0.1);
+    const vehicle = state.vehicles[0]!;
+
+    expect(vehicle.currentNodeId).toBe('right-row-08');
+    expect(vehicle.targetNodeId).toBe('storage-r08-c24');
+    expect(vehicle.currentEdgeId).toBe('right-row-08-storage-r08-c24');
+  });
+
   it('moves a storage refuge occupant deeper so an aisle shuttle can enter the pocket', () => {
     const scenario = createDefaultShuttleScenario({
       liftMode: 'all-inbound',
