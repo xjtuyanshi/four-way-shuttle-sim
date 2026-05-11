@@ -3362,6 +3362,14 @@ export class ShuttleSimCore {
     return this.scenario.layout.nodes.find((node) => node.id === nodeId) ?? null;
   }
 
+  private targetNodeCanServeAsExitBuffer(vehicle: MutableVehicle, task: TaskStateRecord | null, nodeId: string): boolean {
+    if (this.mustStopAtNode(vehicle, task, nodeId)) {
+      return true;
+    }
+    const node = this.layoutNode(nodeId);
+    return node ? !node.noStop : false;
+  }
+
   private mustClearNoStopNode(vehicle: MutableVehicle, task: TaskStateRecord | null, nodeId: string): boolean {
     const nodeRequiresClearThrough = this.layoutNode(nodeId)?.noStop === true;
     const zoneRequiresClearThrough = this.zonesForNode(nodeId).some(
@@ -3370,12 +3378,33 @@ export class ShuttleSimCore {
     return (nodeRequiresClearThrough || zoneRequiresClearThrough) && !this.mustStopAtNode(vehicle, task, nodeId);
   }
 
+  private movementRequiresClearThrough(
+    vehicle: MutableVehicle,
+    task: TaskStateRecord | null,
+    fromNodeId: string,
+    toNodeId: string
+  ): boolean {
+    if (this.targetNodeCanServeAsExitBuffer(vehicle, task, toNodeId)) {
+      return false;
+    }
+    const edge = this.traffic.findEdge(fromNodeId, toNodeId);
+    if (!edge) {
+      return false;
+    }
+    const targetNodeRequiresClearThrough = this.layoutNode(toNodeId)?.noStop === true;
+    const movementZoneRequiresClearThrough = this.traffic
+      .zonesForMovement(fromNodeId, toNodeId, edge.id)
+      .some((zone) => zone.noStop);
+    return targetNodeRequiresClearThrough || movementZoneRequiresClearThrough;
+  }
+
   private noStopArrivalBlock(
     vehicle: MutableVehicle,
     task: TaskStateRecord | null,
+    fromNodeId: string,
     nodeId: string
   ): { reason: string; blockingReservationId: string | null; blockingVehicleId: string | null } | null {
-    if (!this.mustClearNoStopNode(vehicle, task, nodeId)) {
+    if (!this.movementRequiresClearThrough(vehicle, task, fromNodeId, nodeId)) {
       return null;
     }
     const nextNodeId = vehicle.routeNodeIds[vehicle.routeIndex + 2];
@@ -3461,9 +3490,9 @@ export class ShuttleSimCore {
     vehicle: MutableVehicle,
     task: TaskStateRecord | null,
     fromNodeId: string,
-    _toNodeId: string
+    toNodeId: string
   ): boolean {
-    return this.mustClearNoStopNode(vehicle, task, fromNodeId);
+    return this.mustClearNoStopNode(vehicle, task, fromNodeId) || this.movementRequiresClearThrough(vehicle, task, fromNodeId, toNodeId);
   }
 
   private leadingVehicleTooClose(vehicle: MutableVehicle, fromNodeId: string, toNodeId: string): string | null {
@@ -3547,11 +3576,11 @@ export class ShuttleSimCore {
     const firstSpeed = this.speedForEdge(vehicle, firstEdge);
     const firstMotionMode = this.routeLegMotionMode(vehicle, firstEdge, firstToNodeId, vehicle.routeIndex, task);
     const firstTravelSec = this.routeLegTravelSec(vehicle, firstEdge, firstToNodeId, vehicle.routeIndex, firstMotionMode);
-    const firstTargetMustClear = this.mustClearNoStopNode(vehicle, task, firstToNodeId);
+    const firstMovementMustClear = this.movementRequiresClearThrough(vehicle, task, firstFromNodeId, firstToNodeId);
 
     const requiredSelfAuthorizationEndSec = this.simTimeSec + firstTravelSec + this.scenario.trafficPolicy.minimumClearanceSec;
     if (
-      !firstTargetMustClear &&
+      !firstMovementMustClear &&
       this.hasActiveSelfMoveAuthorization(vehicle, firstEdge.id, firstToNodeId, requiredSelfAuthorizationEndSec)
     ) {
       return {
@@ -3596,6 +3625,7 @@ export class ShuttleSimCore {
             };
       }
 
+      const movementMustClear = this.movementRequiresClearThrough(vehicle, task, fromNodeId, toNodeId);
       const horizonEligible = this.routeHorizonEligible(vehicle, task, fromNodeId, toNodeId);
       if (horizonLegCount > 0 && !horizonEligible) {
         break;
@@ -3603,6 +3633,7 @@ export class ShuttleSimCore {
 
       const axis = this.axisForEdge(edge);
       const clearingNoStopTurn =
+        movementMustClear ||
         this.mustClearNoStopNode(vehicle, task, fromNodeId) ||
         this.mustClearNoStopNode(vehicle, task, toNodeId);
       if (horizonLegCount > 0 && horizonAxis !== null && axis !== horizonAxis && !clearingNoStopTurn) {
@@ -3631,8 +3662,8 @@ export class ShuttleSimCore {
 
       if (!attempt.ok) {
         if (
-          firstTargetMustClear &&
-          (horizonLegCount < 2 || this.mustClearNoStopNode(vehicle, task, lastHorizonTargetNodeId))
+          firstMovementMustClear &&
+          (horizonLegCount < 2 || !this.targetNodeCanServeAsExitBuffer(vehicle, task, lastHorizonTargetNodeId))
         ) {
           return attempt;
         }
@@ -3663,10 +3694,10 @@ export class ShuttleSimCore {
       }
     }
 
-    if (firstTargetMustClear && horizonLegCount < 2) {
+    if (firstMovementMustClear && horizonLegCount < 2) {
       return { ok: false, reasonCode: 'no-stop-continuation-blocked', blockingReservationId: null };
     }
-    if (firstTargetMustClear && this.mustClearNoStopNode(vehicle, task, lastHorizonTargetNodeId)) {
+    if (firstMovementMustClear && !this.targetNodeCanServeAsExitBuffer(vehicle, task, lastHorizonTargetNodeId)) {
       return { ok: false, reasonCode: 'no-stop-clearance-incomplete', blockingReservationId: null };
     }
 
@@ -3711,7 +3742,7 @@ export class ShuttleSimCore {
     const traveledM = legCompleteByTime ? lengthM : Math.min(lengthM, profile.distanceM);
 
     if (legCompleteByTime) {
-      let noStopBlock = this.noStopArrivalBlock(vehicle, task, toNodeId);
+      let noStopBlock = this.noStopArrivalBlock(vehicle, task, fromNodeId, toNodeId);
       if (
         noStopBlock &&
         (noStopBlock.reason === 'no-stop-continuation-blocked' || noStopBlock.reason === 'no-stop-clearance-incomplete')
@@ -3719,7 +3750,7 @@ export class ShuttleSimCore {
         const authorization = this.authorizeRouteHorizon(vehicle, task);
         if (authorization.ok) {
           const installedReservations = this.installMoveReservationsReplacingSelfOverlap(vehicle, authorization.reservations);
-          noStopBlock = this.noStopArrivalBlock(vehicle, task, toNodeId);
+          noStopBlock = this.noStopArrivalBlock(vehicle, task, fromNodeId, toNodeId);
           if (noStopBlock) {
             this.rollbackMoveReservationInstall(installedReservations.installed, installedReservations.removed);
           }

@@ -1430,6 +1430,69 @@ describe('shuttle phase 0 SimCore', () => {
     });
   });
 
+  it('uses the target node as the exit buffer for an edge-only no-stop zone', () => {
+    const scenario = testScenario({
+      layout: {
+        units: 'meter',
+        calibrationProfile: null,
+        nodes: [
+          { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'B', type: 'aisle', x: 4, y: 0, z: 0, noStop: false, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'C', type: 'parking', x: 8, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
+        ],
+        edges: [
+          { id: 'A-B', from: 'A', to: 'B', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'A-B', noParking: true },
+          { id: 'B-C', from: 'B', to: 'C', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'B-C', noParking: true }
+        ],
+        zones: [
+          { id: 'zone-edge-only', type: 'intersection', nodeIds: [], edgeIds: ['A-B'], noStop: true, noParking: true, capacity: 1, conflictGroup: 'zone-edge-only' }
+        ]
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-02', ['C']);
+    sim.setVehicleRouteForTest('SH-01', ['A', 'B']);
+
+    const state = sim.step(0.2);
+    const vehicle = state.vehicles.find((candidate) => candidate.id === 'SH-01');
+
+    expect(vehicle?.currentEdgeId).toBe('A-B');
+    expect(vehicle?.waitReason).toBeNull();
+    expect(state.reservations).toContainEqual(expect.objectContaining({ vehicleId: 'SH-01', resourceType: 'zone', resourceId: 'zone-edge-only' }));
+  });
+
+  it('preauthorizes the downstream exit buffer when an edge-only no-stop movement ends at a no-stop node', () => {
+    const scenario = testScenario({
+      layout: {
+        units: 'meter',
+        calibrationProfile: null,
+        nodes: [
+          { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'B', type: 'aisle', x: 4, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'C', type: 'parking', x: 8, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'P', type: 'parking', x: 0, y: 0, z: 4, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
+        ],
+        edges: [
+          { id: 'A-B', from: 'A', to: 'B', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'A-B', noParking: true },
+          { id: 'B-C', from: 'B', to: 'C', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'B-C', noParking: true }
+        ],
+        zones: [
+          { id: 'zone-edge-only', type: 'intersection', nodeIds: [], edgeIds: ['A-B'], noStop: true, noParking: true, capacity: 1, conflictGroup: 'zone-edge-only' }
+        ]
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-02', ['P']);
+    sim.setVehicleRouteForTest('SH-01', ['A', 'B', 'C']);
+
+    const state = sim.step(0.2);
+
+    expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-01')?.currentEdgeId).toBe('A-B');
+    expect(state.reservations).toContainEqual(expect.objectContaining({ vehicleId: 'SH-01', resourceType: 'zone', resourceId: 'zone-edge-only' }));
+    expect(state.reservations).toContainEqual(expect.objectContaining({ vehicleId: 'SH-01', resourceType: 'edge', resourceId: 'B-C' }));
+    expect(state.reservations).toContainEqual(expect.objectContaining({ vehicleId: 'SH-01', resourceType: 'node', resourceId: 'C' }));
+  });
+
   it('defers outbound work instead of creating phantom pallets when contiguous lane-fill storage is empty', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       durationSec: 10,
