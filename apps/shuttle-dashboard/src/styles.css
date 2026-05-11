@@ -547,6 +547,7 @@ input[type="range"] {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+  align-items: center;
 }
 
 .scene-layer-controls button {
@@ -560,6 +561,47 @@ input[type="range"] {
   color: var(--text);
   border-color: rgba(86, 169, 201, 0.78);
   background: rgba(86, 169, 201, 0.16);
+}
+
+.route-legend {
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(10, 18, 24, 0.72);
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.route-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.route-legend i {
+  width: 18px;
+  height: 4px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.route-legend .planned {
+  background: #56a9c9;
+}
+
+.route-legend .local {
+  background: #e2b84b;
+}
+
+.route-legend .goal {
+  width: 10px;
+  height: 10px;
+  border: 2px solid #56a9c9;
+  background: transparent;
 }
 
 .stream-placeholder {
@@ -851,7 +893,7 @@ input[type="range"] {
 table {
   border-collapse: collapse;
   width: 100%;
-  min-width: 620px;
+  min-width: 820px;
 }
 
 th,
@@ -869,6 +911,11 @@ tbody tr {
 
 tbody tr.selected td {
   background: rgba(86, 169, 201, 0.12);
+}
+
+td.route-local {
+  color: var(--amber);
+  font-weight: 650;
 }
 
 th {

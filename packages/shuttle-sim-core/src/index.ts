@@ -1108,6 +1108,10 @@ export class ShuttleSimCore {
         currentNodeId: parking.id,
         currentEdgeId: null,
         routeNodeIds: [],
+        plannedGoalNodeId: null,
+        plannedRouteNodeIds: [],
+        localRouteNodeIds: [],
+        localRouteReason: null,
         routeIndex: 0,
         legRemainingM: 0,
         legElapsedSec: 0,
@@ -5108,7 +5112,60 @@ export class ShuttleSimCore {
     return { x: vehicle.x, y: vehicle.y, z: vehicle.z };
   }
 
+  private vehicleRouteDiagnostics(vehicle: MutableVehicle): Pick<VehicleState, 'plannedGoalNodeId' | 'plannedRouteNodeIds' | 'localRouteNodeIds' | 'localRouteReason'> {
+    const activeRoute = vehicle.routeNodeIds.slice(Math.max(0, vehicle.routeIndex));
+    if (!this.agentSimpleEnabled()) {
+      return {
+        plannedGoalNodeId: activeRoute.at(-1) ?? null,
+        plannedRouteNodeIds: activeRoute,
+        localRouteNodeIds: [],
+        localRouteReason: null
+      };
+    }
+
+    const task = this.taskForVehicle(vehicle);
+    const goalNodeId = this.agentGoalNodeId(vehicle, task);
+    if (!goalNodeId || goalNodeId === vehicle.currentNodeId) {
+      return {
+        plannedGoalNodeId: goalNodeId,
+        plannedRouteNodeIds: goalNodeId ? [vehicle.currentNodeId] : [],
+        localRouteNodeIds: [],
+        localRouteReason: null
+      };
+    }
+
+    let plannedRouteNodeIds: string[] = [];
+    try {
+      plannedRouteNodeIds = this.agentShortestPath(
+        vehicle.currentNodeId,
+        goalNodeId,
+        this.agentStaticBlockedNodeIds(vehicle, goalNodeId)
+      );
+    } catch {
+      plannedRouteNodeIds = [vehicle.currentNodeId, goalNodeId];
+    }
+
+    const activeRouteKey = activeRoute.join('>');
+    const plannedRouteKey = plannedRouteNodeIds.join('>');
+    const localRouteNodeIds = activeRoute.length >= 2 && activeRouteKey !== plannedRouteKey
+      ? activeRoute
+      : [];
+    const localRouteReason = localRouteNodeIds.length === 0
+      ? null
+      : localRouteNodeIds.at(-1) === goalNodeId
+        ? 'temporary-reroute'
+        : 'temporary-yield';
+
+    return {
+      plannedGoalNodeId: goalNodeId,
+      plannedRouteNodeIds,
+      localRouteNodeIds,
+      localRouteReason
+    };
+  }
+
   private publicVehicle(vehicle: MutableVehicle): VehicleState {
+    const routeDiagnostics = this.vehicleRouteDiagnostics(vehicle);
     return {
       id: vehicle.id,
       state: vehicle.state,
@@ -5123,6 +5180,7 @@ export class ShuttleSimCore {
       currentNodeId: vehicle.currentNodeId,
       currentEdgeId: vehicle.currentEdgeId,
       routeNodeIds: [...vehicle.routeNodeIds],
+      ...routeDiagnostics,
       routeIndex: vehicle.routeIndex,
       legRemainingM: round(vehicle.legRemainingM),
       legElapsedSec: round(vehicle.legElapsedSec),

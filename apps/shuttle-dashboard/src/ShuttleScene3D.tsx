@@ -490,6 +490,47 @@ function createSegment(
   return segment;
 }
 
+function createRouteArrow(
+  from: { x: number; z: number },
+  to: { x: number; z: number },
+  color: number,
+  y: number,
+  scale: number
+): THREE.Mesh | null {
+  const direction = new THREE.Vector3(to.x - from.x, 0, to.z - from.z);
+  const length = direction.length();
+  if (length < 0.4) {
+    return null;
+  }
+  const unit = direction.normalize();
+  const arrow = new THREE.Mesh(
+    new THREE.ConeGeometry(0.1 * scale, 0.28 * scale, 18),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false })
+  );
+  arrow.position.set(to.x - unit.x * 0.34, y, to.z - unit.z * 0.34);
+  arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), unit);
+  return arrow;
+}
+
+function createRouteGoalMarker(node: ShuttleNode, color: number, selected: boolean): THREE.Group {
+  const group = new THREE.Group();
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(selected ? 0.42 : 0.3, selected ? 0.52 : 0.38, 40),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: selected ? 0.92 : 0.58, side: THREE.DoubleSide, depthWrite: false })
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(node.x, 0.285, node.z);
+  group.add(ring);
+
+  const pin = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.035, 0.035, selected ? 0.5 : 0.34, 12),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: selected ? 0.88 : 0.5 })
+  );
+  pin.position.set(node.x, selected ? 0.52 : 0.42, node.z);
+  group.add(pin);
+  return group;
+}
+
 function createBoxTrackSegment(
   from: { x: number; z: number },
   to: { x: number; z: number },
@@ -985,8 +1026,56 @@ function routeOverlayKey(
   if (!layers.routes) return 'off';
   return (state?.vehicles ?? [])
     .filter((vehicle) => !selectedVehicleId || vehicle.id === selectedVehicleId)
-    .map((vehicle) => `${vehicle.id}:${vehicle.routeIndex}:${vehicle.routeNodeIds.slice(Math.max(0, vehicle.routeIndex)).join('>')}`)
+    .map((vehicle) => [
+      vehicle.id,
+      vehicle.routeIndex,
+      vehicle.plannedGoalNodeId ?? '',
+      vehicle.plannedRouteNodeIds.join('>'),
+      vehicle.localRouteReason ?? '',
+      vehicle.localRouteNodeIds.join('>')
+    ].join(':'))
     .join('|');
+}
+
+function routePointsForNodeIds(
+  runtime: SceneRuntime,
+  vehicle: VehicleState,
+  nodeIds: string[]
+): Array<{ x: number; z: number }> {
+  if (nodeIds.length < 2) {
+    return [];
+  }
+  return [
+    { x: vehicle.x, z: vehicle.z },
+    ...nodeIds.slice(1).map((nodeId) => runtime.nodeById.get(nodeId)).filter((node): node is ShuttleNode => Boolean(node))
+  ];
+}
+
+function addRoutePath(
+  group: THREE.Group,
+  points: Array<{ x: number; z: number }>,
+  options: { color: number; radius: number; opacity: number; y: number; arrows: boolean; arrowScale: number }
+): void {
+  for (let index = 1; index < points.length; index += 1) {
+    const from = points[index - 1]!;
+    const to = points[index]!;
+    const routeSegment = createSegment(
+      from,
+      to,
+      options.radius,
+      new THREE.MeshBasicMaterial({ color: options.color, transparent: true, opacity: options.opacity, depthWrite: false }),
+      options.y
+    );
+    if (routeSegment) {
+      group.add(routeSegment);
+    }
+    if (options.arrows && index % 3 === 0) {
+      const arrow = createRouteArrow(from, to, options.color, options.y + 0.05, options.arrowScale);
+      if (arrow) {
+        group.add(arrow);
+      }
+    }
+  }
 }
 
 function updateDynamicScene(
@@ -1085,29 +1174,37 @@ function updateDynamicScene(
       if (selectedVehicleId && vehicle.id !== selectedVehicleId) {
         continue;
       }
-      const routeNodes = vehicle.routeNodeIds.slice(Math.max(0, vehicle.routeIndex));
-      if (routeNodes.length < 2 && !vehicle.targetNodeId) {
-        continue;
+      const selected = selectedVehicleId === vehicle.id;
+      const plannedRouteNodes = vehicle.plannedRouteNodeIds.length >= 2
+        ? vehicle.plannedRouteNodeIds
+        : vehicle.routeNodeIds.slice(Math.max(0, vehicle.routeIndex));
+      const plannedRoutePoints = routePointsForNodeIds(runtime, vehicle, plannedRouteNodes);
+      if (plannedRoutePoints.length >= 2) {
+        addRoutePath(runtime.routeGroup, plannedRoutePoints, {
+          color: vehicle.loaded ? 0x4fc190 : 0x56a9c9,
+          radius: selected ? 0.055 : 0.026,
+          opacity: selected ? 0.86 : 0.34,
+          y: selected ? 0.255 : 0.205,
+          arrows: selected,
+          arrowScale: selected ? 1.15 : 0.85
+        });
       }
-      const routePoints = [
-        { x: vehicle.x, z: vehicle.z },
-        ...routeNodes.slice(1).map((nodeId) => runtime.nodeById.get(nodeId)).filter((node): node is ShuttleNode => Boolean(node))
-      ];
-      for (let index = 1; index < routePoints.length; index += 1) {
-        const routeSegment = createSegment(
-          routePoints[index - 1]!,
-          routePoints[index]!,
-          selectedVehicleId === vehicle.id ? 0.06 : 0.035,
-          new THREE.MeshBasicMaterial({
-            color: selectedVehicleId === vehicle.id ? 0x56a9c9 : 0x7a8794,
-            transparent: true,
-            opacity: selectedVehicleId === vehicle.id ? 0.86 : 0.48
-          }),
-          0.18
-        );
-        if (routeSegment) {
-          runtime.routeGroup.add(routeSegment);
-        }
+
+      const localRoutePoints = routePointsForNodeIds(runtime, vehicle, vehicle.localRouteNodeIds);
+      if (localRoutePoints.length >= 2) {
+        addRoutePath(runtime.routeGroup, localRoutePoints, {
+          color: 0xe2b84b,
+          radius: selected ? 0.074 : 0.044,
+          opacity: selected ? 0.96 : 0.74,
+          y: selected ? 0.335 : 0.295,
+          arrows: true,
+          arrowScale: selected ? 1.25 : 0.95
+        });
+      }
+
+      const goalNode = vehicle.plannedGoalNodeId ? runtime.nodeById.get(vehicle.plannedGoalNodeId) : null;
+      if (goalNode) {
+        runtime.routeGroup.add(createRouteGoalMarker(goalNode, vehicle.loaded ? 0x4fc190 : 0x56a9c9, selected));
       }
     }
   }
@@ -1248,12 +1345,15 @@ export function ShuttleScene3D({
     }
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0d141b);
-    scene.fog = new THREE.Fog(0x0d141b, 32, 86);
+    scene.background = new THREE.Color(0x0c141a);
+    scene.fog = new THREE.Fog(0x0c141a, 42, 112);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1));
-    renderer.shadowMap.enabled = false;
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.12;
+    renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     host.appendChild(renderer.domElement);
     onRendererInfoRef.current?.(detectRendererInfo(renderer));
@@ -1268,10 +1368,10 @@ export function ShuttleScene3D({
     root.add(staticGroup, routeGroup, reservationGroup, loadGroup, vehicleGroup);
     scene.add(root);
 
-    const ambient = new THREE.HemisphereLight(0xffffff, 0x25323d, 1.35);
+    const ambient = new THREE.HemisphereLight(0xffffff, 0x26343e, 1.55);
     scene.add(ambient);
 
-    const key = new THREE.DirectionalLight(0xffffff, 1.6);
+    const key = new THREE.DirectionalLight(0xffffff, 1.85);
     key.position.set(-8, 18, 12);
     key.castShadow = true;
     key.shadow.mapSize.set(1024, 1024);
@@ -1280,6 +1380,10 @@ export function ShuttleScene3D({
     key.shadow.camera.top = 28;
     key.shadow.camera.bottom = -28;
     scene.add(key);
+
+    const rim = new THREE.DirectionalLight(0x7abed0, 0.8);
+    rim.position.set(16, 12, -14);
+    scene.add(rim);
 
     const resize = () => {
       const width = Math.max(1, host.clientWidth);

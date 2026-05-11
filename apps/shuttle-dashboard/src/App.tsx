@@ -658,6 +658,12 @@ function VehicleTable({
   selectedVehicleId: string | null;
   onSelectVehicle: (vehicleId: string) => void;
 }) {
+  const routeLabel = (vehicle: VehicleState) => {
+    const plannedLegs = Math.max(0, vehicle.plannedRouteNodeIds.length - 1);
+    const localLegs = Math.max(0, vehicle.localRouteNodeIds.length - 1);
+    return localLegs > 0 ? `local ${localLegs} / plan ${plannedLegs}` : plannedLegs > 0 ? `${plannedLegs} legs` : '--';
+  };
+
   return (
     <section className="panel vehicle-panel">
       <div className="panel-head">
@@ -672,6 +678,8 @@ function VehicleTable({
               <th>State</th>
               <th>Node</th>
               <th>Target</th>
+              <th>Goal</th>
+              <th>Path</th>
               <th>Speed</th>
               <th>Wait</th>
             </tr>
@@ -687,6 +695,8 @@ function VehicleTable({
                 <td><span className={`state-pill ${vehicle.state}`}>{vehicle.state}</span></td>
                 <td>{vehicle.currentNodeId}</td>
                 <td>{vehicle.targetNodeId ?? '--'}</td>
+                <td>{vehicle.plannedGoalNodeId ?? '--'}</td>
+                <td className={vehicle.localRouteNodeIds.length > 0 ? 'route-local' : ''}>{routeLabel(vehicle)}</td>
                 <td>{vehicle.speedMps.toFixed(2)}</td>
                 <td>{vehicle.waitReason ?? vehicle.blockingVehicleId ?? vehicle.blockingReservationId ?? '--'}</td>
               </tr>
@@ -879,6 +889,11 @@ function StreamingPane({
           <button type="button" onClick={() => onCameraViewChange(DEFAULT_SCENE_CAMERA_VIEW)}>
             Reset View
           </button>
+          <span className="route-legend" aria-label="Route legend">
+            <span><i className="planned" />Plan</span>
+            <span><i className="local" />Local</span>
+            <span><i className="goal" />Goal</span>
+          </span>
           <span
             className={`gpu-badge ${rendererInfo?.hardwareAccelerated === false ? 'software' : 'hardware'}`}
             title={rendererInfo ? `${rendererInfo.vendor} / ${rendererInfo.renderer}` : 'Waiting for WebGL renderer'}
@@ -1442,7 +1457,7 @@ export function App() {
     traffic: false,
     physics: false,
     loads: true,
-    routes: false
+    routes: true
   });
   const [sceneCameraView, setSceneCameraView] = useState<ShuttleSceneCameraView>(DEFAULT_SCENE_CAMERA_VIEW);
   const [isPending, startTransition] = useTransition();

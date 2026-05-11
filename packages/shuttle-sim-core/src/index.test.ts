@@ -793,6 +793,8 @@ describe('shuttle phase 0 SimCore', () => {
     expect(assigned?.details.route).toBeUndefined();
     expect(assigned?.details.pickupNodeId).toBe(task.pickupNodeId);
     expect(assigned?.details.dropoffNodeId).toBe(task.dropoffNodeId);
+    expect(state.vehicles[0]?.plannedGoalNodeId).toBe(task.pickupNodeId);
+    expect(state.vehicles[0]?.plannedRouteNodeIds.at(-1)).toBe(task.pickupNodeId);
   });
 
   it('agent-simple releases an inbound shuttle to the available pool after dropoff', () => {
@@ -896,6 +898,9 @@ describe('shuttle phase 0 SimCore', () => {
     expect(yieldEvent?.details.route).toBe('left-row-08>storage-r08-c01');
     expect(emptyVehicle?.targetNodeId).toBe('storage-r08-c01');
     expect(emptyVehicle?.currentEdgeId).toBe('storage-r08-c01-left-row-08');
+    expect(emptyVehicle?.plannedGoalNodeId).toBe('outbound-lift-bottom-01');
+    expect(emptyVehicle?.localRouteReason).toBe('temporary-yield');
+    expect(emptyVehicle?.localRouteNodeIds).toEqual(['left-row-08', 'storage-r08-c01']);
     expect(emptyVehicle?.waitReason).toBeNull();
   });
 
@@ -941,6 +946,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(vehicle?.state).toBe('waiting-blocked');
     expect(vehicle?.targetNodeId).toBe('storage-r07-c06');
     expect(vehicle?.blockingVehicleId).toBe('SH-02');
+    expect(vehicle?.localRouteNodeIds).toEqual([]);
     expect(sim.getEventLog().some((event) => event.eventType === 'route-replanned' && event.reason === 'empty-local-obstacle-reroute')).toBe(false);
   });
 
