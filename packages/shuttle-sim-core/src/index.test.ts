@@ -1,4 +1,4 @@
-import { ShuttleScenarioSchema, ShuttleSimStateSchema, type ShuttleScenario } from '@four-way-shuttle/schemas';
+import { ShuttleScenarioSchema, ShuttleSimStateSchema, type Reservation, type ShuttleScenario } from '@four-way-shuttle/schemas';
 
 import goldenStaticSceneContract from '../../../config/shuttle/static-scene-contract.golden.json';
 import {
@@ -2528,6 +2528,167 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-01')?.currentEdgeId).toBe('A-X');
     expect(selfEdgeReservations.map((reservation) => reservation.id)).toEqual(['active-self-edge']);
     expect(selfEdgeReservations[0]).toMatchObject({ startTimeSec: 0, endTimeSec: 60 });
+  });
+
+  it('merges active self zone grants by exact resource only', () => {
+    const scenario = testScenario({
+      layout: {
+        units: 'meter',
+        calibrationProfile: null,
+        nodes: [
+          { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'B', type: 'parking', x: 4, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'P', type: 'parking', x: 0, y: 0, z: 4, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
+        ],
+        edges: [
+          { id: 'A-B', from: 'A', to: 'B', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'lane', noParking: true }
+        ],
+        zones: [
+          { id: 'zone-cross', type: 'intersection', nodeIds: [], edgeIds: ['A-B'], noStop: true, noParking: true, capacity: 1, conflictGroup: 'shared-cross' }
+        ]
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['A', 'B']);
+    sim.setVehicleRouteForTest('SH-02', ['P']);
+    sim.addReservationForTest({
+      id: 'active-self-zone',
+      resourceType: 'zone',
+      resourceId: 'zone-cross',
+      vehicleId: 'SH-01',
+      taskId: null,
+      startTimeSec: 0,
+      endTimeSec: 60,
+      priority: 0,
+      conflictGroup: 'shared-cross',
+      reasonCode: 'test-active-self-zone'
+    });
+
+    const state = sim.step(0.2);
+    const selfZoneReservations = state.reservations.filter(
+      (reservation) =>
+        reservation.vehicleId === 'SH-01' &&
+        reservation.resourceType === 'zone' &&
+        reservation.resourceId === 'zone-cross'
+    );
+
+    expect(selfZoneReservations.map((reservation) => reservation.id)).toEqual(['active-self-zone']);
+    expect(selfZoneReservations[0]).toMatchObject({ startTimeSec: 0, endTimeSec: 60 });
+  });
+
+  it('merges overlapping candidate grants within one install call', () => {
+    const scenario = testScenario({
+      layout: {
+        units: 'meter',
+        calibrationProfile: null,
+        nodes: [
+          { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'X', type: 'intersection', x: 4, y: 0, z: 0, noStop: true, noParking: true, capacity: 1, allowedDirections: [] },
+          { id: 'P', type: 'parking', x: 0, y: 0, z: 4, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
+        ],
+        edges: [
+          { id: 'A-X', from: 'A', to: 'X', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'lane', noParking: true }
+        ],
+        zones: []
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['A', 'X', 'A']);
+    sim.setVehicleRouteForTest('SH-02', ['P']);
+
+    const state = sim.step(0.2);
+    const selfEdgeReservations = state.reservations.filter(
+      (reservation) =>
+        reservation.vehicleId === 'SH-01' &&
+        reservation.resourceType === 'edge' &&
+        reservation.resourceId === 'A-X'
+    );
+
+    expect(selfEdgeReservations).toHaveLength(1);
+    expect(selfEdgeReservations[0]?.endTimeSec).toBeGreaterThan(4.5);
+  });
+
+  it('does not merge same-vehicle grants that only share a conflict group', () => {
+    const scenario = testScenario({
+      layout: {
+        units: 'meter',
+        calibrationProfile: null,
+        nodes: [
+          { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'B', type: 'parking', x: 4, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'P', type: 'parking', x: 0, y: 0, z: 4, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
+        ],
+        edges: [
+          { id: 'A-B', from: 'A', to: 'B', lengthM: 4, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'lane', noParking: true }
+        ],
+        zones: [
+          { id: 'zone-a', type: 'intersection', nodeIds: [], edgeIds: [], noStop: true, noParking: true, capacity: 1, conflictGroup: 'shared-cross' },
+          { id: 'zone-b', type: 'intersection', nodeIds: [], edgeIds: ['A-B'], noStop: true, noParking: true, capacity: 1, conflictGroup: 'shared-cross' }
+        ]
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['A', 'B']);
+    sim.setVehicleRouteForTest('SH-02', ['P']);
+    sim.addReservationForTest({
+      id: 'active-self-other-zone',
+      resourceType: 'zone',
+      resourceId: 'zone-a',
+      vehicleId: 'SH-01',
+      taskId: null,
+      startTimeSec: 0,
+      endTimeSec: 60,
+      priority: 0,
+      conflictGroup: 'shared-cross',
+      reasonCode: 'test-active-self-zone'
+    });
+
+    const state = sim.step(0.2);
+    const selfZoneIds = state.reservations
+      .filter((reservation) => reservation.vehicleId === 'SH-01' && reservation.resourceType === 'zone')
+      .map((reservation) => reservation.resourceId)
+      .sort();
+
+    expect(selfZoneIds).toEqual(['zone-a', 'zone-b']);
+  });
+
+  it('rolls back merged self grants by the actually installed reservation id', () => {
+    const sim = new ShuttleSimCore(testScenario({}));
+    sim.addReservationForTest({
+      id: 'active-self-edge',
+      resourceType: 'edge',
+      resourceId: 'A-B',
+      vehicleId: 'SH-01',
+      taskId: null,
+      startTimeSec: 0,
+      endTimeSec: 60,
+      priority: 0,
+      conflictGroup: 'lane',
+      reasonCode: 'test-active-self'
+    });
+    const candidate: Reservation = {
+      id: 'rolling-candidate-edge',
+      resourceType: 'edge',
+      resourceId: 'A-B',
+      vehicleId: 'SH-01',
+      taskId: null,
+      startTimeSec: 59.8,
+      endTimeSec: 61.2,
+      priority: 1,
+      conflictGroup: 'lane',
+      reasonCode: 'edge-reservation'
+    };
+
+    const install = sim.installMoveReservationsForTest('SH-01', [candidate]);
+    expect(install.installed.map((reservation) => reservation.id)).toEqual(['active-self-edge']);
+    expect(sim.getState().reservations).toContainEqual(
+      expect.objectContaining({ id: 'active-self-edge', startTimeSec: 0, endTimeSec: 61.2 })
+    );
+
+    const rolledBack = sim.rollbackMoveReservationsForTest(install);
+    expect(rolledBack.reservations.filter((reservation) => reservation.resourceType === 'edge' && reservation.resourceId === 'A-B')).toEqual([
+      expect.objectContaining({ id: 'active-self-edge', startTimeSec: 0, endTimeSec: 60 })
+    ]);
   });
 
   it('serializes crossing paths through a shared zone', () => {

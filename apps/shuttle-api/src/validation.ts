@@ -1,6 +1,7 @@
 import type { LoadStateRecord, Reservation, ShuttleScenario, ShuttleSimState, VehicleState } from '@four-way-shuttle/schemas';
 import {
   ShuttleSimCore,
+  calculateTravelTimeSec,
   createDefaultShuttleScenario,
   hashEventLog,
   summarizeScenarioStaticSceneContract,
@@ -55,6 +56,7 @@ export type ReservationAuditCode =
   | 'invalidReservationWindow'
   | 'resourceWindowOverlap'
   | 'selfWindowOverlap'
+  | 'selfGrantSpanTooLong'
   | 'activeResourceOverlap'
   | 'staleReservation';
 
@@ -86,6 +88,9 @@ export type AuditSummary<Code extends string> = {
   violationCount: number;
   violationsByCode: Record<Code, number>;
   examples: Array<AuditExample<Code>>;
+  warningCount: number;
+  warningsByCode: Record<Code, number>;
+  warningExamples: Array<AuditExample<Code>>;
 };
 
 export type IeBehaviorAudit = {
@@ -286,6 +291,7 @@ export type Phase0StateInspection = {
   minVehicleSeparationM: number | null;
   physicalViolationsByCode: Record<PhysicalViolationCode, number>;
   physicalViolationExamples: PhysicalViolationExample[];
+  ieBehaviorAudit: IeBehaviorAudit;
 };
 
 const VIOLATION_CODES: PhysicalViolationCode[] = [
@@ -304,6 +310,7 @@ const RESERVATION_AUDIT_CODES: ReservationAuditCode[] = [
   'invalidReservationWindow',
   'resourceWindowOverlap',
   'selfWindowOverlap',
+  'selfGrantSpanTooLong',
   'activeResourceOverlap',
   'staleReservation'
 ];
@@ -666,7 +673,10 @@ function emptyAuditSummary<Code extends string>(codes: Code[]): AuditSummary<Cod
     pass: true,
     violationCount: 0,
     violationsByCode: Object.fromEntries(codes.map((code) => [code, 0])) as Record<Code, number>,
-    examples: []
+    examples: [],
+    warningCount: 0,
+    warningsByCode: Object.fromEntries(codes.map((code) => [code, 0])) as Record<Code, number>,
+    warningExamples: []
   };
 }
 
@@ -676,6 +686,14 @@ function addAuditViolation<Code extends string>(summary: AuditSummary<Code>, exa
   summary.violationsByCode[example.code] += 1;
   if (summary.examples.length < EXAMPLE_LIMIT) {
     summary.examples.push(example);
+  }
+}
+
+function addAuditWarning<Code extends string>(summary: AuditSummary<Code>, example: AuditExample<Code>): void {
+  summary.warningCount += 1;
+  summary.warningsByCode[example.code] += 1;
+  if (summary.warningExamples.length < EXAMPLE_LIMIT) {
+    summary.warningExamples.push(example);
   }
 }
 
@@ -790,6 +808,58 @@ function selfReservationWindowsPartiallyOverlapForAudit(left: Reservation, right
   );
 }
 
+function speedForTraversalLimit(scenario: ShuttleScenario): number {
+  return Math.max(
+    0.001,
+    Math.min(scenario.physicsParams.emptySpeedMps, scenario.physicsParams.loadedSpeedMps)
+  );
+}
+
+function edgeTraversalLimitSec(
+  scenario: ShuttleScenario,
+  edge: ShuttleScenario['layout']['edges'][number]
+): number {
+  const emptySpeed = Math.min(edge.speedLimitEmptyMps ?? scenario.physicsParams.emptySpeedMps, scenario.physicsParams.emptySpeedMps);
+  const loadedSpeed = Math.min(edge.speedLimitLoadedMps ?? scenario.physicsParams.loadedSpeedMps, scenario.physicsParams.loadedSpeedMps);
+  return calculateTravelTimeSec(
+    edge.lengthM,
+    Math.max(0.001, Math.min(emptySpeed, loadedSpeed, speedForTraversalLimit(scenario))),
+    scenario.physicsParams.accelerationMps2
+  );
+}
+
+function reservationSpanLimitSec(scenario: ShuttleScenario, reservation: Reservation): number | null {
+  let traversalLimitSec = 0;
+  if (reservation.resourceType === 'edge') {
+    const edge = scenario.layout.edges.find((candidate) => candidate.id === reservation.resourceId);
+    if (!edge) return null;
+    traversalLimitSec = edgeTraversalLimitSec(scenario, edge);
+  } else if (reservation.resourceType === 'node') {
+    const incidentEdges = scenario.layout.edges.filter(
+      (edge) => edge.from === reservation.resourceId || edge.to === reservation.resourceId
+    );
+    traversalLimitSec = Math.max(0, ...incidentEdges.map((edge) => edgeTraversalLimitSec(scenario, edge)));
+  } else {
+    const zone = scenario.layout.zones.find((candidate) => candidate.id === reservation.resourceId);
+    if (!zone) return null;
+    const edgeIds = new Set(zone.edgeIds);
+    if (edgeIds.size === 0) {
+      for (const nodeId of zone.nodeIds) {
+        for (const edge of scenario.layout.edges) {
+          if (edge.from === nodeId || edge.to === nodeId) {
+            edgeIds.add(edge.id);
+          }
+        }
+      }
+    }
+    const zoneEdges = scenario.layout.edges.filter((edge) => edgeIds.has(edge.id));
+    traversalLimitSec = zoneEdges.reduce((sum, edge) => sum + edgeTraversalLimitSec(scenario, edge), 0);
+  }
+
+  const marginSec = Math.max(1, scenario.timeStepSec * 3);
+  return Math.max(5, traversalLimitSec + scenario.trafficPolicy.minimumClearanceSec + marginSec);
+}
+
 function inspectReservationAudit(
   scenario: ShuttleScenario,
   state: ShuttleSimState,
@@ -817,6 +887,20 @@ function inspectReservationAudit(
         observed: reservation.endTimeSec,
         limit: state.simTimeSec,
         message: 'Expired reservation remained in the active reservation set beyond the cleanup grace window.'
+      });
+    }
+    const spanLimitSec = reservationSpanLimitSec(scenario, reservation);
+    const observedSpanSec = reservation.endTimeSec - reservation.startTimeSec;
+    if (spanLimitSec !== null && observedSpanSec > spanLimitSec + 1e-6) {
+      addAuditWarning(summary, {
+        code: 'selfGrantSpanTooLong',
+        timeSec: state.simTimeSec,
+        resourceType: reservation.resourceType,
+        resourceId: reservation.resourceId,
+        vehicleIds: [reservation.vehicleId],
+        observed: round(observedSpanSec),
+        limit: round(spanLimitSec),
+        message: 'Reservation window is wider than the expected traversal, clearance, and tick margin for this resource.'
       });
     }
     const key = reservation.resourceType === 'zone' && reservation.conflictGroup
@@ -1320,6 +1404,9 @@ export function inspectPhase0StateSnapshot(
 ): Phase0StateInspection {
   const physicalViolationsByCode = emptyViolationCounts();
   const physicalViolationExamples: PhysicalViolationExample[] = [];
+  const ieBehaviorAudit = emptyIeBehaviorAudit();
+  const forbiddenFootprintEdges = new Set(verticalStorageFootprintEdgeViolations(scenario).map((violation) => violation.edgeId));
+  inspectIeBehaviorAudit(scenario, state, loadSnapshot(state.loads), forbiddenFootprintEdges, ieBehaviorAudit);
   const physical = inspectState(
     scenario,
     state,
@@ -1336,7 +1423,8 @@ export function inspectPhase0StateSnapshot(
     maxObservedAccelerationMps2: round(physical.maxObservedAccelerationMps2),
     minVehicleSeparationM: physical.minVehicleSeparationM === null ? null : round(physical.minVehicleSeparationM),
     physicalViolationsByCode,
-    physicalViolationExamples
+    physicalViolationExamples,
+    ieBehaviorAudit
   };
 }
 

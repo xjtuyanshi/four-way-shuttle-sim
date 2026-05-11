@@ -258,4 +258,21 @@ describe('phase 0 validation', () => {
     expect(result.physicalViolationsByCode[code]).toBeGreaterThan(0);
     expect(result.physicalViolationExamples.some((example) => example.code === code)).toBe(true);
   });
+
+  it('flags self reservation windows that grow beyond resource traversal bounds', () => {
+    const candidate = fixture();
+    candidate.state.reservations = [
+      {
+        ...reservation('edge', 'main-north-01-main-south-01'),
+        startTimeSec: 0,
+        endTimeSec: 100
+      }
+    ];
+
+    const result = inspectPhase0StateSnapshot(candidate.scenario, candidate.state, candidate.debug);
+
+    expect(result.ieBehaviorAudit.reservation.warningsByCode.selfGrantSpanTooLong).toBeGreaterThan(0);
+    expect(result.ieBehaviorAudit.reservation.warningExamples.some((example) => example.code === 'selfGrantSpanTooLong')).toBe(true);
+    expect(result.ieBehaviorAudit.reservation.pass).toBe(true);
+  });
 });

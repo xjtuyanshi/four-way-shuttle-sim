@@ -93,6 +93,11 @@ type RouteLegAuthorization =
     }
   | { ok: false; reasonCode: string; blockingReservationId: string | null };
 
+type MoveReservationInstall = {
+  installed: Reservation[];
+  removed: Array<{ index: number; reservation: Reservation }>;
+};
+
 export type ShuttleSimDebugState = {
   currentNodeOccupancy: Array<{ nodeId: string; vehicleId: string }>;
   storageNodeOccupancy: Array<{ nodeId: string; loadId: string }>;
@@ -927,19 +932,8 @@ class TrafficControllerV2 {
 
     const endTimeSec = options.startTimeSec + options.travelSec + this.scenario.trafficPolicy.minimumClearanceSec;
     const conflictTokenEndTimeSec = endTimeSec;
-    const nodeZonesForEdge = (nodeId: string) =>
-      this.scenario.layout.zones.filter(
-        (candidate) =>
-          candidate.nodeIds.includes(nodeId) &&
-          (candidate.edgeIds.length === 0 || candidate.edgeIds.includes(edge.id))
-      );
-    const currentNodeZones = nodeZonesForEdge(options.fromNodeId);
-    const targetNodeZones = nodeZonesForEdge(options.toNodeId);
-    const matchingZones = [
-      ...this.scenario.layout.zones.filter((candidate) => candidate.edgeIds.includes(edge.id)),
-      ...currentNodeZones,
-      ...targetNodeZones
-    ].filter((zone, index, zones) => zones.findIndex((candidate) => candidate.id === zone.id) === index);
+    const matchingZones = this.zonesForMovement(options.fromNodeId, options.toNodeId, edge.id);
+    const targetNodeZones = matchingZones.filter((zone) => zone.nodeIds.includes(options.toNodeId));
     const candidates: Reservation[] = [
       this.createReservation({
         resourceType: 'edge',
@@ -995,13 +989,31 @@ class TrafficControllerV2 {
     return { ok: true, reservations: candidates.map((reservation) => ReservationSchema.parse(reservation)) };
   }
 
-  findEdge(fromNodeId: string, toNodeId: string): ShuttleScenario['layout']['edges'][number] | null {
+  findEdge(fromNodeId: string, toNodeId: string): LayoutEdge | null {
     return this.scenario.layout.edges.find((edge) => {
       if (edge.from === fromNodeId && edge.to === toNodeId) {
         return true;
       }
       return edge.directionMode === 'twoWay' && edge.from === toNodeId && edge.to === fromNodeId;
     }) ?? null;
+  }
+
+  zonesForMovement(fromNodeId: string, toNodeId: string, edgeId?: string): LayoutZone[] {
+    const edge = edgeId
+      ? this.scenario.layout.edges.find((candidate) => candidate.id === edgeId) ?? null
+      : this.findEdge(fromNodeId, toNodeId);
+    if (!edge) {
+      return [];
+    }
+
+    return this.scenario.layout.zones
+      .filter((zone) => {
+        const crossesEdge = zone.edgeIds.includes(edge.id);
+        const touchesEndpoint = zone.nodeIds.includes(fromNodeId) || zone.nodeIds.includes(toNodeId);
+        const endpointAppliesToMovement = touchesEndpoint && (zone.edgeIds.length === 0 || crossesEdge);
+        return crossesEdge || endpointAppliesToMovement;
+      })
+      .filter((zone, index, zones) => zones.findIndex((candidate) => candidate.id === zone.id) === index);
   }
 
   private createReservation(options: Omit<Reservation, 'id'>): Reservation {
@@ -1390,6 +1402,20 @@ export class ShuttleSimCore {
   addReservationForTest(reservation: Omit<Reservation, 'id'> & { id?: string }): ShuttleSimState {
     const id = reservation.id ?? `test-res-${String(this.reservations.length + 1).padStart(4, '0')}`;
     this.reservations.push(ReservationSchema.parse({ ...reservation, id }));
+    return this.getState();
+  }
+
+  installMoveReservationsForTest(vehicleId: string, reservations: Reservation[]): MoveReservationInstall {
+    const vehicle = this.vehicles.find((candidate) => candidate.id === vehicleId);
+    if (!vehicle) {
+      throw new Error(`Unknown vehicle ${vehicleId}`);
+    }
+    const install = this.installMoveReservationsReplacingSelfOverlap(vehicle, reservations);
+    return structuredClone(install);
+  }
+
+  rollbackMoveReservationsForTest(install: MoveReservationInstall): ShuttleSimState {
+    this.rollbackMoveReservationInstall(install.installed, install.removed);
     return this.getState();
   }
 
@@ -2270,9 +2296,9 @@ export class ShuttleSimCore {
   private installMoveReservationsReplacingSelfOverlap(
     vehicle: MutableVehicle,
     reservations: Reservation[]
-  ): Array<{ index: number; reservation: Reservation }> {
+  ): MoveReservationInstall {
     if (reservations.length === 0) {
-      return [];
+      return { installed: [], removed: [] };
     }
 
     const removed: Array<{ index: number; reservation: Reservation }> = [];
@@ -2303,18 +2329,18 @@ export class ShuttleSimCore {
       acceptedReservations.push(mergedReservation);
     }
     this.reservations.push(...acceptedReservations);
-    return removed;
+    return { installed: acceptedReservations, removed };
   }
 
   private rollbackMoveReservationInstall(
-    reservations: Reservation[],
+    installed: Reservation[],
     removed: Array<{ index: number; reservation: Reservation }>
   ): void {
-    if (reservations.length === 0 && removed.length === 0) {
+    if (installed.length === 0 && removed.length === 0) {
       return;
     }
 
-    const addedIds = new Set(reservations.map((reservation) => reservation.id));
+    const addedIds = new Set(installed.map((reservation) => reservation.id));
     const restored = this.reservations.filter((reservation) => !addedIds.has(reservation.id));
     for (const { index, reservation } of removed.sort((left, right) => left.index - right.index)) {
       restored.splice(Math.min(index, restored.length), 0, reservation);
@@ -3692,10 +3718,10 @@ export class ShuttleSimCore {
       ) {
         const authorization = this.authorizeRouteHorizon(vehicle, task);
         if (authorization.ok) {
-          const removedReservations = this.installMoveReservationsReplacingSelfOverlap(vehicle, authorization.reservations);
+          const installedReservations = this.installMoveReservationsReplacingSelfOverlap(vehicle, authorization.reservations);
           noStopBlock = this.noStopArrivalBlock(vehicle, task, toNodeId);
           if (noStopBlock) {
-            this.rollbackMoveReservationInstall(authorization.reservations, removedReservations);
+            this.rollbackMoveReservationInstall(installedReservations.installed, installedReservations.removed);
           }
         }
       }
