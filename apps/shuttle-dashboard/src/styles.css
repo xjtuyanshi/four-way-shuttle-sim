@@ -142,16 +142,23 @@ input:focus-visible {
   margin-top: 10px;
 }
 
-.speed-row button {
+.speed-row button,
+.mode-row button {
   min-height: 32px;
   padding: 0 8px;
   color: var(--muted);
 }
 
-.speed-row button.active {
+.speed-row button.active,
+.mode-row button.active {
   color: var(--text);
   border-color: rgba(86, 169, 201, 0.78);
   background: rgba(86, 169, 201, 0.16);
+}
+
+.mode-row button.danger {
+  border-color: rgba(214, 107, 87, 0.78);
+  background: rgba(214, 107, 87, 0.14);
 }
 
 .status-line {
@@ -206,7 +213,8 @@ input:focus-visible {
   gap: 8px;
 }
 
-.param-block label span {
+.param-block label span,
+.mode-toggle span {
   display: flex;
   justify-content: space-between;
   gap: 12px;
@@ -214,9 +222,21 @@ input:focus-visible {
   color: var(--muted);
 }
 
-.param-block label strong {
+.param-block label strong,
+.mode-toggle strong {
   color: var(--text);
   font-weight: 650;
+}
+
+.mode-toggle {
+  display: grid;
+  gap: 8px;
+}
+
+.mode-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
 }
 
 input[type="range"] {

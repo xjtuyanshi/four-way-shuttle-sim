@@ -84,6 +84,7 @@ function state(overrides: Partial<ShuttleSimState> = {}): ShuttleSimState {
     traffic: {
       trafficMode: 'flow-debug',
       safetyValidated: false,
+      collisionAvoidanceEnabled: true,
       longHorizonReservationEnabled: false,
       clearThroughLookaheadEnabled: true,
       clearThroughMaxLookaheadLegs: 8,
@@ -139,6 +140,9 @@ describe('dashboard parameter controls', () => {
     expect(shouldResetAfterParamUpdate('/vehicles/count', 'idle')).toBe(true);
     expect(shouldResumeAfterParamUpdate('/vehicles/count', 'idle')).toBe(false);
 
+    expect(shouldResetAfterParamUpdate('/trafficPolicy/collisionAvoidanceEnabled', 'running')).toBe(true);
+    expect(shouldResumeAfterParamUpdate('/trafficPolicy/collisionAvoidanceEnabled', 'running')).toBe(true);
+
     expect(shouldResetAfterParamUpdate('/physicsParams/loadedSpeedMps', 'running')).toBe(false);
     expect(shouldResumeAfterParamUpdate('/physicsParams/loadedSpeedMps', 'running')).toBe(false);
 
@@ -184,6 +188,7 @@ describe('dashboard resource utilization', () => {
       traffic: {
         trafficMode: 'flow-debug',
         safetyValidated: false,
+        collisionAvoidanceEnabled: true,
         longHorizonReservationEnabled: false,
         clearThroughLookaheadEnabled: true,
         clearThroughMaxLookaheadLegs: 8,

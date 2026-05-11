@@ -839,6 +839,7 @@ export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides
       nodeCapacity: 1,
       zoneCapacity: 1,
       liftApproachCapacity: 3,
+      collisionAvoidanceEnabled: true,
       minimumClearanceSec: 0.4,
       priorityAgingSec: 20,
       deadlockDetectSec: 15,
@@ -924,6 +925,7 @@ class TrafficControllerV2 {
     travelSec: number;
     priority: number;
     existing: Reservation[];
+    ignoreConflicts?: boolean;
   }): ReservationAttempt {
     const edge = this.findEdge(options.fromNodeId, options.toNodeId);
     if (!edge) {
@@ -975,14 +977,16 @@ class TrafficControllerV2 {
       );
     }
 
-    for (const candidate of candidates) {
-      const conflict = options.existing.find((reservation) => this.conflicts(candidate, reservation));
-      if (conflict) {
-        return {
-          ok: false,
-          reasonCode: `${candidate.resourceType}-reserved`,
-          blockingReservationId: conflict.id
-        };
+    if (options.ignoreConflicts !== true) {
+      for (const candidate of candidates) {
+        const conflict = options.existing.find((reservation) => this.conflicts(candidate, reservation));
+        if (conflict) {
+          return {
+            ok: false,
+            reasonCode: `${candidate.resourceType}-reserved`,
+            blockingReservationId: conflict.id
+          };
+        }
       }
     }
 
@@ -1782,6 +1786,9 @@ export class ShuttleSimCore {
   }
 
   private closeOccupiedNextNode(vehicle: MutableVehicle, toNodeId: string): string | null {
+    if (!this.collisionAvoidanceEnabled()) {
+      return null;
+    }
     const nextNodeId = vehicle.routeNodeIds[vehicle.routeIndex + 2];
     if (!nextNodeId) {
       return null;
@@ -3102,7 +3109,7 @@ export class ShuttleSimCore {
     }
 
     const currentOccupant = this.currentNodeOccupancy.get(fromNodeId);
-    if (currentOccupant && currentOccupant !== vehicle.id) {
+    if (this.collisionAvoidanceEnabled() && currentOccupant && currentOccupant !== vehicle.id) {
       const waitReason = 'node-occupancy-mismatch';
       const shouldLogWait = this.shouldLogVehicleWait(vehicle, toNodeId, waitReason, null, currentOccupant);
       vehicle.state = 'waiting-blocked';
@@ -3202,7 +3209,7 @@ export class ShuttleSimCore {
       return;
     }
 
-    const movingTargetClaimId = this.movingVehicleTargetingNode(toNodeId, vehicle.id);
+    const movingTargetClaimId = this.collisionAvoidanceEnabled() ? this.movingVehicleTargetingNode(toNodeId, vehicle.id) : null;
     if (movingTargetClaimId) {
       const waitReason = 'node-reserved';
       const shouldLogWait = this.shouldLogVehicleWait(vehicle, toNodeId, waitReason, null, movingTargetClaimId);
@@ -3225,7 +3232,7 @@ export class ShuttleSimCore {
       return;
     }
 
-    const occupiedTargetId = this.currentNodeOccupancy.get(toNodeId);
+    const occupiedTargetId = this.collisionAvoidanceEnabled() ? this.currentNodeOccupancy.get(toNodeId) : null;
     if (occupiedTargetId && occupiedTargetId !== vehicle.id) {
       if (this.tryInsertHeadOnYieldRoute(vehicle, toNodeId, occupiedTargetId)) {
         this.startNextLeg(vehicle, dtSec);
@@ -3252,7 +3259,7 @@ export class ShuttleSimCore {
       return;
     }
 
-    const portalHoldBlock = this.portalNodeHoldBlock(vehicle, toNodeId);
+    const portalHoldBlock = this.collisionAvoidanceEnabled() ? this.portalNodeHoldBlock(vehicle, toNodeId) : null;
     if (portalHoldBlock) {
       const waitReason = 'zone-reserved';
       const shouldLogWait = this.shouldLogVehicleWait(vehicle, toNodeId, waitReason, portalHoldBlock.id, null);
@@ -3370,6 +3377,9 @@ export class ShuttleSimCore {
   }
 
   private mustClearNoStopNode(vehicle: MutableVehicle, task: TaskStateRecord | null, nodeId: string): boolean {
+    if (!this.collisionAvoidanceEnabled()) {
+      return false;
+    }
     const nodeRequiresClearThrough = this.layoutNode(nodeId)?.noStop === true;
     const zoneRequiresClearThrough = this.zonesForNode(nodeId).some(
       (zone) => zone.noStop && (zone.edgeIds.length === 0 || zone.id.startsWith('zone-main-portal-node'))
@@ -3383,6 +3393,9 @@ export class ShuttleSimCore {
     fromNodeId: string,
     toNodeId: string
   ): boolean {
+    if (!this.collisionAvoidanceEnabled()) {
+      return false;
+    }
     if (this.targetNodeCanServeAsExitBuffer(vehicle, task, toNodeId)) {
       return false;
     }
@@ -3494,7 +3507,14 @@ export class ShuttleSimCore {
     return this.mustClearNoStopNode(vehicle, task, fromNodeId) || this.movementRequiresClearThrough(vehicle, task, fromNodeId, toNodeId);
   }
 
+  private collisionAvoidanceEnabled(): boolean {
+    return this.scenario.trafficPolicy.collisionAvoidanceEnabled !== false;
+  }
+
   private leadingVehicleTooClose(vehicle: MutableVehicle, fromNodeId: string, toNodeId: string): string | null {
+    if (!this.collisionAvoidanceEnabled()) {
+      return null;
+    }
     const from = nodePosition(this.scenario, fromNodeId);
     const to = nodePosition(this.scenario, toNodeId);
     const dx = to.x - from.x;
@@ -3639,7 +3659,7 @@ export class ShuttleSimCore {
         break;
       }
 
-      const occupiedTargetId = this.currentNodeOccupancy.get(toNodeId);
+      const occupiedTargetId = this.collisionAvoidanceEnabled() ? this.currentNodeOccupancy.get(toNodeId) : null;
       if (occupiedTargetId && occupiedTargetId !== vehicle.id) {
         break;
       }
@@ -3656,7 +3676,8 @@ export class ShuttleSimCore {
         startTimeSec: legStartTimeSec,
         travelSec,
         priority,
-        existing: [...this.reservations, ...stagedReservations]
+        existing: [...this.reservations, ...stagedReservations],
+        ignoreConflicts: !this.collisionAvoidanceEnabled()
       });
 
       if (!attempt.ok) {
@@ -4104,6 +4125,7 @@ export class ShuttleSimCore {
     return {
       trafficMode: 'flow-debug',
       safetyValidated: false,
+      collisionAvoidanceEnabled: this.collisionAvoidanceEnabled(),
       longHorizonReservationEnabled: false,
       clearThroughLookaheadEnabled: true,
       clearThroughMaxLookaheadLegs: MAX_CLEAR_THROUGH_HORIZON_LEGS,

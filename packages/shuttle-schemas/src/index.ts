@@ -105,6 +105,7 @@ export const TrafficPolicySchema = z.object({
   nodeCapacity: z.number().int().positive().default(1),
   zoneCapacity: z.number().int().positive().default(1),
   liftApproachCapacity: z.number().int().positive().default(1),
+  collisionAvoidanceEnabled: z.boolean().default(true),
   minimumClearanceSec: z.number().nonnegative().default(0.4),
   priorityAgingSec: z.number().nonnegative().default(20),
   deadlockDetectSec: z.number().positive().default(15),
@@ -522,6 +523,7 @@ export const LiftPortDiagnosticsSchema = z.object({
 export const TrafficDiagnosticsSchema = z.object({
   trafficMode: z.enum(['flow-debug', 'segment-safe']).default('flow-debug'),
   safetyValidated: z.boolean().default(false),
+  collisionAvoidanceEnabled: z.boolean().default(true),
   longHorizonReservationEnabled: z.boolean().default(false),
   clearThroughLookaheadEnabled: z.boolean().default(false),
   clearThroughMaxLookaheadLegs: z.number().int().nonnegative().default(0),

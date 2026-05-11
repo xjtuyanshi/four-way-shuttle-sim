@@ -209,6 +209,8 @@ type ResourceUtilizationSummary = {
   };
 };
 
+const COLLISION_AVOIDANCE_PARAM = '/trafficPolicy/collisionAvoidanceEnabled';
+
 const CONTROLLED_PARAMS = [
   {
     label: 'Shuttle count',
@@ -394,7 +396,13 @@ export function mergeKpiUpdate(
 }
 
 export function shouldResetAfterParamUpdate(path: string, status: ShuttleSimState['status'] | null | undefined): boolean {
-  return path === '/vehicles/count' || path === '/trafficPolicy/liftApproachCapacity' || path.startsWith('/taskGeneration/') || status === 'completed';
+  return (
+    path === '/vehicles/count' ||
+    path === '/trafficPolicy/liftApproachCapacity' ||
+    path === COLLISION_AVOIDANCE_PARAM ||
+    path.startsWith('/taskGeneration/') ||
+    status === 'completed'
+  );
 }
 
 export function shouldResumeAfterParamUpdate(path: string, status: ShuttleSimState['status'] | null | undefined): boolean {
@@ -831,6 +839,12 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
       <div>
         <span>Reservations</span>
         <strong>{traffic?.activeReservationCount ?? '--'}</strong>
+      </div>
+      <div>
+        <span>Avoidance</span>
+        <strong className={traffic?.collisionAvoidanceEnabled === false ? 'blocked' : 'ready'}>
+          {traffic?.collisionAvoidanceEnabled === false ? 'Off' : 'On'}
+        </strong>
       </div>
       <div>
         <span>Waiting</span>
@@ -1405,6 +1419,7 @@ export function App() {
     }
     return values;
   }, [paramDraftValues, scenarioParamValues]);
+  const collisionAvoidanceEnabled = scenario?.trafficPolicy.collisionAvoidanceEnabled ?? true;
 
   async function postCommand(path: string, body: unknown = {}): Promise<boolean> {
     const startedAt = performance.now();
@@ -1426,7 +1441,7 @@ export function App() {
     }
   }
 
-  async function updateParam(path: string, value: number): Promise<void> {
+  async function updateParam(path: string, value: number | boolean): Promise<void> {
     const resetRun = shouldResetAfterParamUpdate(path, state?.status);
     const resumeRun = shouldResumeAfterParamUpdate(path, state?.status);
     const seed = state?.seed;
@@ -1571,6 +1586,30 @@ export function App() {
 
         <section className="control-block param-block">
           <h2>Scenario Parameters</h2>
+          <div className="mode-toggle">
+            <span>
+              Collision avoidance
+              <strong>{collisionAvoidanceEnabled ? 'On' : 'Off'}</strong>
+            </span>
+            <div className="mode-row" aria-label="Collision avoidance">
+              <button
+                className={collisionAvoidanceEnabled ? 'active' : ''}
+                type="button"
+                onClick={() => updateParam(COLLISION_AVOIDANCE_PARAM, true)}
+                aria-pressed={collisionAvoidanceEnabled}
+              >
+                On
+              </button>
+              <button
+                className={!collisionAvoidanceEnabled ? 'active danger' : ''}
+                type="button"
+                onClick={() => updateParam(COLLISION_AVOIDANCE_PARAM, false)}
+                aria-pressed={!collisionAvoidanceEnabled}
+              >
+                Off
+              </button>
+            </div>
+          </div>
           {CONTROLLED_PARAMS.map((param) => {
             const value = paramValues.get(param.path) ?? 0;
             return (

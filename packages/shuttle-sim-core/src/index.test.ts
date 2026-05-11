@@ -76,6 +76,7 @@ function testScenario(overrides: Partial<ShuttleScenario>): ShuttleScenario {
       nodeCapacity: 1,
       zoneCapacity: 1,
       liftApproachCapacity: 1,
+      collisionAvoidanceEnabled: true,
       minimumClearanceSec: 0.2,
       priorityAgingSec: 20,
       deadlockDetectSec: 1,
@@ -2331,6 +2332,57 @@ describe('shuttle phase 0 SimCore', () => {
     expect(follower?.state).toBe('waiting-blocked');
     expect(follower?.waitReason).toBe('min-separation');
     expect(follower?.blockingVehicleId).toBe('SH-01');
+  });
+
+  it('can disable collision avoidance for diagnostic A/B runs while keeping physical audits active', () => {
+    const base = testScenario({});
+    const scenario = testScenario({
+      vehicles: { ...base.vehicles, count: 2 },
+      trafficPolicy: { ...base.trafficPolicy, collisionAvoidanceEnabled: false },
+      layout: {
+        units: 'meter',
+        calibrationProfile: null,
+        nodes: [
+          { id: 'A', type: 'parking', x: 0, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'B', type: 'parking', x: 1, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] },
+          { id: 'C', type: 'parking', x: 2, y: 0, z: 0, noStop: false, noParking: false, capacity: 1, allowedDirections: [] }
+        ],
+        edges: [
+          { id: 'A-B', from: 'A', to: 'B', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'A-B', noParking: true },
+          { id: 'C-B', from: 'C', to: 'B', lengthM: 1, directionMode: 'twoWay', reservationType: 'edge', conflictGroup: 'C-B', noParking: true }
+        ],
+        zones: []
+      },
+      physicsParams: {
+        emptySpeedMps: 1,
+        loadedSpeedMps: 1,
+        accelerationMps2: 4,
+        switchDirectionSec: 0,
+        liftTimeSec: 0,
+        lowerTimeSec: 0,
+        loadedClearanceM: 0.2,
+        reservationClearanceSec: 0.05
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['A', 'B']);
+    sim.setVehicleRouteForTest('SH-02', ['C', 'B']);
+
+    const state = runFor(sim, 2, 0.1);
+
+    expect(state.traffic.collisionAvoidanceEnabled).toBe(false);
+    expect(state.vehicles.map((vehicle) => vehicle.currentNodeId)).toEqual(['B', 'B']);
+    expect(state.traffic.minVehicleSeparationM).toBe(0);
+    expect(state.traffic.physicalViolationCount).toBeGreaterThan(0);
+  });
+
+  it('accepts collision avoidance toggles through dashboard-style parameter updates', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario());
+    const result = sim.setParam('/trafficPolicy/collisionAvoidanceEnabled', false);
+
+    expect(result.accepted).toBe(true);
+    expect(sim.getScenario().trafficPolicy.collisionAvoidanceEnabled).toBe(false);
+    expect(sim.getState().traffic.collisionAvoidanceEnabled).toBe(false);
   });
 
   it('uses local same-row storage grants instead of preauthorizing the whole row', () => {
