@@ -2431,7 +2431,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(vehicle.routeNodeIds.slice(1, -1)).not.toContain(task.pickupNodeId);
   });
 
-  it('agent-simple takes the shorter left-side route through occupied storage cells when loaded', () => {
+  it('agent-simple routes loaded dropoffs from the infeed side without crossing stored pallets', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       vehicles: { count: 1 },
       taskGeneration: {
@@ -2466,11 +2466,22 @@ describe('shuttle phase 0 SimCore', () => {
     });
     sim.setVehicleTaskForTest('SH-01', 'drop-r05-c03', true);
 
-    const route = sim.step(0.2).vehicles[0]?.plannedRouteNodeIds ?? [];
+    const state = sim.step(0.2);
+    const vehicle = state.vehicles[0]!;
+    const route = vehicle.plannedRouteNodeIds;
+    const actualRoute = vehicle.routeNodeIds;
+    const dropoffIndex = route.indexOf('storage-r05-c03');
+    const actualDropoffIndex = actualRoute.indexOf('storage-r05-c03');
 
-    expect(route).toEqual(expect.arrayContaining(['main-south-03', 'main-south-00', 'left-row-05', 'storage-r05-c01', 'storage-r05-c02', 'storage-r05-c03']));
-    expect(route).not.toContain('main-north-05');
-    expect(route).not.toContain('right-row-05');
+    expect(route).toContain('right-row-05');
+    expect(route).toContain('storage-r05-c03');
+    expect(dropoffIndex).toBeGreaterThan(0);
+    expect(actualDropoffIndex).toBeGreaterThan(0);
+    expect(route.slice(0, dropoffIndex)).not.toContain('storage-r05-c01');
+    expect(route.slice(0, dropoffIndex)).not.toContain('storage-r05-c02');
+    expect(actualRoute.slice(0, actualDropoffIndex)).not.toContain('storage-r05-c01');
+    expect(actualRoute.slice(0, actualDropoffIndex)).not.toContain('storage-r05-c02');
+    expectNoLoadedStorageTransitThroughStoredLoads(state);
   });
 
   it('dispatches an unloaded inbound-only shuttle from dropoff to lift-near storage standby', () => {

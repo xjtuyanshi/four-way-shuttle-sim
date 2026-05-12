@@ -1848,6 +1848,10 @@ export class ShuttleSimCore {
     return occupancy;
   }
 
+  private storedLoadIdAtNode(nodeId: string): string | null {
+    return this.storageNodeLoadOccupancy(false).get(nodeId) ?? null;
+  }
+
   private selectInboundStorageNode(): { nodeId: string; loadId: string } | null {
     const lanes = this.storageLanes();
     if (lanes.length === 0) {
@@ -3522,6 +3526,12 @@ export class ShuttleSimCore {
       return;
     }
 
+    const storageLoadBlock = this.loadedStorageLoadBlock(vehicle, toNodeId);
+    if (storageLoadBlock) {
+      this.agentSetWaiting(vehicle, toNodeId, storageLoadBlock, dtSec);
+      return;
+    }
+
     vehicle.routeNodeIds = route;
     vehicle.routeIndex = 0;
     vehicle.targetNodeId = toNodeId;
@@ -3665,6 +3675,12 @@ export class ShuttleSimCore {
     if (!this.traffic.findEdge(vehicle.currentNodeId, nextNodeId)) {
       return null;
     }
+    if (vehicle.loaded) {
+      const blockedNodeIds = this.agentStaticBlockedNodeIds(vehicle, goalNodeId);
+      if (route.slice(1).some((nodeId) => blockedNodeIds.has(nodeId))) {
+        return null;
+      }
+    }
     return route;
   }
 
@@ -3699,7 +3715,7 @@ export class ShuttleSimCore {
     if (options.openStorageRows === true && !vehicle.loaded) {
       return new Set();
     }
-    return this.blockedStorageTransitNodeIds(vehicle.currentNodeId, goalNodeId);
+    return this.blockedStorageTransitNodeIds(vehicle.currentNodeId, goalNodeId, { blockStoredLoads: vehicle.loaded });
   }
 
   private agentStorageBypassRoute(
@@ -3892,6 +3908,16 @@ export class ShuttleSimCore {
     return null;
   }
 
+  private loadedStorageLoadBlock(
+    vehicle: MutableVehicle,
+    toNodeId: string
+  ): { reason: string; blockingVehicleId: string | null } | null {
+    if (!vehicle.loaded || !this.isStorageNode(toNodeId)) {
+      return null;
+    }
+    return this.storedLoadIdAtNode(toNodeId) ? { reason: 'stored-load-occupied', blockingVehicleId: null } : null;
+  }
+
   private agentNodeBlocker(vehicle: MutableVehicle, nodeId: string): string | null {
     const occupantId = this.currentNodeOccupancy.get(nodeId);
     if (occupantId && occupantId !== vehicle.id) {
@@ -4042,7 +4068,7 @@ export class ShuttleSimCore {
   ): string[] {
     const rowLabel = this.nodeStorageRowLabel(vehicle.currentNodeId) ?? this.nodeStorageRowLabel(blockedTargetNodeId);
     if (!rowLabel) {
-      return [];
+      return this.agentMainLaneEscapeGoalCandidates(vehicle, requester, blockedTargetNodeId);
     }
     const rowNumber = rowLabel.replace(/^r/, '');
     const leftSide = `left-row-${rowNumber}`;
@@ -4060,6 +4086,47 @@ export class ShuttleSimCore {
       )
       .map((node) => node.id);
     return [immediatePocket, ...sideGoals, ...storageGoals].filter((nodeId): nodeId is string => nodeId !== null);
+  }
+
+  private agentMainLaneEscapeGoalCandidates(
+    vehicle: MutableVehicle,
+    requester: MutableVehicle,
+    blockedTargetNodeId: string
+  ): string[] {
+    const vehiclePosition = nodePosition(this.scenario, vehicle.currentNodeId);
+    const requesterPosition = nodePosition(this.scenario, requester.currentNodeId);
+    const forbidden = new Set<string>([
+      vehicle.currentNodeId,
+      requester.currentNodeId,
+      blockedTargetNodeId
+    ]);
+    if (requester.targetNodeId) {
+      forbidden.add(requester.targetNodeId);
+    }
+
+    const candidates = this.scenario.layout.nodes
+      .filter((node) =>
+        !forbidden.has(node.id) &&
+        (
+          node.type === 'storage' ||
+          (node.type === 'intersection' && /^left-row-|^right-row-/.test(node.id))
+        )
+      )
+      .map((node) => {
+        const distanceM = Math.abs(node.x - vehiclePosition.x) + Math.abs(node.z - vehiclePosition.z);
+        const requesterDistanceM = Math.abs(node.x - requesterPosition.x) + Math.abs(node.z - requesterPosition.z);
+        return { node, distanceM, requesterDistanceM };
+      })
+      .sort((left, right) =>
+        left.distanceM - right.distanceM ||
+        right.requesterDistanceM - left.requesterDistanceM ||
+        (left.node.type === 'storage' ? -1 : 1) - (right.node.type === 'storage' ? -1 : 1) ||
+        left.node.id.localeCompare(right.node.id)
+      )
+      .slice(0, 16)
+      .map((candidate) => candidate.node.id);
+
+    return [...new Set(candidates)];
   }
 
   private logAgentReroute(

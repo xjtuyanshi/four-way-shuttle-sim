@@ -516,10 +516,11 @@ function createRouteArrow(
   const unit = direction.normalize();
   const arrow = new THREE.Mesh(
     new THREE.ConeGeometry(0.1 * scale, 0.28 * scale, 18),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false })
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthTest: false, depthWrite: false })
   );
   arrow.position.set(to.x - unit.x * 0.34, y, to.z - unit.z * 0.34);
   arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), unit);
+  arrow.renderOrder = 145;
   return arrow;
 }
 
@@ -527,17 +528,19 @@ function createRouteGoalMarker(node: ShuttleNode, color: number, selected: boole
   const group = new THREE.Group();
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(selected ? 0.42 : 0.3, selected ? 0.52 : 0.38, 40),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: selected ? 0.92 : 0.58, side: THREE.DoubleSide, depthWrite: false })
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: selected ? 0.92 : 0.58, side: THREE.DoubleSide, depthTest: false, depthWrite: false })
   );
   ring.rotation.x = -Math.PI / 2;
   ring.position.set(node.x, 0.285, node.z);
+  ring.renderOrder = 140;
   group.add(ring);
 
   const pin = new THREE.Mesh(
     new THREE.CylinderGeometry(0.035, 0.035, selected ? 0.5 : 0.34, 12),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: selected ? 0.88 : 0.5 })
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: selected ? 0.88 : 0.5, depthTest: false, depthWrite: false })
   );
   pin.position.set(node.x, selected ? 0.52 : 0.42, node.z);
+  pin.renderOrder = 141;
   group.add(pin);
   return group;
 }
@@ -957,10 +960,11 @@ function createTaskAssignmentMarker(node: ShuttleNode, label: string): THREE.Gro
   group.position.set(node.x, 0, node.z);
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(0.52, 0.66, 40),
-    new THREE.MeshBasicMaterial({ color: 0x82c7ff, transparent: true, opacity: 0.88, side: THREE.DoubleSide, depthWrite: false })
+    new THREE.MeshBasicMaterial({ color: 0x82c7ff, transparent: true, opacity: 0.88, side: THREE.DoubleSide, depthTest: false, depthWrite: false })
   );
   ring.rotation.x = -Math.PI / 2;
   ring.position.y = 0.42;
+  ring.renderOrder = 150;
   group.add(ring);
   group.add(createTextBillboard(label, {
     background: 'rgba(47, 120, 212, 0.92)',
@@ -1137,6 +1141,11 @@ function routeOverlayKey(
     .map((vehicle) => [
       vehicle.id,
       vehicle.routeIndex,
+      vehicle.currentNodeId,
+      vehicle.currentEdgeId ?? '',
+      vehicle.targetNodeId ?? '',
+      Math.round(vehicle.x * 100),
+      Math.round(vehicle.z * 100),
       vehicle.plannedGoalNodeId ?? '',
       vehicle.plannedRouteNodeIds.join('>'),
       vehicle.localRouteReason ?? '',
@@ -1173,14 +1182,22 @@ function addRoutePath(
   for (let index = 1; index < points.length; index += 1) {
     const from = points[index - 1]!;
     const to = points[index]!;
+    const routeMaterial = new THREE.MeshBasicMaterial({
+      color: options.color,
+      transparent: true,
+      opacity: options.opacity,
+      depthTest: false,
+      depthWrite: false
+    });
     const routeSegment = createSegment(
       from,
       to,
       options.radius,
-      new THREE.MeshBasicMaterial({ color: options.color, transparent: true, opacity: options.opacity, depthWrite: false }),
+      routeMaterial,
       options.y
     );
     if (routeSegment) {
+      routeSegment.renderOrder = 130;
       group.add(routeSegment);
     }
     if (options.arrows && index % 3 === 0) {
@@ -1304,10 +1321,10 @@ function updateDynamicScene(
       if (plannedRoutePoints.length >= 2) {
         addRoutePath(runtime.routeGroup, plannedRoutePoints, {
           color: routeColor,
-          radius: selected ? 0.055 : 0.026,
-          opacity: selected ? 0.86 : 0.42,
-          y: selected ? 0.255 : 0.205,
-          arrows: selected,
+          radius: selected ? 0.065 : 0.04,
+          opacity: selected ? 0.92 : 0.72,
+          y: selected ? 0.29 : 0.24,
+          arrows: true,
           arrowScale: selected ? 1.15 : 0.85
         });
       }

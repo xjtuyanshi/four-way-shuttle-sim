@@ -216,4 +216,48 @@ describe('shuttle phase 0 high-inbound SimCore', () => {
     expectNoTrafficSafetyFailures(state);
   }, 60000);
 
+  it('keeps the 8-shuttle agent-simple demo moving when loaded shuttles meet empty pickup traffic', () => {
+    const scenario = createDefaultShuttleScenario({
+      durationSec: 7200,
+      liftMode: 'all-inbound',
+      vehicles: {
+        count: 8,
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.5,
+        accelerationMps2: 1.2,
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01
+      },
+      physicsParams: {
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.5,
+        accelerationMps2: 1.2,
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01
+      },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 16
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-simple',
+        liftApproachCapacity: 8,
+        minimumClearanceSec: 0.4,
+        deadlockDetectSec: 20
+      }
+    });
+
+    const state = runForWithStoragePathAssertions(new ShuttleSimCore(scenario), scenario, 180, 0.2, 30);
+
+    expect(state.kpis.completedInbound).toBeGreaterThanOrEqual(8);
+    expect(state.kpis.totalPph).toBeGreaterThan(100);
+    expect(state.kpis.deadlockCount).toBe(0);
+    expect(state.traffic.deadlockCandidateVehicleIds).toEqual([]);
+    expect(state.traffic.waitingVehicles.length).toBeLessThan(8);
+    expectNoTrafficSafetyFailures(state);
+  }, 60000);
+
 });
