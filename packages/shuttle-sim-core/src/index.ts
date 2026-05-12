@@ -1761,6 +1761,52 @@ export class ShuttleSimCore {
     return claimant?.id ?? null;
   }
 
+  private minimalTargetClaimBlocker(vehicle: MutableVehicle, toNodeId: string): string | null {
+    const target = nodePosition(this.scenario, toNodeId);
+    const closeEnoughM = this.closeTargetClaimDistanceM();
+    const requesterDistanceToTargetM = Math.hypot(vehicle.x - target.x, vehicle.z - target.z);
+    const claimant = this.vehicles.find((candidate) => {
+      if (candidate.id === vehicle.id || candidate.currentEdgeId === null || candidate.targetNodeId !== toNodeId) {
+        return false;
+      }
+      const claimantDistanceToTargetM = Math.hypot(candidate.x - target.x, candidate.z - target.z);
+      return claimantDistanceToTargetM <= closeEnoughM;
+    });
+    if (!claimant) {
+      return null;
+    }
+    if (requesterDistanceToTargetM <= closeEnoughM) {
+      return claimant.id;
+    }
+    return this.approachesTargetOnSameLine(vehicle.currentNodeId, claimant.currentNodeId, toNodeId)
+      ? claimant.id
+      : null;
+  }
+
+  private approachesTargetOnSameLine(leftNodeId: string, rightNodeId: string, targetNodeId: string): boolean {
+    const target = nodePosition(this.scenario, targetNodeId);
+    const left = nodePosition(this.scenario, leftNodeId);
+    const right = nodePosition(this.scenario, rightNodeId);
+    const toleranceM = 0.25;
+    const leftDx = left.x - target.x;
+    const rightDx = right.x - target.x;
+    const leftDz = left.z - target.z;
+    const rightDz = right.z - target.z;
+    const sameHorizontalLine = Math.abs(leftDz) <= toleranceM && Math.abs(rightDz) <= toleranceM;
+    if (sameHorizontalLine) {
+      return true;
+    }
+    const sameVerticalLine = Math.abs(leftDx) <= toleranceM && Math.abs(rightDx) <= toleranceM;
+    return sameVerticalLine;
+  }
+
+  private closeTargetClaimDistanceM(): number {
+    return Math.max(
+      this.scenario.vehicles.lengthM + this.scenario.vehicles.safetyRadiusM + 0.25,
+      this.scenario.vehicles.lengthM * 1.5
+    );
+  }
+
   private nodeClaimedByOtherVehicle(nodeId: string, vehicleId: string): string | null {
     const occupantId = this.currentNodeOccupancy.get(nodeId);
     if (occupantId && occupantId !== vehicleId) {
@@ -4053,9 +4099,9 @@ export class ShuttleSimCore {
       return { reason: this.liftPortWaitReason(toNodeId) ?? 'node-occupied', blockingVehicleId: occupiedTargetId };
     }
 
-    const movingTargetClaimId = this.movingVehicleTargetingNode(toNodeId, vehicle.id);
-    if (movingTargetClaimId) {
-      return { reason: 'node-target-claimed', blockingVehicleId: movingTargetClaimId };
+    const targetClaimBlockerId = this.minimalTargetClaimBlocker(vehicle, toNodeId);
+    if (targetClaimBlockerId) {
+      return { reason: 'node-target-near', blockingVehicleId: targetClaimBlockerId };
     }
 
     const edge = this.traffic.findEdge(fromNodeId, toNodeId);
@@ -5286,6 +5332,11 @@ export class ShuttleSimCore {
       return;
     }
     if (this.deadlockCandidateSinceSec !== null && this.simTimeSec - this.deadlockCandidateSinceSec >= this.scenario.trafficPolicy.deadlockDetectSec) {
+      if (this.agentMinimalEnabled() && this.tryBreakAgentMinimalWaitCycle(deadlockCandidateVehicleIds)) {
+        this.deadlockCandidateSignature = null;
+        this.deadlockCandidateSinceSec = null;
+        return;
+      }
       if (this.tryBreakPortalHoldCycle(deadlockCandidateVehicleIds)) {
         this.deadlockCandidateSignature = null;
         this.deadlockCandidateSinceSec = null;
@@ -5325,6 +5376,23 @@ export class ShuttleSimCore {
       }
     }
     return [...cycleVehicleIds].sort((left, right) => left.localeCompare(right));
+  }
+
+  private tryBreakAgentMinimalWaitCycle(candidateVehicleIds: string[]): boolean {
+    const candidateIds = new Set(candidateVehicleIds);
+    const candidates = this.vehicles
+      .filter((vehicle) => candidateIds.has(vehicle.id) && vehicle.state === 'waiting-blocked')
+      .sort((left, right) =>
+        Number(left.loaded) - Number(right.loaded) ||
+        this.agentTurnPriority(left) - this.agentTurnPriority(right) ||
+        right.id.localeCompare(left.id)
+      );
+    for (const vehicle of candidates) {
+      if (this.insertPortalYieldPocket(vehicle)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private tryBreakPortalHoldCycle(candidateVehicleIds: string[]): boolean {
