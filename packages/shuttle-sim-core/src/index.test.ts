@@ -246,6 +246,39 @@ function expectNoLoadedStorageTransitThroughStoredLoads(state: ReturnType<Shuttl
   }
 }
 
+function expectLoadedInboundRoutesApproachDropoffFromRight(state: ReturnType<ShuttleSimCore['getState']>) {
+  const taskById = new Map(state.tasks.map((task) => [task.id, task]));
+  for (const vehicle of state.vehicles.filter((candidate) => candidate.loaded && candidate.taskId)) {
+    const task = taskById.get(vehicle.taskId!);
+    if (!task || task.kind !== 'inbound') {
+      continue;
+    }
+    const dropoffMatch = /^storage-r(\d+)-c\d+$/.exec(task.dropoffNodeId);
+    if (!dropoffMatch) {
+      continue;
+    }
+    const row = dropoffMatch[1]!;
+    for (const route of [
+      vehicle.routeNodeIds.slice(Math.max(0, vehicle.routeIndex)),
+      vehicle.plannedRouteNodeIds
+    ]) {
+      const dropoffIndex = route.indexOf(task.dropoffNodeId);
+      if (dropoffIndex < 0) {
+        continue;
+      }
+      const routeToDropoff = route.slice(0, dropoffIndex + 1);
+      expect(routeToDropoff).not.toContain(`left-row-${row}`);
+      const sameRowColumns = routeToDropoff
+        .filter((nodeId) => nodeId.startsWith(`storage-r${row}-c`))
+        .map((nodeId) => storageColumn(nodeId))
+        .filter((column): column is number => column !== null);
+      for (let index = 1; index < sameRowColumns.length; index += 1) {
+        expect(sameRowColumns[index]).toBeLessThanOrEqual(sameRowColumns[index - 1]!);
+      }
+    }
+  }
+}
+
 function expectIdleVehiclesParkedOnlyOnParkableNodes(scenario: ShuttleScenario, state: ReturnType<ShuttleSimCore['getState']>) {
   const nodesById = new Map(scenario.layout.nodes.map((node) => [node.id, node]));
   for (const vehicle of state.vehicles.filter((candidate) => candidate.state === 'idle' && candidate.taskId === null)) {
@@ -896,8 +929,8 @@ describe('shuttle phase 0 SimCore', () => {
       }
     });
     const sim = new ShuttleSimCore(scenario);
-    sim.setVehicleRouteForTest('SH-01', ['left-row-08']);
-    sim.setVehicleRouteForTest('SH-02', ['main-north-00']);
+    sim.setVehicleRouteForTest('SH-01', ['right-row-08']);
+    sim.setVehicleRouteForTest('SH-02', ['main-north-05']);
     sim.addLoadForTest({ id: 'empty-pickup-load', state: 'waiting', nodeId: 'outbound-lift-bottom-01', vehicleId: null, weightKg: 100 });
     sim.addLoadForTest({ id: 'loaded-drop-load', state: 'carried', nodeId: null, vehicleId: 'SH-02', weightKg: 100 });
     sim.addTaskForTest({
@@ -933,16 +966,20 @@ describe('shuttle phase 0 SimCore', () => {
     sim.setVehicleTaskForTest('SH-01', 'empty-pickup', false);
     sim.setVehicleTaskForTest('SH-02', 'loaded-drop', true);
 
-    const state = sim.step(0.2);
+    let state = sim.getState();
+    let yieldEvent = sim.getEventLog().find((event) => event.eventType === 'route-replanned' && event.vehicleId === 'SH-01' && event.reason === 'empty-yields-to-loaded');
+    for (let index = 0; index < 80 && !yieldEvent; index += 1) {
+      state = sim.step(0.2);
+      yieldEvent = sim.getEventLog().find((event) => event.eventType === 'route-replanned' && event.vehicleId === 'SH-01' && event.reason === 'empty-yields-to-loaded');
+    }
     const emptyVehicle = state.vehicles.find((vehicle) => vehicle.id === 'SH-01');
-    const yieldEvent = sim.getEventLog().find((event) => event.eventType === 'route-replanned' && event.vehicleId === 'SH-01' && event.reason === 'empty-yields-to-loaded');
 
-    expect(yieldEvent?.details.route).toBe('left-row-08>storage-r08-c01');
-    expect(emptyVehicle?.targetNodeId).toBe('storage-r08-c01');
-    expect(emptyVehicle?.currentEdgeId).toBe('storage-r08-c01-left-row-08');
+    expect(yieldEvent?.details.route).toBe('right-row-08>storage-r08-c24');
+    expect(emptyVehicle?.targetNodeId).toBe('storage-r08-c24');
+    expect(emptyVehicle?.currentEdgeId).toBe('right-row-08-storage-r08-c24');
     expect(emptyVehicle?.plannedGoalNodeId).toBe('outbound-lift-bottom-01');
     expect(emptyVehicle?.localRouteReason).toBe('temporary-yield');
-    expect(emptyVehicle?.localRouteNodeIds).toEqual(['left-row-08', 'storage-r08-c01']);
+    expect(emptyVehicle?.localRouteNodeIds).toEqual(['right-row-08', 'storage-r08-c24']);
     expect(emptyVehicle?.waitReason).toBeNull();
   });
 
@@ -2712,6 +2749,52 @@ describe('shuttle phase 0 SimCore', () => {
     const assignedVehicle = sim.getState().vehicles.find((vehicle) => vehicle.taskId === 'task-r06-c03');
 
     expect(assignedVehicle?.routeNodeIds).toEqual(expect.arrayContaining(['right-row-06', 'storage-r06-c04', 'storage-r06-c03']));
+  });
+
+  it('routes loaded agent-simple inbound shuttles into storage rows from the right side', () => {
+    const scenario = createDefaultShuttleScenario({
+      id: 'agent-simple-right-side-inbound',
+      liftMode: 'all-inbound',
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-simple'
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['inbound-lift-top-01']);
+    sim.addLoadForTest({ id: 'manual-agent-load', state: 'carried', nodeId: null, vehicleId: 'SH-01', weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'manual-agent-inbound',
+      kind: 'inbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'inbound-lift-top-01',
+      dropoffNodeId: 'storage-r01-c01',
+      loadId: 'manual-agent-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleTaskForTest('SH-01', 'manual-agent-inbound', true);
+    sim.start();
+    const state = sim.step(0.2);
+
+    expectLoadedInboundRoutesApproachDropoffFromRight(state);
+    const vehicle = state.vehicles.find((candidate) => candidate.id === 'SH-01');
+    expect(vehicle?.routeNodeIds).toContain('right-row-01');
+    expect(vehicle?.routeNodeIds).not.toContain('left-row-01');
+    expect(vehicle?.plannedRouteNodeIds).toContain('right-row-01');
+    expect(vehicle?.plannedRouteNodeIds).not.toContain('left-row-01');
+    expectNoTrafficSafetyFailures(state);
   });
 
   it('drains multiple pallets from the same storage row without hidden compaction', () => {

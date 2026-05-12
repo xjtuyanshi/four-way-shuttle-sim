@@ -3000,7 +3000,24 @@ export class ShuttleSimCore {
   }
 
   private agentNeighbors(nodeId: string, goalNodeId: string): Array<{ nodeId: string; lengthM: number }> {
-    return this.neighbors(nodeId).filter((neighbor) => this.agentEdgeDirectionAllowed(nodeId, neighbor.nodeId, goalNodeId));
+    return this.neighbors(nodeId)
+      .filter((neighbor) => this.agentEdgeDirectionAllowed(nodeId, neighbor.nodeId, goalNodeId))
+      .map((neighbor) => ({
+        ...neighbor,
+        lengthM: this.agentEdgeCostM(nodeId, neighbor.nodeId, neighbor.lengthM, goalNodeId)
+      }));
+  }
+
+  private agentEdgeCostM(fromNodeId: string, toNodeId: string, lengthM: number, goalNodeId: string): number {
+    const edgeKey = [fromNodeId, toNodeId].sort().join('>');
+    if (
+      (edgeKey === 'left-top>right-top' || edgeKey === 'left-bottom>right-bottom') &&
+      goalNodeId !== fromNodeId &&
+      goalNodeId !== toNodeId
+    ) {
+      return lengthM + 1000;
+    }
+    return lengthM;
   }
 
   private agentEdgeDirectionAllowed(fromNodeId: string, toNodeId: string, goalNodeId: string): boolean {
@@ -3610,11 +3627,7 @@ export class ShuttleSimCore {
       }
     }
 
-    const directRoute = this.agentShortestPath(
-      vehicle.currentNodeId,
-      goalNodeId,
-      this.agentStaticBlockedNodeIds(vehicle, goalNodeId)
-    );
+    const directRoute = this.agentNominalRouteToGoal(vehicle, task, goalNodeId);
     const directNextNodeId = directRoute[1] ?? null;
     if (!this.collisionAvoidanceEnabled() || !directNextNodeId) {
       return directRoute;
@@ -3639,7 +3652,7 @@ export class ShuttleSimCore {
 
     try {
       if (!vehicle.loaded) {
-        const storageBypassRoute = this.agentStorageBypassRoute(vehicle, task, goalNodeId, blockedNodeId);
+        const storageBypassRoute = this.agentStorageBypassRoute(vehicle, task, goalNodeId, blockedNodeId, directRoute);
         if (storageBypassRoute) {
           return storageBypassRoute;
         }
@@ -3651,7 +3664,11 @@ export class ShuttleSimCore {
       }
       const alternateRoute = this.agentShortestPath(vehicle.currentNodeId, goalNodeId, blockedNodeIds);
       const alternateNextNodeId = alternateRoute[1] ?? null;
-      if (alternateNextNodeId && !this.agentMoveBlocker(vehicle, alternateNextNodeId)) {
+      if (
+        alternateNextNodeId &&
+        !this.agentMoveBlocker(vehicle, alternateNextNodeId) &&
+        this.agentLocalRerouteAcceptable(directRoute, alternateRoute)
+      ) {
         this.logAgentReroute(vehicle, task, blockedNodeId, alternateRoute, vehicle.loaded ? 'loaded-local-obstacle-reroute' : 'empty-local-obstacle-reroute');
         return alternateRoute;
       }
@@ -3660,6 +3677,41 @@ export class ShuttleSimCore {
     }
 
     return directRoute;
+  }
+
+  private agentNominalRouteToGoal(vehicle: MutableVehicle, task: TaskStateRecord | null, goalNodeId: string): string[] {
+    if (task?.kind === 'inbound' && vehicle.loaded && goalNodeId === task.dropoffNodeId) {
+      return this.agentLoadedInboundRouteToDropoff(vehicle.currentNodeId, task);
+    }
+    return this.agentShortestPath(
+      vehicle.currentNodeId,
+      goalNodeId,
+      this.agentStaticBlockedNodeIds(vehicle, goalNodeId)
+    );
+  }
+
+  private agentLoadedInboundRouteToDropoff(currentNodeId: string, task: TaskStateRecord): string[] {
+    const route: string[] = [currentNodeId];
+    const rightSideNodeId = this.storageSideNodeId(task.dropoffNodeId, 'right');
+    const dropoffRow = this.nodeStorageRowLabel(task.dropoffNodeId);
+    const currentRow = this.nodeStorageRowLabel(currentNodeId);
+    const alreadyInRightEntryLane =
+      currentNodeId === rightSideNodeId ||
+      (this.isStorageNode(currentNodeId) && currentRow !== null && currentRow === dropoffRow);
+    const targets: Array<string | null> = alreadyInRightEntryLane
+      ? [task.dropoffNodeId]
+      : [rightSideNodeId, task.dropoffNodeId];
+
+    for (const target of targets) {
+      if (!target || target === route[route.length - 1]) {
+        continue;
+      }
+      const fromNodeId = route[route.length - 1]!;
+      const blockedStorageNodeIds = this.blockedStorageTransitNodeIds(fromNodeId, target, { blockStoredLoads: true });
+      const segment = this.agentShortestPath(fromNodeId, target, blockedStorageNodeIds);
+      route.push(...segment.slice(1));
+    }
+    return route;
   }
 
   private agentCommittedRoute(vehicle: MutableVehicle, goalNodeId: string): string[] | null {
@@ -3722,7 +3774,8 @@ export class ShuttleSimCore {
     vehicle: MutableVehicle,
     task: TaskStateRecord | null,
     goalNodeId: string,
-    blockedNodeId: string
+    blockedNodeId: string,
+    directRoute: string[]
   ): string[] | null {
     const entryNodeId = this.agentStorageEntryNodeId(vehicle.currentNodeId);
     if (!entryNodeId) {
@@ -3743,11 +3796,55 @@ export class ShuttleSimCore {
       }
       const exitSegment = this.agentShortestPath(entryNodeId, goalNodeId, blockedNodeIds);
       const route = [...entrySegment, ...exitSegment.slice(1)];
+      if (!this.agentLocalRerouteAcceptable(directRoute, route)) {
+        return null;
+      }
       this.logAgentReroute(vehicle, task, blockedNodeId, route, 'empty-storage-row-bypass');
       return route;
     } catch {
       return null;
     }
+  }
+
+  private agentLocalRerouteAcceptable(directRoute: string[], candidateRoute: string[]): boolean {
+    const allowedRows = new Set(
+      [directRoute[0], directRoute.at(-1)]
+        .map((nodeId) => nodeId ? this.nodeStorageRowLabel(nodeId) : null)
+        .filter((row): row is string => row !== null)
+    );
+    const storageRows = new Set(
+      candidateRoute
+        .filter((nodeId) => this.isStorageNode(nodeId))
+        .map((nodeId) => this.nodeStorageRowLabel(nodeId))
+        .filter((row): row is string => row !== null)
+    );
+    for (const row of storageRows) {
+      if (!allowedRows.has(row)) {
+        return false;
+      }
+    }
+    if (this.routeUsesOuterTransfer(candidateRoute)) {
+      return false;
+    }
+    if (storageRows.size === 0) {
+      const directDistanceM = this.routeDistanceM(directRoute);
+      const candidateDistanceM = this.routeDistanceM(candidateRoute);
+      const extraDistanceM = candidateDistanceM - directDistanceM;
+      if (extraDistanceM > 12 && candidateDistanceM > directDistanceM * 1.5) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private routeUsesOuterTransfer(route: string[]): boolean {
+    for (let index = 1; index < route.length; index += 1) {
+      const edgeKey = [route[index - 1]!, route[index]!].sort().join('>');
+      if (edgeKey === 'left-top>right-top' || edgeKey === 'left-bottom>right-bottom') {
+        return true;
+      }
+    }
+    return false;
   }
 
   private agentStorageHeadOnYieldRoute(
@@ -4040,6 +4137,10 @@ export class ShuttleSimCore {
         }
         blockedNodeIds.delete(blocker.currentNodeId);
         const route = this.agentShortestPath(blocker.currentNodeId, goal, blockedNodeIds);
+        const isTaskGoal = taskGoal !== null && goal === taskGoal;
+        if (!isTaskGoal && !this.agentYieldEscapeRouteAcceptable(route)) {
+          continue;
+        }
         const nextNodeId = route[1] ?? null;
         if (!nextNodeId || this.agentMoveBlocker(blocker, nextNodeId)) {
           continue;
@@ -4051,7 +4152,7 @@ export class ShuttleSimCore {
         blocker.waitReason = null;
         blocker.blockingReservationId = null;
         blocker.blockingVehicleId = null;
-        this.logAgentReroute(blocker, task, blockedTargetNodeId, route, 'empty-yields-to-loaded');
+        this.logAgentReroute(blocker, task, blockedTargetNodeId, route, isTaskGoal ? 'empty-task-route-clears-loaded' : 'empty-yields-to-loaded');
         return true;
       } catch {
         continue;
@@ -4059,6 +4160,16 @@ export class ShuttleSimCore {
     }
 
     return false;
+  }
+
+  private agentYieldEscapeRouteAcceptable(route: string[]): boolean {
+    const goalNodeId = route.at(-1);
+    if (!goalNodeId) {
+      return false;
+    }
+    const maxNodes = this.isStorageNode(goalNodeId) ? 5 : 4;
+    const maxDistanceM = this.isStorageNode(goalNodeId) ? 18 : 12;
+    return route.length <= maxNodes && this.routeDistanceM(route) <= maxDistanceM;
   }
 
   private agentEmptyEscapeGoalCandidates(
@@ -4118,9 +4229,9 @@ export class ShuttleSimCore {
         return { node, distanceM, requesterDistanceM };
       })
       .sort((left, right) =>
+        (left.node.type === 'storage' ? -1 : 1) - (right.node.type === 'storage' ? -1 : 1) ||
         left.distanceM - right.distanceM ||
         right.requesterDistanceM - left.requesterDistanceM ||
-        (left.node.type === 'storage' ? -1 : 1) - (right.node.type === 'storage' ? -1 : 1) ||
         left.node.id.localeCompare(right.node.id)
       )
       .slice(0, 16)
@@ -5269,11 +5380,7 @@ export class ShuttleSimCore {
 
     let plannedRouteNodeIds: string[] = [];
     try {
-      plannedRouteNodeIds = this.agentShortestPath(
-        vehicle.currentNodeId,
-        goalNodeId,
-        this.agentStaticBlockedNodeIds(vehicle, goalNodeId)
-      );
+      plannedRouteNodeIds = this.agentNominalRouteToGoal(vehicle, task, goalNodeId);
     } catch {
       plannedRouteNodeIds = [vehicle.currentNodeId, goalNodeId];
     }
