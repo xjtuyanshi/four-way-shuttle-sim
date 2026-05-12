@@ -666,6 +666,16 @@ input[type="range"] {
   overflow: hidden;
 }
 
+.lite-map-canvas {
+  position: absolute;
+  inset: 12px;
+  width: calc(100% - 24px);
+  height: calc(100% - 24px);
+  border: 1px solid #334251;
+  background: #091016;
+  cursor: crosshair;
+}
+
 .shuttle-scene-3d {
   position: absolute;
   inset: 0;

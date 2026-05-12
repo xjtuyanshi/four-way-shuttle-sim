@@ -1144,8 +1144,6 @@ function routeOverlayKey(
       vehicle.currentNodeId,
       vehicle.currentEdgeId ?? '',
       vehicle.targetNodeId ?? '',
-      Math.round(vehicle.x * 100),
-      Math.round(vehicle.z * 100),
       vehicle.plannedGoalNodeId ?? '',
       vehicle.plannedRouteNodeIds.join('>'),
       vehicle.localRouteReason ?? '',
@@ -1324,7 +1322,7 @@ function updateDynamicScene(
           radius: selected ? 0.065 : 0.04,
           opacity: selected ? 0.92 : 0.72,
           y: selected ? 0.29 : 0.24,
-          arrows: true,
+          arrows: selected,
           arrowScale: selected ? 1.15 : 0.85
         });
       }

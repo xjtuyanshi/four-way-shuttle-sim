@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, useTransition, type MouseEvent } from 'react';
 
 import type {
   EventLogEntry,
@@ -61,7 +61,7 @@ type LiveStreamSnapshot = {
   kpis: KpiSnapshot | null;
 };
 
-type MapViewMode = '3d' | '2d';
+type MapViewMode = '3d' | 'lite' | '2d';
 
 type BottleneckBreakdown = Record<string, number>;
 
@@ -890,6 +890,234 @@ function AuthoritativeMap({
   );
 }
 
+function CanvasLiteMap({
+  scenario,
+  state,
+  layers,
+  selectedVehicleId,
+  onSelectVehicle
+}: {
+  scenario: ShuttleScenario | null;
+  state: ShuttleSimState | null;
+  layers: SceneLayers;
+  selectedVehicleId: string | null;
+  onSelectVehicle: (vehicleId: string) => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const geometry = useMemo(() => {
+    const nodes = scenario?.layout.nodes ?? [];
+    const xValues = nodes.map((node) => node.x);
+    const zValues = nodes.map((node) => node.z);
+    const minX = Math.min(...xValues, 0) - 2;
+    const maxX = Math.max(...xValues, 1) + 2;
+    const minZ = Math.min(...zValues, -1) - 2;
+    const maxZ = Math.max(...zValues, 1) + 2;
+    return {
+      nodes,
+      edges: scenario?.layout.edges ?? [],
+      nodeMap: new Map(nodes.map((node) => [node.id, node])),
+      minX,
+      maxX,
+      minZ,
+      maxZ,
+      width: Math.max(1, maxX - minX),
+      depth: Math.max(1, maxZ - minZ)
+    };
+  }, [scenario]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const draw = () => {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      const width = Math.max(1, rect.width);
+      const height = Math.max(1, rect.height);
+      const padding = 16;
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
+      const context = canvas.getContext('2d');
+      if (!context) return;
+      context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      context.clearRect(0, 0, width, height);
+      context.fillStyle = '#091016';
+      context.fillRect(0, 0, width, height);
+
+      const project = (point: { x: number; z: number }) => ({
+        x: padding + ((point.x - geometry.minX) / geometry.width) * (width - padding * 2),
+        y: height - padding - ((point.z - geometry.minZ) / geometry.depth) * (height - padding * 2)
+      });
+
+      const drawLine = (from: { x: number; z: number }, to: { x: number; z: number }, color: string, lineWidth: number, alpha = 1) => {
+        const a = project(from);
+        const b = project(to);
+        context.globalAlpha = alpha;
+        context.strokeStyle = color;
+        context.lineWidth = lineWidth;
+        context.lineCap = 'round';
+        context.beginPath();
+        context.moveTo(a.x, a.y);
+        context.lineTo(b.x, b.y);
+        context.stroke();
+        context.globalAlpha = 1;
+      };
+
+      const drawRoute = (vehicle: VehicleState, nodeIds: string[], color: string, lineWidth: number, alpha: number) => {
+        if (nodeIds.length < 2) return;
+        const points = [
+          { x: vehicle.x, z: vehicle.z },
+          ...nodeIds.slice(1).map((nodeId) => geometry.nodeMap.get(nodeId)).filter((node): node is ShuttleScenario['layout']['nodes'][number] => Boolean(node))
+        ];
+        if (points.length < 2) return;
+        context.globalAlpha = alpha;
+        context.strokeStyle = color;
+        context.lineWidth = lineWidth;
+        context.lineCap = 'round';
+        context.lineJoin = 'round';
+        context.beginPath();
+        const start = project(points[0]!);
+        context.moveTo(start.x, start.y);
+        for (const point of points.slice(1)) {
+          const projected = project(point);
+          context.lineTo(projected.x, projected.y);
+        }
+        context.stroke();
+        context.globalAlpha = 1;
+      };
+
+      const reservedEdgeIds = new Set(
+        layers.traffic
+          ? (state?.reservations ?? []).filter((reservation) => reservation.resourceType === 'edge').map((reservation) => reservation.resourceId)
+          : []
+      );
+
+      for (const edge of geometry.edges) {
+        const from = geometry.nodeMap.get(edge.from);
+        const to = geometry.nodeMap.get(edge.to);
+        if (!from || !to) continue;
+        drawLine(from, to, reservedEdgeIds.has(edge.id) ? '#e2b84b' : '#4e5f6d', reservedEdgeIds.has(edge.id) ? 2.2 : 1.1, reservedEdgeIds.has(edge.id) ? 0.8 : 0.36);
+      }
+
+      if (geometry.nodes.length <= 2500) {
+        context.globalAlpha = 0.9;
+        for (const node of geometry.nodes) {
+          const point = project(node);
+          if (node.type === 'storage') {
+            context.fillStyle = 'rgba(176,111,255,0.5)';
+            context.fillRect(point.x - 1.2, point.y - 1.2, 2.4, 2.4);
+          } else if (node.type === 'intersection') {
+            context.fillStyle = 'rgba(226,184,75,0.68)';
+            context.fillRect(point.x - 2.2, point.y - 2.2, 4.4, 4.4);
+          }
+        }
+        context.globalAlpha = 1;
+      }
+
+      if (layers.loads) {
+        for (const load of state?.loads ?? []) {
+          if (!load.nodeId || load.state === 'carried') continue;
+          const node = geometry.nodeMap.get(load.nodeId);
+          if (!node) continue;
+          const point = project(node);
+          context.fillStyle = load.state === 'waiting' ? '#b98a4a' : '#9aa4ad';
+          context.fillRect(point.x - 3.5, point.y - 3.5, 7, 7);
+        }
+      }
+
+      if (layers.routes) {
+        for (const vehicle of state?.vehicles ?? []) {
+          const selected = selectedVehicleId === vehicle.id;
+          const plannedNodes = vehicle.plannedRouteNodeIds.length >= 2
+            ? vehicle.plannedRouteNodeIds
+            : vehicle.routeNodeIds.slice(Math.max(0, vehicle.routeIndex));
+          const color = vehicle.loaded ? '#4fc190' : vehicle.taskId ? '#56a9c9' : '#8d78ff';
+          drawRoute(vehicle, plannedNodes, color, selected ? 4.8 : 3, selected ? 0.98 : 0.76);
+          drawRoute(vehicle, vehicle.localRouteNodeIds, '#e2b84b', selected ? 5.5 : 4.2, selected ? 1 : 0.84);
+        }
+      }
+
+      const activeTasks = state?.tasks.filter((task) => task.vehicleId && task.state !== 'completed' && task.state !== 'failed') ?? [];
+      const vehicleById = new Map((state?.vehicles ?? []).map((vehicle) => [vehicle.id, vehicle]));
+      for (const task of activeTasks) {
+        const vehicle = task.vehicleId ? vehicleById.get(task.vehicleId) : null;
+        const pickupNode = geometry.nodeMap.get(task.pickupNodeId);
+        if (!vehicle || !pickupNode || vehicle.loaded) continue;
+        const point = project(pickupNode);
+        context.fillStyle = '#2f78d4';
+        context.strokeStyle = '#c0e2ff';
+        context.lineWidth = 1.5;
+        context.beginPath();
+        context.arc(point.x, point.y - 12, 8, 0, Math.PI * 2);
+        context.fill();
+        context.stroke();
+        context.fillStyle = '#f8fbff';
+        context.font = '700 10px system-ui, sans-serif';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(vehicleDisplayNumber(vehicle.id), point.x, point.y - 12);
+      }
+
+      for (const vehicle of state?.vehicles ?? []) {
+        const point = project(vehicle);
+        const selected = selectedVehicleId === vehicle.id;
+        context.fillStyle = vehicle.state === 'waiting-blocked'
+          ? '#9b7a31'
+          : vehicle.loaded
+            ? '#2d8462'
+            : vehicle.taskId
+              ? '#2f78d4'
+              : vehicle.state === 'idle'
+                ? '#344554'
+                : '#6158c7';
+        context.strokeStyle = selected ? '#ffffff' : vehicle.loaded ? '#b9efcf' : '#bfe3ff';
+        context.lineWidth = selected ? 3 : 1.6;
+        context.fillRect(point.x - 11, point.y - 8, 22, 16);
+        context.strokeRect(point.x - 11, point.y - 8, 22, 16);
+        context.fillStyle = '#f8fbff';
+        context.font = '800 11px system-ui, sans-serif';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(vehicleDisplayNumber(vehicle.id), point.x, point.y + 0.5);
+      }
+    };
+
+    draw();
+    const resizeObserver = new ResizeObserver(draw);
+    resizeObserver.observe(canvas);
+    return () => resizeObserver.disconnect();
+  }, [geometry, layers, selectedVehicleId, state]);
+
+  const handleClick = (event: MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas || !state) return;
+    const rect = canvas.getBoundingClientRect();
+    const padding = 16;
+    const project = (point: { x: number; z: number }) => ({
+      x: padding + ((point.x - geometry.minX) / geometry.width) * (rect.width - padding * 2),
+      y: rect.height - padding - ((point.z - geometry.minZ) / geometry.depth) * (rect.height - padding * 2)
+    });
+    const clickX = event.clientX - rect.left;
+    const clickY = event.clientY - rect.top;
+    const hit = [...state.vehicles].reverse().find((vehicle) => {
+      const point = project(vehicle);
+      return Math.abs(clickX - point.x) <= 14 && Math.abs(clickY - point.y) <= 12;
+    });
+    if (hit) {
+      onSelectVehicle(hit.id);
+    }
+  };
+
+  return (
+    <canvas
+      aria-label="Lite canvas debug map"
+      className="lite-map-canvas"
+      onClick={handleClick}
+      ref={canvasRef}
+    />
+  );
+}
+
 function formatRendererInfo(info: ShuttleSceneRendererInfo | null): string {
   if (!info) return 'GPU: checking';
   const device = info.renderer
@@ -931,7 +1159,7 @@ function StreamingPane({
     <section className="stream-pane">
       <div className="stream-header">
         <div>
-          <h2>{viewMode === '3d' ? '3D Model' : '2D Debug Map'}</h2>
+          <h2>{viewMode === '3d' ? '3D Model' : viewMode === 'lite' ? '2D Lite Canvas' : '2D Debug Map'}</h2>
           <p>Live SimCore state stream.</p>
         </div>
         <div className="scene-layer-controls">
@@ -943,6 +1171,14 @@ function StreamingPane({
               aria-pressed={viewMode === '3d'}
             >
               3D
+            </button>
+            <button
+              className={viewMode === 'lite' ? 'active' : ''}
+              type="button"
+              onClick={() => onViewModeChange('lite')}
+              aria-pressed={viewMode === 'lite'}
+            >
+              2D Lite
             </button>
             <button
               className={viewMode === '2d' ? 'active' : ''}
@@ -996,7 +1232,15 @@ function StreamingPane({
         </div>
       </div>
       <div className="stream-placeholder">
-        {viewMode === '2d' ? (
+        {viewMode === 'lite' ? (
+          <CanvasLiteMap
+            scenario={scenario}
+            state={state}
+            layers={layers}
+            selectedVehicleId={selectedVehicleId}
+            onSelectVehicle={onSelectVehicle}
+          />
+        ) : viewMode === '2d' ? (
           <AuthoritativeMap
             scenario={scenario}
             state={state}
@@ -1562,7 +1806,7 @@ export function App() {
     loads: true,
     routes: true
   });
-  const [mapViewMode, setMapViewMode] = useState<MapViewMode>('3d');
+  const [mapViewMode, setMapViewMode] = useState<MapViewMode>('lite');
   const [sceneCameraView, setSceneCameraView] = useState<ShuttleSceneCameraView>(DEFAULT_SCENE_CAMERA_VIEW);
   const [isPending, startTransition] = useTransition();
   const reconnectAttemptRef = useRef(0);
