@@ -1308,7 +1308,7 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
       <div>
         <span>Control</span>
         <strong>{traffic?.trafficMode ?? '--'}</strong>
-        <small>{traffic?.trafficMode === 'agent-simple' ? 'vehicle-local routing' : 'reservation controller'}</small>
+        <small>{traffic?.trafficMode === 'agent-simple' || traffic?.trafficMode === 'agent-minimal' ? 'vehicle-local routing' : 'reservation controller'}</small>
       </div>
       <div>
         <span>Avoidance</span>

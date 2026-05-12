@@ -3586,7 +3586,11 @@ export class ShuttleSimCore {
       return;
     }
 
-    const block = this.collisionAvoidanceEnabled() ? this.agentMoveBlocker(vehicle, toNodeId) : null;
+    const block = this.collisionAvoidanceEnabled()
+      ? this.agentMinimalEnabled()
+        ? this.agentMinimalMoveBlocker(vehicle, toNodeId)
+        : this.agentMoveBlocker(vehicle, toNodeId)
+      : null;
     if (block) {
       if (vehicle.loaded && block.blockingVehicleId) {
         this.agentTryDisplaceEmptyBlocker(block.blockingVehicleId, vehicle, toNodeId);
@@ -3611,6 +3615,35 @@ export class ShuttleSimCore {
   }
 
   private agentRouteToGoal(vehicle: MutableVehicle, task: TaskStateRecord | null, goalNodeId: string): string[] {
+    if (this.agentMinimalEnabled()) {
+      const directRoute = this.agentNominalRouteToGoal(vehicle, task, goalNodeId);
+
+      const committedYieldRoute = this.agentCommittedYieldRoute(vehicle, goalNodeId);
+      if (committedYieldRoute) {
+        const committedNextNodeId = committedYieldRoute[1] ?? null;
+        if (committedNextNodeId && (!this.collisionAvoidanceEnabled() || !this.agentMinimalMoveBlocker(vehicle, committedNextNodeId))) {
+          return committedYieldRoute;
+        }
+      }
+
+      const committedRoute = this.agentCommittedRoute(vehicle, goalNodeId);
+      if (committedRoute) {
+        const committedNextNodeId = committedRoute[1] ?? null;
+        const directRouteKey = directRoute.join('>');
+        const committedRouteKey = committedRoute.join('>');
+        if (
+          committedNextNodeId &&
+          committedRouteKey !== directRouteKey &&
+          this.agentLocalRerouteAcceptable(directRoute, committedRoute) &&
+          (!this.collisionAvoidanceEnabled() || !this.agentMinimalMoveBlocker(vehicle, committedNextNodeId))
+        ) {
+          return committedRoute;
+        }
+      }
+
+      return directRoute;
+    }
+
     const committedRoute = this.agentCommittedRoute(vehicle, goalNodeId);
     if (committedRoute) {
       const committedNextNodeId = committedRoute[1] ?? null;
@@ -4005,6 +4038,48 @@ export class ShuttleSimCore {
     return null;
   }
 
+  private agentMinimalMoveBlocker(
+    vehicle: MutableVehicle,
+    toNodeId: string
+  ): { reason: string; blockingVehicleId: string | null } | null {
+    const fromNodeId = vehicle.currentNodeId;
+    const currentOccupant = this.currentNodeOccupancy.get(fromNodeId);
+    if (currentOccupant && currentOccupant !== vehicle.id) {
+      return { reason: 'node-occupancy-mismatch', blockingVehicleId: currentOccupant };
+    }
+
+    const occupiedTargetId = this.currentNodeOccupancy.get(toNodeId);
+    if (occupiedTargetId && occupiedTargetId !== vehicle.id) {
+      return { reason: this.liftPortWaitReason(toNodeId) ?? 'node-occupied', blockingVehicleId: occupiedTargetId };
+    }
+
+    const movingTargetClaimId = this.movingVehicleTargetingNode(toNodeId, vehicle.id);
+    if (movingTargetClaimId) {
+      return { reason: 'node-target-claimed', blockingVehicleId: movingTargetClaimId };
+    }
+
+    const edge = this.traffic.findEdge(fromNodeId, toNodeId);
+    if (edge) {
+      const headOn = this.vehicles.find((other) =>
+        other.id !== vehicle.id &&
+        other.currentEdgeId === edge.id &&
+        other.currentNodeId === toNodeId &&
+        other.targetNodeId === fromNodeId
+      );
+      if (headOn) {
+        return { reason: 'edge-head-on', blockingVehicleId: headOn.id };
+      }
+    }
+
+    const target = nodePosition(this.scenario, toNodeId);
+    const footprintBlockerId = this.predictedFootprintOverlapVehicleId(vehicle, target.x, target.z);
+    if (footprintBlockerId) {
+      return { reason: 'immediate-footprint-overlap', blockingVehicleId: footprintBlockerId };
+    }
+
+    return null;
+  }
+
   private loadedStorageLoadBlock(
     vehicle: MutableVehicle,
     toNodeId: string
@@ -4141,10 +4216,28 @@ export class ShuttleSimCore {
         if (!isTaskGoal && !this.agentYieldEscapeRouteAcceptable(route)) {
           continue;
         }
-        const nextNodeId = route[1] ?? null;
-        if (!nextNodeId || this.agentMoveBlocker(blocker, nextNodeId)) {
+        if (isTaskGoal) {
+          const directRoute = this.agentNominalRouteToGoal(blocker, task, goal);
+          if (!this.agentLocalRerouteAcceptable(directRoute, route)) {
+            continue;
+          }
+        }
+        if (this.agentMinimalEnabled() && isTaskGoal && route.length > 8) {
           continue;
         }
+        const nextNodeId = route[1] ?? null;
+        const nextBlock = nextNodeId
+          ? this.agentMinimalEnabled()
+            ? this.agentMinimalMoveBlocker(blocker, nextNodeId)
+            : this.agentMoveBlocker(blocker, nextNodeId)
+          : { reason: 'route-unavailable', blockingVehicleId: null };
+        if (!nextNodeId || nextBlock) {
+          continue;
+        }
+        const alreadyFollowingRoute =
+          blocker.routeNodeIds.length === route.length &&
+          blocker.routeNodeIds.every((nodeId, index) => nodeId === route[index]) &&
+          blocker.targetNodeId === nextNodeId;
         blocker.routeNodeIds = route;
         blocker.routeIndex = 0;
         blocker.targetNodeId = nextNodeId;
@@ -4152,7 +4245,9 @@ export class ShuttleSimCore {
         blocker.waitReason = null;
         blocker.blockingReservationId = null;
         blocker.blockingVehicleId = null;
-        this.logAgentReroute(blocker, task, blockedTargetNodeId, route, isTaskGoal ? 'empty-task-route-clears-loaded' : 'empty-yields-to-loaded');
+        if (!alreadyFollowingRoute) {
+          this.logAgentReroute(blocker, task, blockedTargetNodeId, route, isTaskGoal ? 'empty-task-route-clears-loaded' : 'empty-yields-to-loaded');
+        }
         return true;
       } catch {
         continue;
@@ -4777,7 +4872,11 @@ export class ShuttleSimCore {
   }
 
   private agentSimpleEnabled(): boolean {
-    return this.scenario.trafficPolicy.controllerMode === 'agent-simple';
+    return this.scenario.trafficPolicy.controllerMode === 'agent-simple' || this.agentMinimalEnabled();
+  }
+
+  private agentMinimalEnabled(): boolean {
+    return this.scenario.trafficPolicy.controllerMode === 'agent-minimal';
   }
 
   private leadingVehicleTooClose(vehicle: MutableVehicle, fromNodeId: string, toNodeId: string): string | null {
@@ -5479,7 +5578,7 @@ export class ShuttleSimCore {
     }
 
     return {
-      trafficMode: this.agentSimpleEnabled() ? 'agent-simple' : 'flow-debug',
+      trafficMode: this.agentMinimalEnabled() ? 'agent-minimal' : this.agentSimpleEnabled() ? 'agent-simple' : 'flow-debug',
       safetyValidated: false,
       collisionAvoidanceEnabled: this.collisionAvoidanceEnabled(),
       longHorizonReservationEnabled: false,

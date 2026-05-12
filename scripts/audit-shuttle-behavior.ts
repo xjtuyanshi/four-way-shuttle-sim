@@ -39,8 +39,8 @@ const noProgressWarnSec = numberArg('--no-progress-warn', 35);
 const replanWarnCount = numberArg('--replan-warn', 8);
 
 const scenario = createDefaultShuttleScenario({
-  id: 'audit-agent-simple-8-inbound',
-  name: 'Audit Agent Simple 8 Shuttle Inbound',
+  id: 'audit-agent-minimal-8-inbound',
+  name: 'Audit Agent Minimal 8 Shuttle Inbound',
   liftMode: 'all-inbound',
   durationSec: Math.max(durationSec, 1),
   vehicles: {
@@ -66,7 +66,7 @@ const scenario = createDefaultShuttleScenario({
     maxTasks: 16
   },
   trafficPolicy: {
-    controllerMode: 'agent-simple',
+    controllerMode: 'agent-minimal',
     liftApproachCapacity: 8,
     minimumClearanceSec: 0.4,
     deadlockDetectSec: 20

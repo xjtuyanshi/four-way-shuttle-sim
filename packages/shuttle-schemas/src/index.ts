@@ -101,7 +101,7 @@ export const RoutingPolicySchema = z.object({
 });
 
 export const TrafficPolicySchema = z.object({
-  controllerMode: z.enum(['reservation-v2', 'agent-simple']).default('reservation-v2'),
+  controllerMode: z.enum(['reservation-v2', 'agent-simple', 'agent-minimal']).default('reservation-v2'),
   edgeCapacity: z.number().int().positive().default(1),
   nodeCapacity: z.number().int().positive().default(1),
   zoneCapacity: z.number().int().positive().default(1),
@@ -526,7 +526,7 @@ export const LiftPortDiagnosticsSchema = z.object({
 });
 
 export const TrafficDiagnosticsSchema = z.object({
-  trafficMode: z.enum(['flow-debug', 'segment-safe', 'agent-simple']).default('flow-debug'),
+  trafficMode: z.enum(['flow-debug', 'segment-safe', 'agent-simple', 'agent-minimal']).default('flow-debug'),
   safetyValidated: z.boolean().default(false),
   collisionAvoidanceEnabled: z.boolean().default(true),
   longHorizonReservationEnabled: z.boolean().default(false),

@@ -1155,7 +1155,7 @@ function activeReservation(
 
 function requiresStrictReservationCoverage(state: ShuttleSimState): boolean {
   const traffic = state.traffic as ShuttleSimState['traffic'] & {
-    trafficMode?: 'flow-debug' | 'segment-safe' | 'agent-simple';
+    trafficMode?: 'flow-debug' | 'segment-safe' | 'agent-simple' | 'agent-minimal';
     safetyValidated?: boolean;
   };
   return traffic.safetyValidated === true || traffic.trafficMode === 'segment-safe';

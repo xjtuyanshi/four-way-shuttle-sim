@@ -872,6 +872,113 @@ describe('shuttle phase 0 SimCore', () => {
     expect(route).not.toEqual(expect.arrayContaining(['main-south-05', 'main-south-04']));
   });
 
+  it('agent-minimal ignores distant dynamic blockers and only stops at the next occupied node', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-minimal'
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['main-north-01', 'main-north-02', 'main-north-03']);
+    sim.setVehicleRouteForTest('SH-02', ['main-north-03']);
+
+    let state = sim.step(0.2);
+    let vehicle = state.vehicles.find((candidate) => candidate.id === 'SH-01');
+
+    expect(state.traffic.trafficMode).toBe('agent-minimal');
+    expect(vehicle?.state).not.toBe('waiting-blocked');
+    expect(vehicle?.currentEdgeId).toBe('main-north-01-main-north-02');
+    expect(vehicle?.targetNodeId).toBe('main-north-02');
+
+    sim.setVehicleRouteForTest('SH-01', ['main-north-01', 'main-north-02', 'main-north-03']);
+    sim.setVehicleRouteForTest('SH-02', ['main-north-02']);
+    state = sim.step(0.2);
+    vehicle = state.vehicles.find((candidate) => candidate.id === 'SH-01');
+
+    expect(vehicle?.state).toBe('waiting-blocked');
+    expect(vehicle?.targetNodeId).toBe('main-north-02');
+    expect(vehicle?.waitReason).toBe('node-occupied');
+    expect(vehicle?.blockingVehicleId).toBe('SH-02');
+  });
+
+  it('agent-minimal lets an empty face-to-face blocker finish a local yield move', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-minimal'
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['right-row-08']);
+    sim.setVehicleRouteForTest('SH-02', ['main-north-05']);
+    sim.addLoadForTest({ id: 'empty-pickup-load', state: 'waiting', nodeId: 'outbound-lift-bottom-01', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'loaded-drop-load', state: 'carried', nodeId: null, vehicleId: 'SH-02', weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'empty-pickup',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'outbound-lift-bottom-01',
+      dropoffNodeId: 'storage-r12-c01',
+      loadId: 'empty-pickup-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'loaded-drop',
+      kind: 'inbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'inbound-lift-bottom-01',
+      dropoffNodeId: 'storage-r08-c02',
+      loadId: 'loaded-drop-load',
+      vehicleId: 'SH-02',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleTaskForTest('SH-01', 'empty-pickup', false);
+    sim.setVehicleTaskForTest('SH-02', 'loaded-drop', true);
+
+    let state = sim.getState();
+    let yieldEvent = sim.getEventLog().find((event) => event.eventType === 'route-replanned' && event.vehicleId === 'SH-01' && event.reason === 'empty-yields-to-loaded');
+    for (let index = 0; index < 80 && !yieldEvent; index += 1) {
+      state = sim.step(0.2);
+      yieldEvent = sim.getEventLog().find((event) => event.eventType === 'route-replanned' && event.vehicleId === 'SH-01' && event.reason === 'empty-yields-to-loaded');
+    }
+    const emptyVehicle = state.vehicles.find((vehicle) => vehicle.id === 'SH-01');
+
+    expect(yieldEvent?.details.route).toBe('right-row-08>storage-r08-c24');
+    expect(emptyVehicle?.targetNodeId).toBe('storage-r08-c24');
+    expect(emptyVehicle?.currentEdgeId).toBe('right-row-08-storage-r08-c24');
+    expect(emptyVehicle?.localRouteReason).toBe('temporary-yield');
+    expect(emptyVehicle?.localRouteNodeIds).toEqual(['right-row-08', 'storage-r08-c24']);
+    expect(emptyVehicle?.waitReason).toBeNull();
+  });
+
   it('agent-simple releases an inbound shuttle to the available pool after dropoff', () => {
     const scenario = createDefaultShuttleScenario({
       liftMode: 'all-inbound',
