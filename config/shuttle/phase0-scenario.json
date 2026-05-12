@@ -10067,7 +10067,7 @@
     "zoneCapacity": 1,
     "minimumClearanceSec": 0.4,
     "priorityAgingSec": 20,
-    "deadlockDetectSec": 15,
+    "deadlockDetectSec": 2,
     "deadlockBreakPolicy": "oldest-waits-wins"
   }
 }

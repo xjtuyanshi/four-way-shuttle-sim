@@ -79,6 +79,7 @@ function testScenario(overrides: Partial<ShuttleScenario>): ShuttleScenario {
       liftApproachCapacity: 1,
       collisionAvoidanceEnabled: true,
       minimumClearanceSec: 0.2,
+      dynamicAvoidanceClearanceM: 0.5,
       priorityAgingSec: 20,
       deadlockDetectSec: 1,
       deadlockBreakPolicy: 'oldest-waits-wins'
@@ -910,6 +911,56 @@ describe('shuttle phase 0 SimCore', () => {
     expect(vehicle?.blockingVehicleId).toBe('SH-02');
   });
 
+  it('agent-minimal does not stop for a same-target claimant until both vehicles are close to the target', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-minimal',
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+
+    sim.setVehicleRouteForTest('SH-02', ['main-north-03', 'main-north-02']);
+    sim.step(0.2);
+    sim.setVehicleRouteForTest('SH-01', ['main-north-01', 'main-north-02']);
+    let state = sim.step(0.2);
+    let requester = state.vehicles.find((vehicle) => vehicle.id === 'SH-01');
+
+    expect(requester?.state).not.toBe('waiting-blocked');
+    expect(requester?.currentEdgeId).toBe('main-north-01-main-north-02');
+    sim.setVehicleRouteForTest('SH-01', ['parking-c']);
+
+    const target = scenario.layout.nodes.find((node) => node.id === 'main-north-02');
+    expect(target).toBeDefined();
+    for (let index = 0; index < 80; index += 1) {
+      const claimant = sim.getState().vehicles.find((vehicle) => vehicle.id === 'SH-02');
+      if (
+        claimant?.currentEdgeId &&
+        Math.hypot(claimant.x - target!.x, claimant.z - target!.z) <= scenario.vehicles.lengthM / 2 + scenario.trafficPolicy.dynamicAvoidanceClearanceM
+      ) {
+        break;
+      }
+      sim.step(0.2);
+    }
+
+    sim.setVehicleRouteForTest('SH-01', ['main-north-01', 'main-north-02']);
+    state = sim.step(0.2);
+    requester = state.vehicles.find((vehicle) => vehicle.id === 'SH-01');
+
+    expect(requester?.state).toBe('waiting-blocked');
+    expect(['node-target-near', 'avoidance-clearance']).toContain(requester?.waitReason);
+    expect(requester?.blockingVehicleId).toBe('SH-02');
+  });
+
   it('agent-minimal lets an empty face-to-face blocker finish a local yield move', () => {
     const scenario = createDefaultShuttleScenario({
       liftMode: 'all-inbound',
@@ -977,6 +1028,42 @@ describe('shuttle phase 0 SimCore', () => {
     expect(emptyVehicle?.localRouteReason).toBe('temporary-yield');
     expect(emptyVehicle?.localRouteNodeIds).toEqual(['right-row-08', 'storage-r08-c24']);
     expect(emptyVehicle?.waitReason).toBeNull();
+  });
+
+  it('agent-minimal backs the lower-priority loaded shuttle out of a lift-port faceoff', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-minimal',
+        deadlockDetectSec: 1
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['inbound-lift-bottom-01', 'main-north-02', 'main-north-03']);
+    sim.setVehicleRouteForTest('SH-02', ['outbound-lift-top-01', 'main-north-02', 'main-north-03']);
+    sim.setVehicleTaskForTest('SH-01', null, true);
+    sim.setVehicleTaskForTest('SH-02', null, true);
+
+    let state = sim.getState();
+    let retreatEvent = sim.getEventLog().find((event) => event.eventType === 'route-replanned' && event.reason === 'loaded-retreats-from-faceoff');
+    for (let index = 0; index < 80 && !retreatEvent; index += 1) {
+      state = sim.step(0.2);
+      retreatEvent = sim.getEventLog().find((event) => event.eventType === 'route-replanned' && event.reason === 'loaded-retreats-from-faceoff');
+    }
+    const yieldingVehicle = state.vehicles.find((vehicle) => vehicle.id === retreatEvent?.vehicleId);
+
+    expect(retreatEvent?.vehicleId).toBe('SH-02');
+    expect(retreatEvent?.details.route).toBe('main-north-02>outbound-lift-top-01');
+    expect(yieldingVehicle?.targetNodeId).toBe('outbound-lift-top-01');
+    expect(state.traffic.physicalViolationCount).toBe(0);
   });
 
   it('agent-simple releases an inbound shuttle to the available pool after dropoff', () => {

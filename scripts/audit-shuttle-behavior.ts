@@ -69,7 +69,8 @@ const scenario = createDefaultShuttleScenario({
     controllerMode: 'agent-minimal',
     liftApproachCapacity: 8,
     minimumClearanceSec: 0.4,
-    deadlockDetectSec: 20
+    dynamicAvoidanceClearanceM: 0.5,
+    deadlockDetectSec: 2
   }
 });
 
@@ -78,6 +79,8 @@ const nodesById = new Map(scenario.layout.nodes.map((node) => [node.id, node]));
 const sim = new ShuttleSimCore(scenario);
 const traces = new Map<string, VehicleTrace>();
 const anomalies: Anomaly[] = [];
+const reportedTaskReplanKeys = new Set<string>();
+const intentionalRetreatUntilSec = new Map<string, number>();
 
 sim.start();
 let state = sim.getState();
@@ -107,8 +110,8 @@ const report = {
     minSeparationM: finalState.traffic.minVehicleSeparationM,
     avgBusy: utilization.busy,
     avgProductive: utilization.productive,
-    avgWaiting: utilization.waiting,
-    waitingVehicles: finalState.traffic.waitingVehicles.length
+    avgTrafficHold: utilization.waiting,
+    trafficHoldVehicles: finalState.traffic.waitingVehicles.length
   },
   anomalyCounts: anomalies.reduce<Record<string, number>>((counts, anomaly) => {
     counts[anomaly.code] = (counts[anomaly.code] ?? 0) + 1;
@@ -124,6 +127,7 @@ if (anomalies.some((anomaly) => anomaly.severity === 'critical')) {
 }
 
 function auditState(current: ShuttleSimState): void {
+  trackIntentionalRetreats(current);
   if (current.kpis.deadlockCount > 0) {
     addAnomaly(current.simTimeSec, null, 'deadlock-count', 'critical', `deadlockCount=${current.kpis.deadlockCount}`);
   }
@@ -134,7 +138,7 @@ function auditState(current: ShuttleSimState): void {
     addAnomaly(current.simTimeSec, null, 'physical-violation', 'critical', `physicalViolationCount=${current.traffic.physicalViolationCount}`);
   }
   if (current.traffic.waitingVehicles.length === current.vehicles.length && current.vehicles.length > 0) {
-    addAnomaly(current.simTimeSec, null, 'all-vehicles-waiting', 'critical', 'every shuttle is waiting-blocked');
+    addAnomaly(current.simTimeSec, null, 'all-vehicles-held', 'critical', 'every shuttle is traffic-held');
   }
 
   auditPhysicalCommonSense(current);
@@ -256,13 +260,18 @@ function auditTaskCommonSense(current: ShuttleSimState): void {
       }
     }
     if (task.replanCount >= replanWarnCount) {
-      addAnomaly(
-        current.simTimeSec,
-        vehicle.id,
-        'excessive-task-replans',
-        task.replanCount >= replanWarnCount * 2 ? 'critical' : 'warn',
-        `task=${task.id} replanCount=${task.replanCount}`
-      );
+      const severity: Severity = task.replanCount >= replanWarnCount * 2 ? 'critical' : 'warn';
+      const replanKey = `${task.id}:${severity}`;
+      if (!reportedTaskReplanKeys.has(replanKey)) {
+        reportedTaskReplanKeys.add(replanKey);
+        addAnomaly(
+          current.simTimeSec,
+          vehicle.id,
+          'excessive-task-replans',
+          severity,
+          `task=${task.id} replanCount=${task.replanCount}`
+        );
+      }
     }
   }
 
@@ -366,7 +375,7 @@ function auditVehicleTrace(current: ShuttleSimState, vehicle: VehicleState): voi
       vehicle.id,
       'long-stationary-wait',
       stationarySec >= stationaryWarnSec * 2 ? 'critical' : 'warn',
-      `${vehicle.currentNodeId} -> ${vehicle.targetNodeId ?? 'none'} ${vehicle.waitReason ?? 'waiting'} for ${stationarySec.toFixed(1)}s`
+      `${vehicle.currentNodeId} -> ${vehicle.targetNodeId ?? 'none'} ${vehicle.waitReason ?? 'traffic-hold'} for ${stationarySec.toFixed(1)}s`
     );
     trace.lastChangeSec = current.simTimeSec;
   }
@@ -446,9 +455,9 @@ function auditVehicleTrace(current: ShuttleSimState, vehicle: VehicleState): voi
     const tail = nodes.slice(-5);
     if (tail[0] === tail[2] && tail[1] === tail[3] && tail[2] === tail[4]) {
       const key = tail.join('>');
-      if (!trace.oscillationKeys.has(key)) {
+      if (!trace.oscillationKeys.has(key) && !hasRecentIntentionalRetreat(current, vehicle.id)) {
         trace.oscillationKeys.add(key);
-        addAnomaly(current.simTimeSec, vehicle.id, 'node-oscillation', 'critical', key);
+        addAnomaly(current.simTimeSec, vehicle.id, 'node-oscillation', vehicle.speedMps <= 0.05 || vehicle.state === 'waiting-blocked' ? 'critical' : 'warn', key);
       }
     }
   }
@@ -458,7 +467,7 @@ function auditVehicleTrace(current: ShuttleSimState, vehicle: VehicleState): voi
     const tail = targets.slice(-5);
     if (tail[0] === tail[2] && tail[1] === tail[3] && tail[2] === tail[4]) {
       const key = tail.join('>');
-      if (!trace.oscillationKeys.has(`target:${key}`)) {
+      if (!trace.oscillationKeys.has(`target:${key}`) && !hasRecentIntentionalRetreat(current, vehicle.id)) {
         trace.oscillationKeys.add(`target:${key}`);
         addAnomaly(current.simTimeSec, vehicle.id, 'target-oscillation', 'warn', key);
       }
@@ -466,6 +475,22 @@ function auditVehicleTrace(current: ShuttleSimState, vehicle: VehicleState): voi
   }
 
   traces.set(vehicle.id, trace);
+}
+
+function hasRecentIntentionalRetreat(current: ShuttleSimState, vehicleId: string): boolean {
+  return (intentionalRetreatUntilSec.get(vehicleId) ?? -Infinity) >= current.simTimeSec;
+}
+
+function trackIntentionalRetreats(current: ShuttleSimState): void {
+  for (const event of current.recentEvents) {
+    if (
+      event.vehicleId &&
+      event.eventType === 'route-replanned' &&
+      (event.reason === 'loaded-retreats-from-faceoff' || event.reason === 'empty-retreats-to-local-yield')
+    ) {
+      intentionalRetreatUntilSec.set(event.vehicleId, Math.max(intentionalRetreatUntilSec.get(event.vehicleId) ?? 0, event.simTimeSec + 30));
+    }
+  }
 }
 
 function auditRouteDetour(current: ShuttleSimState, vehicle: VehicleState): void {

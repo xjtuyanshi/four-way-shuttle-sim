@@ -379,6 +379,7 @@ function formatBottleneckCategory(top: { category: string; seconds: number } | n
 }
 
 function formatBlockedReason(reason: string): string {
+  if (reason === 'avoidance-clearance') return 'close-range avoidance';
   if (reason.includes('lift-approach-full')) return 'lift approach';
   if (reason.includes('lift-busy')) return 'lift/portal';
   if (reason.startsWith('fifo-lane-busy:')) return reason.replace('fifo-lane-busy:', 'FIFO ');
@@ -388,6 +389,24 @@ function formatBlockedReason(reason: string): string {
   if (reason.includes('node')) return 'node occupancy';
   if (reason.includes('edge')) return 'edge reservation';
   return reason;
+}
+
+function formatVehicleState(state: VehicleState['state']): string {
+  const labels: Record<VehicleState['state'], string> = {
+    idle: 'idle/no task',
+    assigned: 'assigned',
+    'moving-to-pickup': 'to pickup',
+    'aligning-under-load': 'aligning',
+    lifting: 'lifting',
+    'loaded-moving': 'loaded to dropoff',
+    lowering: 'lowering',
+    returning: 'returning',
+    parking: 'parking',
+    'waiting-blocked': 'traffic hold',
+    charging: 'charging',
+    faulted: 'faulted'
+  };
+  return labels[state] ?? state;
 }
 
 function getPointerValue(source: unknown, pointer: string): unknown {
@@ -555,8 +574,8 @@ function KpiStrip({ kpis }: { kpis: KpiSnapshot | null }) {
     ['Total PPH', kpis ? formatNumber(kpis.totalPph, 1) : '--'],
     ['Inbound PPH', kpis ? formatNumber(kpis.inboundPph, 1) : '--'],
     ['Active / queued', kpis ? `${kpis.activeTasks} / ${kpis.queuedTasks}` : '--'],
-    ['Avg wait', kpis ? `${formatNumber(kpis.averageTaskWaitSec, 1)}s` : '--'],
-    ['Util / wait', kpis ? `${formatNumber(averageUtilizationPct, 1)}% / ${formatNumber(averageWaitingPct, 1)}%` : '--'],
+    ['Task assign wait', kpis ? `${formatNumber(kpis.averageTaskWaitSec, 1)}s` : '--'],
+    ['Util / traffic hold', kpis ? `${formatNumber(averageUtilizationPct, 1)}% / ${formatNumber(averageWaitingPct, 1)}%` : '--'],
     ['Deadlocks', kpis ? String(kpis.deadlockCount) : '--']
   ];
 
@@ -586,7 +605,7 @@ function CapacityTheoryPanel({ kpis }: { kpis: KpiSnapshot | null }) {
       <div>
         <span>Fleet theory</span>
         <strong>{theory ? formatNumber(theory.fleetPph, 1) : '--'} PPH</strong>
-        <small>{theory ? `${theory.shuttleCount} shuttles, no traffic wait` : 'same layout'}</small>
+        <small>{theory ? `${theory.shuttleCount} shuttles, no traffic hold` : 'same layout'}</small>
       </div>
       <div>
         <span>Actual vs theory</span>
@@ -614,7 +633,7 @@ function ResourceUtilizationPanel({ scenario, state }: { scenario: ShuttleScenar
     {
       label: 'Shuttle utilization',
       value: `${summary.shuttles.active}/${summary.shuttles.total}`,
-      detail: `busy ${formatNumber(summary.shuttles.averageUtilizationPct, 1)}%, productive ${formatNumber(summary.shuttles.averageProductivePct, 1)}%, wait ${formatNumber(summary.shuttles.averageWaitingPct, 1)}%`
+      detail: `busy ${formatNumber(summary.shuttles.averageUtilizationPct, 1)}%, productive ${formatNumber(summary.shuttles.averageProductivePct, 1)}%, traffic hold ${formatNumber(summary.shuttles.averageWaitingPct, 1)}%`
     },
     {
       label: 'Shuttle idle/standby',
@@ -683,7 +702,7 @@ function VehicleTable({
               <th>Goal</th>
               <th>Path</th>
               <th>Speed</th>
-              <th>Wait</th>
+              <th>Hold reason</th>
             </tr>
           </thead>
           <tbody>
@@ -694,13 +713,13 @@ function VehicleTable({
                 onClick={() => onSelectVehicle(vehicle.id)}
               >
                 <td>{vehicle.id}</td>
-                <td><span className={`state-pill ${vehicle.state}`}>{vehicle.state}</span></td>
+                <td><span className={`state-pill ${vehicle.state}`}>{formatVehicleState(vehicle.state)}</span></td>
                 <td>{vehicle.currentNodeId}</td>
                 <td>{vehicle.targetNodeId ?? '--'}</td>
                 <td>{vehicle.plannedGoalNodeId ?? '--'}</td>
                 <td className={vehicle.localRouteNodeIds.length > 0 ? 'route-local' : ''}>{routeLabel(vehicle)}</td>
                 <td>{vehicle.speedMps.toFixed(2)}</td>
-                <td>{vehicle.waitReason ?? vehicle.blockingVehicleId ?? vehicle.blockingReservationId ?? '--'}</td>
+                <td>{vehicle.waitReason ? formatBlockedReason(vehicle.waitReason) : vehicle.blockingVehicleId ?? vehicle.blockingReservationId ?? '--'}</td>
               </tr>
             ))}
           </tbody>
@@ -1268,7 +1287,7 @@ function StreamingPane({
 
 function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
   const traffic = state?.traffic;
-  const waiting = traffic?.waitingVehicles ?? [];
+  const trafficHolds = traffic?.waitingVehicles ?? [];
   const liftPorts = traffic?.liftPorts ?? [];
   const queuedLiftTasks = liftPorts.reduce((sum, port) => sum + port.queueLength, 0);
   const activeLiftPorts = liftPorts.filter((port) => port.activeTaskId).length;
@@ -1318,8 +1337,9 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
         <small>{traffic?.collisionAvoidanceEnabled === false ? 'UNSAFE DIAGNOSTIC - safety invalid' : 'safety gates active'}</small>
       </div>
       <div>
-        <span>Waiting</span>
-        <strong>{waiting.length}</strong>
+        <span>Traffic holds</span>
+        <strong>{trafficHolds.length}</strong>
+        <small>avoidance / resource holds</small>
       </div>
       <div>
         <span>Min separation</span>
@@ -1340,19 +1360,19 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
         <small>{liftPorts.filter((port) => port.kind === 'inbound').length} in / {liftPorts.filter((port) => port.kind === 'outbound').length} out</small>
       </div>
       <div>
-        <span>Lane waits</span>
+        <span>Lane holds</span>
         <strong>{formatNumber(laneWaitSec, 1)}s</strong>
       </div>
       <div>
-        <span>Storage waits</span>
+        <span>Storage holds</span>
         <strong>{formatNumber(storageWaitSec, 1)}s</strong>
       </div>
       <div>
-        <span>Lift waits</span>
+        <span>Lift holds</span>
         <strong>{formatNumber(liftWaitSec, 1)}s</strong>
       </div>
       <div>
-        <span>Fleet waits</span>
+        <span>Fleet holds</span>
         <strong>{formatNumber(fleetWaitSec, 1)}s</strong>
       </div>
       <div>
@@ -1360,12 +1380,12 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
         <strong>{activePortalZones}</strong>
       </div>
       <div className="traffic-wait-list">
-        {waiting.length === 0 ? (
-          <small>No waiting vehicles</small>
+        {trafficHolds.length === 0 ? (
+          <small>No traffic-held vehicles</small>
         ) : (
-          waiting.map((vehicle) => (
+          trafficHolds.map((vehicle) => (
             <small key={vehicle.vehicleId}>
-              {vehicle.vehicleId} / {vehicle.waitReason ?? 'blocked'} / {vehicle.blockingVehicleId ?? vehicle.blockingReservationId ?? 'resource'}
+              {vehicle.vehicleId} / {vehicle.waitReason ? formatBlockedReason(vehicle.waitReason) : 'blocked'} / {vehicle.blockingVehicleId ?? vehicle.blockingReservationId ?? 'resource'}
             </small>
           ))
         )}
@@ -1496,11 +1516,11 @@ function FifoInventoryPanel({ scenario, state }: { scenario: ShuttleScenario | n
             )}
           </div>
           <div>
-            <span>Empty wait</span>
+            <span>Storage empty hold</span>
             <strong>{formatNumber(storageEmptySec, 1)}s</strong>
           </div>
           <div>
-            <span>Full wait</span>
+            <span>Storage full hold</span>
             <strong>{formatNumber(storageFullSec, 1)}s</strong>
           </div>
         </div>
@@ -1696,7 +1716,7 @@ function ValidationPanel({
             <strong>{longRun ? `${longRun.maxQueuedTasks} / ${longRunThresholds?.maxQueuedTasks ?? '--'} tasks` : '--'}</strong>
           </div>
           <div>
-            <span>Waiting high water</span>
+            <span>Traffic hold high water</span>
             <strong>{longRun ? `${longRun.maxWaitingVehicles} / ${longRunThresholds?.maxWaitingVehicles ?? '--'} vehicles` : '--'}</strong>
           </div>
           <div>
@@ -1772,7 +1792,7 @@ function ValidationPanel({
             <strong>{inboundStress ? `${formatNumber(inboundStress.averageVehicleUtilizationPctMean, 1)}%` : '--'}</strong>
           </div>
           <div>
-            <span>Inbound productive / wait</span>
+            <span>Inbound productive / hold</span>
             <strong>
               {inboundStress
                 ? `${formatNumber(inboundStress.averageVehicleProductivePctMean, 1)}% / ${formatNumber(inboundStress.averageVehicleWaitingPctMean, 1)}%`

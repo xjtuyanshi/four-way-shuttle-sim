@@ -33,7 +33,8 @@ const scenario = createDefaultShuttleScenario({
     controllerMode: 'agent-minimal',
     liftApproachCapacity: 8,
     minimumClearanceSec: 0.4,
-    deadlockDetectSec: 20,
+    dynamicAvoidanceClearanceM: 0.5,
+    deadlockDetectSec: 2,
   },
 });
 

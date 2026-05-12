@@ -108,8 +108,9 @@ export const TrafficPolicySchema = z.object({
   liftApproachCapacity: z.number().int().positive().default(1),
   collisionAvoidanceEnabled: z.boolean().default(true),
   minimumClearanceSec: z.number().nonnegative().default(0.4),
+  dynamicAvoidanceClearanceM: z.number().nonnegative().default(0.5),
   priorityAgingSec: z.number().nonnegative().default(20),
-  deadlockDetectSec: z.number().positive().default(15),
+  deadlockDetectSec: z.number().positive().default(2),
   deadlockBreakPolicy: z.enum(['lowest-priority-replan', 'oldest-waits-wins']).default('oldest-waits-wins')
 });
 
