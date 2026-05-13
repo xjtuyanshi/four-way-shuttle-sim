@@ -956,6 +956,68 @@ describe('shuttle phase 0 SimCore', () => {
     expect(vehicle.localRouteNodeIds).toEqual([]);
   });
 
+  it('agent-minimal uses lift-column storage transfers instead of side-aisle loops for nearby pickups', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: {
+        count: 8,
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.5,
+        accelerationMps2: 1.2,
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01
+      },
+      physicsParams: {
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.5,
+        accelerationMps2: 1.2,
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01
+      },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 16
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-minimal',
+        liftApproachCapacity: 8,
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+
+    sim.start();
+    const state = sim.step(0.2);
+    const shuttle3 = state.vehicles.find((vehicle) => vehicle.id === 'SH-03');
+    const shuttle4 = state.vehicles.find((vehicle) => vehicle.id === 'SH-04');
+    const shuttle5 = state.vehicles.find((vehicle) => vehicle.id === 'SH-05');
+    const shuttle7 = state.vehicles.find((vehicle) => vehicle.id === 'SH-07');
+
+    expect(shuttle3?.routeNodeIds).toEqual([
+      'storage-r01-c06',
+      'inbound-lift-top-01-row-01-transfer',
+      'inbound-lift-top-01'
+    ]);
+    expect(shuttle4?.routeNodeIds).toEqual([
+      'storage-r01-c18',
+      'inbound-lift-top-02-row-01-transfer',
+      'inbound-lift-top-02'
+    ]);
+    expect(shuttle5?.routeNodeIds).toEqual([
+      'storage-r16-c06',
+      'outbound-lift-bottom-01-row-16-transfer',
+      'outbound-lift-bottom-01'
+    ]);
+    expect(shuttle7?.routeNodeIds).toEqual([
+      'storage-r01-c12',
+      'outbound-lift-top-01-row-01-transfer',
+      'outbound-lift-top-01'
+    ]);
+  });
+
   it('agent-minimal keeps a committed task route instead of reselecting at each node', () => {
     const scenario = createDefaultShuttleScenario({
       liftMode: 'all-inbound',
@@ -1567,7 +1629,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(storageColumns).toHaveLength(24);
     expect(storageNodes).toHaveLength(384);
     expect(storageRows.every((z) => storageNodes.filter((node) => node.z === z).length === storageColumns.length)).toBe(true);
-    expect(fifoLaneEdges).toHaveLength(storageRows.length * (storageColumns.length + 1));
+    expect(fifoLaneEdges).toHaveLength(storageRows.length * (storageColumns.length + 1) + 12);
     expect(fifoLaneEdges.every((edge) => edge.directionMode === 'twoWay')).toBe(true);
     expect(storageColumnGaps.filter((gap) => gap > 1.3)).toHaveLength(3);
     expect(storageColumnGaps.filter((gap) => gap <= 1.3)).toHaveLength(20);
@@ -1659,12 +1721,12 @@ describe('shuttle phase 0 SimCore', () => {
       storageCellCount: 384,
       blockedCellCount: 0,
       structuralCellCount: 0,
-      trackBedCount: 478,
-      storageLaneTrackCount: 400,
+      trackBedCount: 496,
+      storageLaneTrackCount: 412,
       sideAisleTrackCount: 42,
       crossAisleTrackCount: 12,
-      inboundConnectorTrackCount: 8,
-      outboundConnectorTrackCount: 8,
+      inboundConnectorTrackCount: 11,
+      outboundConnectorTrackCount: 11,
       parkingConnectorTrackCount: 8,
       diagonalTrackCount: 0,
       inboundLiftPadCount: 4,
@@ -1756,7 +1818,7 @@ describe('shuttle phase 0 SimCore', () => {
       )
     ).toEqual(Array.from({ length: 16 }, () => Array.from({ length: 24 }, (_, columnIndex) => columnIndex + 1)));
     expect(contract.trackBeds.every((track) => track.orientation === 'x' || track.orientation === 'z')).toBe(true);
-    expect(contract.trackBeds.filter((track) => track.category === 'storageLane')).toHaveLength(400);
+    expect(contract.trackBeds.filter((track) => track.category === 'storageLane')).toHaveLength(412);
     expect(contract.trackBeds.find((track) => track.id === 'right-row-01-storage-r01-c24')).toMatchObject({
       category: 'storageLane',
       zM: -10.6,

@@ -4011,6 +4011,30 @@
       "side": "none"
     },
     {
+      "id": "inbound-lift-bottom-01-row-16-transfer-inbound-lift-bottom-01",
+      "category": "inboundConnector",
+      "xM": 20.25,
+      "yM": 0,
+      "zM": 12.4,
+      "lengthXM": 0.12,
+      "lengthZM": 3.6,
+      "orientation": "z",
+      "row": 0,
+      "side": "bottom"
+    },
+    {
+      "id": "inbound-lift-bottom-01-row-16-transfer-storage-r16-c13",
+      "category": "storageLane",
+      "xM": 21.125,
+      "yM": 0,
+      "zM": 10.6,
+      "lengthXM": 1.75,
+      "lengthZM": 0.08,
+      "orientation": "x",
+      "row": 16,
+      "side": "none"
+    },
+    {
       "id": "inbound-lift-bottom-02-main-north-04",
       "category": "inboundConnector",
       "xM": 39.25,
@@ -4059,6 +4083,30 @@
       "side": "none"
     },
     {
+      "id": "inbound-lift-top-01-row-01-transfer-inbound-lift-top-01",
+      "category": "inboundConnector",
+      "xM": 10.5,
+      "yM": 0,
+      "zM": -12.4,
+      "lengthXM": 0.12,
+      "lengthZM": 3.6,
+      "orientation": "z",
+      "row": 0,
+      "side": "top"
+    },
+    {
+      "id": "inbound-lift-top-01-row-01-transfer-storage-r01-c07",
+      "category": "storageLane",
+      "xM": 11.375,
+      "yM": 0,
+      "zM": -10.6,
+      "lengthXM": 1.75,
+      "lengthZM": 0.08,
+      "orientation": "x",
+      "row": 1,
+      "side": "none"
+    },
+    {
       "id": "inbound-lift-top-02-main-north-03",
       "category": "inboundConnector",
       "xM": 30,
@@ -4080,6 +4128,30 @@
       "lengthZM": 15,
       "orientation": "z",
       "row": 0,
+      "side": "none"
+    },
+    {
+      "id": "inbound-lift-top-02-row-01-transfer-inbound-lift-top-02",
+      "category": "inboundConnector",
+      "xM": 30,
+      "yM": 0,
+      "zM": -12.4,
+      "lengthXM": 0.12,
+      "lengthZM": 3.6,
+      "orientation": "z",
+      "row": 0,
+      "side": "top"
+    },
+    {
+      "id": "inbound-lift-top-02-row-01-transfer-storage-r01-c19",
+      "category": "storageLane",
+      "xM": 30.875,
+      "yM": 0,
+      "zM": -10.6,
+      "lengthXM": 1.75,
+      "lengthZM": 0.08,
+      "orientation": "x",
+      "row": 1,
       "side": "none"
     },
     {
@@ -4551,6 +4623,30 @@
       "side": "none"
     },
     {
+      "id": "outbound-lift-bottom-01-row-16-transfer-outbound-lift-bottom-01",
+      "category": "outboundConnector",
+      "xM": 10.5,
+      "yM": 0,
+      "zM": 12.4,
+      "lengthXM": 0.12,
+      "lengthZM": 3.6,
+      "orientation": "z",
+      "row": 0,
+      "side": "bottom"
+    },
+    {
+      "id": "outbound-lift-bottom-01-row-16-transfer-storage-r16-c07",
+      "category": "storageLane",
+      "xM": 11.375,
+      "yM": 0,
+      "zM": 10.6,
+      "lengthXM": 1.75,
+      "lengthZM": 0.08,
+      "orientation": "x",
+      "row": 16,
+      "side": "none"
+    },
+    {
       "id": "outbound-lift-bottom-02-main-north-03",
       "category": "outboundConnector",
       "xM": 30,
@@ -4575,6 +4671,30 @@
       "side": "none"
     },
     {
+      "id": "outbound-lift-bottom-02-row-16-transfer-outbound-lift-bottom-02",
+      "category": "outboundConnector",
+      "xM": 30,
+      "yM": 0,
+      "zM": 12.4,
+      "lengthXM": 0.12,
+      "lengthZM": 3.6,
+      "orientation": "z",
+      "row": 0,
+      "side": "bottom"
+    },
+    {
+      "id": "outbound-lift-bottom-02-row-16-transfer-storage-r16-c19",
+      "category": "storageLane",
+      "xM": 30.875,
+      "yM": 0,
+      "zM": 10.6,
+      "lengthXM": 1.75,
+      "lengthZM": 0.08,
+      "orientation": "x",
+      "row": 16,
+      "side": "none"
+    },
+    {
       "id": "outbound-lift-top-01-main-north-02",
       "category": "outboundConnector",
       "xM": 20.25,
@@ -4596,6 +4716,30 @@
       "lengthZM": 15,
       "orientation": "z",
       "row": 0,
+      "side": "none"
+    },
+    {
+      "id": "outbound-lift-top-01-row-01-transfer-outbound-lift-top-01",
+      "category": "outboundConnector",
+      "xM": 20.25,
+      "yM": 0,
+      "zM": -12.4,
+      "lengthXM": 0.12,
+      "lengthZM": 3.6,
+      "orientation": "z",
+      "row": 0,
+      "side": "top"
+    },
+    {
+      "id": "outbound-lift-top-01-row-01-transfer-storage-r01-c13",
+      "category": "storageLane",
+      "xM": 21.125,
+      "yM": 0,
+      "zM": -10.6,
+      "lengthXM": 1.75,
+      "lengthZM": 0.08,
+      "orientation": "x",
+      "row": 1,
       "side": "none"
     },
     {
@@ -5175,6 +5319,18 @@
       "side": "none"
     },
     {
+      "id": "storage-r01-c06-inbound-lift-top-01-row-01-transfer",
+      "category": "storageLane",
+      "xM": 9.625,
+      "yM": 0,
+      "zM": -10.6,
+      "lengthXM": 1.75,
+      "lengthZM": 0.08,
+      "orientation": "x",
+      "row": 1,
+      "side": "none"
+    },
+    {
       "id": "storage-r01-c06-storage-r01-c05",
       "category": "storageLane",
       "xM": 8.125,
@@ -5247,6 +5403,18 @@
       "side": "none"
     },
     {
+      "id": "storage-r01-c12-outbound-lift-top-01-row-01-transfer",
+      "category": "storageLane",
+      "xM": 19.375,
+      "yM": 0,
+      "zM": -10.6,
+      "lengthXM": 1.75,
+      "lengthZM": 0.08,
+      "orientation": "x",
+      "row": 1,
+      "side": "none"
+    },
+    {
       "id": "storage-r01-c12-storage-r01-c11",
       "category": "storageLane",
       "xM": 17.875,
@@ -5313,6 +5481,18 @@
       "yM": 0,
       "zM": -10.6,
       "lengthXM": 1.25,
+      "lengthZM": 0.08,
+      "orientation": "x",
+      "row": 1,
+      "side": "none"
+    },
+    {
+      "id": "storage-r01-c18-inbound-lift-top-02-row-01-transfer",
+      "category": "storageLane",
+      "xM": 29.125,
+      "yM": 0,
+      "zM": -10.6,
+      "lengthXM": 1.75,
       "lengthZM": 0.08,
       "orientation": "x",
       "row": 1,
@@ -9495,6 +9675,18 @@
       "side": "none"
     },
     {
+      "id": "storage-r16-c06-outbound-lift-bottom-01-row-16-transfer",
+      "category": "storageLane",
+      "xM": 9.625,
+      "yM": 0,
+      "zM": 10.6,
+      "lengthXM": 1.75,
+      "lengthZM": 0.08,
+      "orientation": "x",
+      "row": 16,
+      "side": "none"
+    },
+    {
       "id": "storage-r16-c06-storage-r16-c05",
       "category": "storageLane",
       "xM": 8.125,
@@ -9567,6 +9759,18 @@
       "side": "none"
     },
     {
+      "id": "storage-r16-c12-inbound-lift-bottom-01-row-16-transfer",
+      "category": "storageLane",
+      "xM": 19.375,
+      "yM": 0,
+      "zM": 10.6,
+      "lengthXM": 1.75,
+      "lengthZM": 0.08,
+      "orientation": "x",
+      "row": 16,
+      "side": "none"
+    },
+    {
       "id": "storage-r16-c12-storage-r16-c11",
       "category": "storageLane",
       "xM": 17.875,
@@ -9633,6 +9837,18 @@
       "yM": 0,
       "zM": 10.6,
       "lengthXM": 1.25,
+      "lengthZM": 0.08,
+      "orientation": "x",
+      "row": 16,
+      "side": "none"
+    },
+    {
+      "id": "storage-r16-c18-outbound-lift-bottom-02-row-16-transfer",
+      "category": "storageLane",
+      "xM": 29.125,
+      "yM": 0,
+      "zM": 10.6,
+      "lengthXM": 1.75,
       "lengthZM": 0.08,
       "orientation": "x",
       "row": 16,
@@ -9892,12 +10108,12 @@
   "storageCellCount": 384,
   "blockedCellCount": 0,
   "structuralCellCount": 0,
-  "trackBedCount": 478,
-  "storageLaneTrackCount": 400,
+  "trackBedCount": 496,
+  "storageLaneTrackCount": 412,
   "sideAisleTrackCount": 42,
   "crossAisleTrackCount": 12,
-  "inboundConnectorTrackCount": 8,
-  "outboundConnectorTrackCount": 8,
+  "inboundConnectorTrackCount": 11,
+  "outboundConnectorTrackCount": 11,
   "parkingConnectorTrackCount": 8,
   "diagonalTrackCount": 0,
   "inboundLiftPadCount": 4,
