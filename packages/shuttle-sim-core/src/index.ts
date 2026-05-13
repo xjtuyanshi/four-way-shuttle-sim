@@ -4330,7 +4330,14 @@ export class ShuttleSimCore {
         blocker.blockingReservationId = null;
         blocker.blockingVehicleId = null;
         if (!alreadyFollowingRoute) {
-          this.logAgentReroute(blocker, task, blockedTargetNodeId, route, isTaskGoal ? 'empty-task-route-clears-loaded' : 'empty-yields-to-loaded');
+          this.logAgentReroute(
+            blocker,
+            task,
+            blockedTargetNodeId,
+            route,
+            isTaskGoal ? 'empty-task-route-clears-loaded' : 'empty-yields-to-loaded',
+            { countTaskReplan: false }
+          );
         }
         return true;
       } catch {
@@ -4424,10 +4431,11 @@ export class ShuttleSimCore {
     task: TaskStateRecord | null,
     blockedNodeId: string,
     route: string[],
-    reason: string
+    reason: string,
+    options: { countTaskReplan?: boolean } = {}
   ): void {
     this.replanCount += 1;
-    if (task) {
+    if (task && options.countTaskReplan !== false) {
       task.replanCount += 1;
     }
     this.logEvent('route-replanned', vehicle.id, vehicle.taskId, task?.loadId ?? null, vehicle.currentNodeId, route.at(-1) ?? null, reason, this.vehiclePosition(vehicle), {
@@ -5585,6 +5593,7 @@ export class ShuttleSimCore {
       Math.max(0, Math.hypot(vehicle.x - reverseFrom.x, vehicle.z - reverseFrom.z))
     );
     const speedMps = Math.max(0.001, this.speedForEdge(vehicle, edge));
+    const remainingReverseTravelSec = (edgeLengthM - distanceFromReverseStartM) / speedMps;
     vehicle.currentNodeId = fromBlockedNodeId;
     vehicle.routeNodeIds = routeNodeIds;
     vehicle.routeIndex = 0;
@@ -5600,7 +5609,9 @@ export class ShuttleSimCore {
     vehicle.blockingReservationId = null;
     vehicle.blockingVehicleId = null;
     vehicle.waitingSinceSec = null;
-    vehicle.yieldHoldUntilSec = holdAfterArrivalSec > 0 ? round(this.simTimeSec + holdAfterArrivalSec) : null;
+    vehicle.yieldHoldUntilSec = holdAfterArrivalSec > 0
+      ? round(this.simTimeSec + remainingReverseTravelSec + holdAfterArrivalSec)
+      : null;
     vehicle.state = vehicle.loaded ? 'loaded-moving' : vehicle.taskId ? 'moving-to-pickup' : 'returning';
     const task = this.taskForVehicle(vehicle);
     this.logEvent('route-replanned', vehicle.id, vehicle.taskId, task?.loadId ?? null, fromBlockedNodeId, routeNodeIds.at(-1) ?? retreatNodeId, reason, this.vehiclePosition(vehicle), {
@@ -5734,7 +5745,7 @@ export class ShuttleSimCore {
     vehicle.waitingSinceSec = null;
     vehicle.state = 'assigned';
     const task = vehicle.taskId ? this.tasks.find((candidateTask) => candidateTask.id === vehicle.taskId) ?? null : null;
-    if (task) {
+    if (task && !this.agentMinimalEnabled()) {
       task.replanCount += 1;
     }
     this.replanCount += 1;

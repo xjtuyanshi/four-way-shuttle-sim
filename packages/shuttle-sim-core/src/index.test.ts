@@ -1021,6 +1021,7 @@ describe('shuttle phase 0 SimCore', () => {
       yieldEvent = sim.getEventLog().find((event) => event.eventType === 'route-replanned' && event.vehicleId === 'SH-01' && event.reason === 'empty-yields-to-loaded');
     }
     const emptyVehicle = state.vehicles.find((vehicle) => vehicle.id === 'SH-01');
+    const emptyTask = state.tasks.find((task) => task.id === 'empty-pickup');
 
     expect(yieldEvent?.details.route).toBe('right-row-08>storage-r08-c24');
     expect(emptyVehicle?.targetNodeId).toBe('storage-r08-c24');
@@ -1028,6 +1029,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(emptyVehicle?.localRouteReason).toBe('temporary-yield');
     expect(emptyVehicle?.localRouteNodeIds).toEqual(['right-row-08', 'storage-r08-c24']);
     expect(emptyVehicle?.waitReason).toBeNull();
+    expect(emptyTask?.replanCount).toBe(0);
   });
 
   it('agent-minimal backs the lower-priority loaded shuttle out of a lift-port faceoff', () => {
@@ -1064,6 +1066,24 @@ describe('shuttle phase 0 SimCore', () => {
     expect(retreatEvent?.details.route).toBe('main-north-02>outbound-lift-top-01');
     expect(yieldingVehicle?.targetNodeId).toBe('outbound-lift-top-01');
     expect(state.traffic.physicalViolationCount).toBe(0);
+
+    let heldState = state;
+    for (let index = 0; index < 80; index += 1) {
+      heldState = sim.step(0.2);
+      const heldVehicle = heldState.vehicles.find((vehicle) => vehicle.id === retreatEvent?.vehicleId);
+      if (
+        heldVehicle?.currentNodeId === 'outbound-lift-top-01' &&
+        heldVehicle.currentEdgeId === null &&
+        heldVehicle.waitReason === 'local-yield-hold'
+      ) {
+        break;
+      }
+    }
+    const heldVehicle = heldState.vehicles.find((vehicle) => vehicle.id === retreatEvent?.vehicleId);
+    expect(heldVehicle?.currentNodeId).toBe('outbound-lift-top-01');
+    expect(heldVehicle?.currentEdgeId).toBeNull();
+    expect(heldVehicle?.waitReason).toBe('local-yield-hold');
+    expect(heldVehicle?.targetNodeId).toBe('outbound-lift-top-01');
   });
 
   it('agent-simple releases an inbound shuttle to the available pool after dropoff', () => {
