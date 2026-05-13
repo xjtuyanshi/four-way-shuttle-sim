@@ -1205,6 +1205,123 @@ describe('shuttle phase 0 SimCore', () => {
     expect(empty?.routeNodeIds.slice(0, 2)).not.toEqual(['storage-r08-c24', 'right-row-08']);
   });
 
+  it('agent-refresh lets one empty transfer-faceoff shuttle side-yield and clears the lift column', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        dynamicAvoidanceClearanceM: 0.5,
+        deadlockDetectSec: 2
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['inbound-lift-bottom-01-row-06-transfer', 'inbound-lift-bottom-01']);
+    sim.setVehicleRouteForTest('SH-02', ['outbound-lift-top-01-row-12-transfer', 'outbound-lift-top-01']);
+
+    for (let index = 0; index < 30; index += 1) {
+      sim.step(0.2);
+    }
+
+    const state = sim.getState();
+    const yieldEvent = sim.getEventLog().find((event) => event.eventType === 'route-replanned' && event.reason === 'agent-refresh-side-yield');
+
+    expect(yieldEvent?.vehicleId).toBe('SH-02');
+    expect(yieldEvent?.details.route).toBe('outbound-lift-top-01-row-12-transfer>storage-r12-c13');
+    expect(state.kpis.deadlockCount).toBe(0);
+    expect(state.traffic.waitingVehicles).toHaveLength(0);
+    expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-01')?.currentEdgeId).toBe(
+      'inbound-lift-bottom-01-row-06-transfer-inbound-lift-bottom-01'
+    );
+  });
+
+  it('agent-refresh does not use stored load cells as temporary yield pockets', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['storage-r01-c06', 'outbound-lift-bottom-01-row-01-transfer', 'outbound-lift-bottom-01']);
+    sim.setVehicleRouteForTest('SH-02', ['outbound-lift-bottom-01-row-01-transfer']);
+    sim.addLoadForTest({ id: 'stored-c05', state: 'stored', nodeId: 'storage-r01-c05', vehicleId: null, weightKg: 100 });
+
+    const state = sim.step(0.2);
+    const shuttle = state.vehicles.find((vehicle) => vehicle.id === 'SH-01');
+    const yieldEvent = sim.getEventLog().find((event) => event.eventType === 'route-replanned' && event.vehicleId === 'SH-01');
+
+    expect(yieldEvent).toBeUndefined();
+    expect(shuttle?.state).toBe('waiting-blocked');
+    expect(shuttle?.targetNodeId).toBe('outbound-lift-bottom-01-row-01-transfer');
+    expect(shuttle?.routeNodeIds.slice(0, 2)).not.toEqual(['storage-r01-c06', 'storage-r01-c05']);
+  });
+
+  it('agent-refresh does not keep a cleared side-yield shuttle waiting on far lift-column traffic', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      durationSec: 120,
+      vehicles: {
+        count: 8,
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.5,
+        accelerationMps2: 1.2,
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01
+      },
+      physicsParams: {
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.5,
+        accelerationMps2: 1.2,
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01
+      },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 16
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        liftApproachCapacity: 8,
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.start();
+    let state = sim.getState();
+    for (let index = 0; index < 408; index += 1) {
+      state = sim.step(0.1);
+    }
+
+    const shuttle5 = state.vehicles.find((vehicle) => vehicle.id === 'SH-05');
+    expect(shuttle5?.state).not.toBe('waiting-blocked');
+    expect(shuttle5?.waitReason).toBeNull();
+    expect(shuttle5?.currentEdgeId).toContain('inbound-lift-top-01');
+    expect(state.traffic.waitingVehicles.some((vehicle) =>
+      vehicle.vehicleId === 'SH-05' &&
+      vehicle.waitReason === 'local-yield-hold'
+    )).toBe(false);
+  }, 30000);
+
   it('agent-minimal keeps a committed task route instead of reselecting at each node', () => {
     const scenario = createDefaultShuttleScenario({
       liftMode: 'all-inbound',

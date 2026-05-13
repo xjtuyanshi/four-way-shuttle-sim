@@ -1429,7 +1429,7 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
   }
 
   runtime.cameraTarget.set(bounds.centerX, 0, bounds.centerZ);
-  const defaultCameraOffset = new THREE.Vector3(-bounds.size * 0.18, Math.max(13, bounds.size * 0.86), bounds.size * 0.28);
+  const defaultCameraOffset = new THREE.Vector3(0, Math.max(13, bounds.size * 0.86), -bounds.size * 0.34);
   runtime.baseCameraDistance = defaultCameraOffset.length();
   runtime.baseCameraYaw = Math.atan2(defaultCameraOffset.x, defaultCameraOffset.z);
   runtime.baseCameraPitch = Math.asin(defaultCameraOffset.y / Math.max(0.001, runtime.baseCameraDistance));
