@@ -3126,16 +3126,17 @@ export class ShuttleSimCore {
     const targetRowLabel = this.nodeStorageRowLabel(targetNodeId);
     const fromIsStorage = this.isStorageNode(fromNodeId);
     const targetIsStorage = this.isStorageNode(targetNodeId);
-    const allowStorageTransitRow = fromIsStorage && targetIsStorage
-      ? (fromRowLabel === targetRowLabel ? fromRowLabel : null)
-      : fromIsStorage
-        ? fromRowLabel
-        : targetIsStorage
-          ? targetRowLabel
-          : null;
+    const allowStorageTransitRows = new Set<string>();
+    if (fromIsStorage && fromRowLabel) {
+      allowStorageTransitRows.add(fromRowLabel);
+    }
+    if (targetIsStorage && targetRowLabel) {
+      allowStorageTransitRows.add(targetRowLabel);
+    }
 
     for (const nodeId of storageNodeIds) {
-      if (!allowedNodeIds.has(nodeId) && this.nodeStorageRowLabel(nodeId) !== allowStorageTransitRow) {
+      const rowLabel = this.nodeStorageRowLabel(nodeId);
+      if (!allowedNodeIds.has(nodeId) && (!rowLabel || !allowStorageTransitRows.has(rowLabel))) {
         blockedNodeIds.add(nodeId);
       }
     }
@@ -4020,16 +4021,6 @@ export class ShuttleSimCore {
       return false;
     }
 
-    const currentIsTransfer = this.liftStorageTransferTargetLiftId(vehicle.currentNodeId) !== null;
-    const blockedTargetIsLift = this.layoutNode(blockedTargetNodeId)?.type === 'lift-blackbox';
-    const blockerIsTransferLiftEntry =
-      this.liftStorageTransferTargetLiftId(blocker.currentNodeId) !== null &&
-      blocker.targetNodeId !== null &&
-      this.layoutNode(blocker.targetNodeId)?.type === 'lift-blackbox';
-    if (!vehicle.loaded && currentIsTransfer && blockedTargetIsLift && !blockerIsTransferLiftEntry) {
-      return false;
-    }
-
     if (this.agentRefreshHasHigherPriority(vehicle, blocker)) {
       if (this.agentRefreshInstallSideYield(blocker, blockedTargetNodeId, vehicle)) {
         return false;
@@ -4131,7 +4122,7 @@ export class ShuttleSimCore {
       if (activeInboundDropoffs.has(nodeId) && task?.dropoffNodeId !== nodeId) {
         return false;
       }
-      if (this.storedLoadIdAtNode(nodeId)) {
+      if (vehicle.loaded && this.storedLoadIdAtNode(nodeId)) {
         return false;
       }
       return true;
