@@ -1428,6 +1428,8 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
     runtime.staticGroup.add(nodeMesh);
   }
 
+  runtime.root.scale.set(-1, 1, 1);
+  runtime.root.position.set(bounds.centerX * 2, 0, 0);
   runtime.cameraTarget.set(bounds.centerX, 0, bounds.centerZ);
   const defaultCameraOffset = new THREE.Vector3(0, Math.max(13, bounds.size * 0.86), -bounds.size * 0.34);
   runtime.baseCameraDistance = defaultCameraOffset.length();

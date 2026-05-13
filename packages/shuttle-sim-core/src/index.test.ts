@@ -1231,12 +1231,12 @@ describe('shuttle phase 0 SimCore', () => {
     }
 
     const state = sim.getState();
-    const yieldEvent = sim.getEventLog().find((event) => event.eventType === 'route-replanned' && event.reason === 'agent-refresh-side-yield');
+    const yieldEvent = sim.getEventLog().find((event) => event.eventType === 'route-replanned' && event.reason === 'agent-refresh-near-faceoff-yield');
 
     expect(yieldEvent?.vehicleId).toBe('SH-02');
-    expect(yieldEvent?.details.route).toBe('outbound-lift-top-01-row-12-transfer>storage-r12-c13');
+    expect(yieldEvent?.details.route).toBe('outbound-lift-top-01>outbound-lift-top-01-row-12-transfer>storage-r12-c13');
     expect(state.kpis.deadlockCount).toBe(0);
-    expect(state.traffic.waitingVehicles).toHaveLength(0);
+    expect(state.traffic.physicalViolationCount).toBe(0);
     expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-01')?.currentEdgeId).toBe(
       'inbound-lift-bottom-01-row-06-transfer-inbound-lift-bottom-01'
     );
@@ -1271,6 +1271,42 @@ describe('shuttle phase 0 SimCore', () => {
     expect(shuttle?.state).toBe('waiting-blocked');
     expect(shuttle?.targetNodeId).toBe('outbound-lift-bottom-01-row-01-transfer');
     expect(shuttle?.routeNodeIds.slice(0, 2)).not.toEqual(['storage-r01-c06', 'storage-r01-c05']);
+  });
+
+  it('agent-refresh does not hold a storage exit for a far lift-column claimant', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', [
+      'storage-r12-c13',
+      'outbound-lift-top-01-row-12-transfer',
+      'outbound-lift-top-01'
+    ]);
+    sim.setVehicleRouteForTest('SH-02', [
+      'outbound-lift-top-01-row-01-transfer',
+      'outbound-lift-top-01'
+    ]);
+
+    const state = sim.step(0.2);
+    const shuttle = state.vehicles.find((vehicle) => vehicle.id === 'SH-01');
+
+    expect(shuttle?.state).not.toBe('waiting-blocked');
+    expect(shuttle?.waitReason).toBeNull();
+    expect(shuttle?.targetNodeId).toBe('outbound-lift-top-01-row-12-transfer');
+    expect(shuttle?.currentEdgeId).toBe('storage-r12-c13-outbound-lift-top-01-row-12-transfer');
   });
 
   it('agent-refresh does not keep a cleared side-yield shuttle waiting on far lift-column traffic', () => {
