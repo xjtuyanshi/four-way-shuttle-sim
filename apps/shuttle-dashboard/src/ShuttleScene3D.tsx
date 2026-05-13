@@ -1172,6 +1172,11 @@ function routePointsForNodeIds(
   ];
 }
 
+function isAxisAlignedRouteSegment(from: { x: number; z: number }, to: { x: number; z: number }): boolean {
+  const tolerance = 1e-6;
+  return Math.abs(from.x - to.x) <= tolerance || Math.abs(from.z - to.z) <= tolerance;
+}
+
 function addRoutePath(
   group: THREE.Group,
   points: Array<{ x: number; z: number }>,
@@ -1180,6 +1185,9 @@ function addRoutePath(
   for (let index = 1; index < points.length; index += 1) {
     const from = points[index - 1]!;
     const to = points[index]!;
+    if (!isAxisAlignedRouteSegment(from, to)) {
+      continue;
+    }
     const routeMaterial = new THREE.MeshBasicMaterial({
       color: options.color,
       transparent: true,

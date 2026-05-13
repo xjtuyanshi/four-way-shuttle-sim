@@ -501,6 +501,11 @@ function average(values: number[]): number {
   return values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 }
 
+function isAxisAlignedSegment(from: { x: number; z: number }, to: { x: number; z: number }): boolean {
+  const tolerance = 1e-6;
+  return Math.abs(from.x - to.x) <= tolerance || Math.abs(from.z - to.z) <= tolerance;
+}
+
 export function summarizeResourceUtilization(
   scenario: ShuttleScenario | null,
   state: ShuttleSimState | null
@@ -833,13 +838,15 @@ function AuthoritativeMap({
       { x: vehicle.x, z: vehicle.z },
       ...nodeIds.slice(1).map((nodeId) => geometry.nodeMap.get(nodeId)).filter((node): node is ShuttleScenario['layout']['nodes'][number] => Boolean(node))
     ];
-    return points.slice(1).map((to, index) => ({
-      key: `${vehicle.id}-${kind}-${index}`,
-      vehicle,
-      kind,
-      from: points[index]!,
-      to
-    }));
+    return points.slice(1)
+      .map((to, index) => ({
+        key: `${vehicle.id}-${kind}-${index}`,
+        vehicle,
+        kind,
+        from: points[index]!,
+        to
+      }))
+      .filter((segment) => isAxisAlignedSegment(segment.from, segment.to));
   };
 
   return (
@@ -994,14 +1001,19 @@ function CanvasLiteMap({
         context.lineWidth = lineWidth;
         context.lineCap = 'round';
         context.lineJoin = 'round';
-        context.beginPath();
-        const start = project(points[0]!);
-        context.moveTo(start.x, start.y);
-        for (const point of points.slice(1)) {
-          const projected = project(point);
-          context.lineTo(projected.x, projected.y);
+        for (let index = 1; index < points.length; index += 1) {
+          const from = points[index - 1]!;
+          const to = points[index]!;
+          if (!isAxisAlignedSegment(from, to)) {
+            continue;
+          }
+          const start = project(from);
+          const end = project(to);
+          context.beginPath();
+          context.moveTo(start.x, start.y);
+          context.lineTo(end.x, end.y);
+          context.stroke();
         }
-        context.stroke();
         context.globalAlpha = 1;
       };
 

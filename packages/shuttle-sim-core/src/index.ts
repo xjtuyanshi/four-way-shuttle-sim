@@ -5653,7 +5653,12 @@ export class ShuttleSimCore {
     nextX: number,
     nextZ: number
   ): boolean {
-    if (!this.agentMinimalEnabled() || vehicle.loaded || !vehicle.targetNodeId || !this.isStorageNode(vehicle.targetNodeId)) {
+    if (
+      (!this.agentMinimalEnabled() && !this.agentRefreshEnabled()) ||
+      vehicle.loaded ||
+      !vehicle.targetNodeId ||
+      !this.isStorageNode(vehicle.targetNodeId)
+    ) {
       return false;
     }
     const blocker = this.vehicles.find((candidate) => candidate.id === blockingVehicleId);
