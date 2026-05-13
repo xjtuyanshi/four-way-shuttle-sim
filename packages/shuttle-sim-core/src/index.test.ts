@@ -1018,6 +1018,193 @@ describe('shuttle phase 0 SimCore', () => {
     ]);
   });
 
+  it('agent-refresh installs direct one-shot pickup routes and row-ordered inbound dropoffs', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: {
+        count: 8,
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.5,
+        accelerationMps2: 1.2,
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01
+      },
+      physicsParams: {
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.5,
+        accelerationMps2: 1.2,
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01
+      },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 16
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        liftApproachCapacity: 8,
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+
+    sim.start();
+    const state = sim.step(0.2);
+    const inboundRows = state.tasks
+      .filter((task) => task.kind === 'inbound')
+      .map((task) => /^storage-r(\d+)-c\d+$/.exec(task.dropoffNodeId)?.[1] ?? '');
+    const shuttle2 = state.vehicles.find((vehicle) => vehicle.id === 'SH-02');
+    const shuttle8 = state.vehicles.find((vehicle) => vehicle.id === 'SH-08');
+
+    expect(state.traffic.trafficMode).toBe('agent-refresh');
+    expect(inboundRows).toEqual(['01', '02', '03', '04', '05', '06', '07', '08']);
+    expect(shuttle2?.routeNodeIds).toEqual([
+      'storage-r16-c24',
+      'inbound-lift-bottom-02-row-16-transfer',
+      'inbound-lift-bottom-02'
+    ]);
+    expect(shuttle8?.routeNodeIds).toEqual([
+      'storage-r01-c24',
+      'outbound-lift-top-02-row-01-transfer',
+      'outbound-lift-top-02'
+    ]);
+    expect(shuttle2?.plannedRouteNodeIds).toEqual(shuttle2?.routeNodeIds);
+    expect(shuttle8?.plannedRouteNodeIds).toEqual(shuttle8?.routeNodeIds);
+  });
+
+  it('agent-refresh assigns the first sixteen inbound jobs to rows 1 through 16', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      durationSec: 300,
+      vehicles: {
+        count: 8,
+        emptySpeedMps: 6,
+        loadedSpeedMps: 5,
+        accelerationMps2: 6,
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01
+      },
+      physicsParams: {
+        emptySpeedMps: 6,
+        loadedSpeedMps: 5,
+        accelerationMps2: 6,
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01,
+        switchDirectionSec: 0
+      },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 16
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        liftApproachCapacity: 8,
+        dynamicAvoidanceClearanceM: 0.5,
+        deadlockDetectSec: 20
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.start();
+    let state = sim.getState();
+
+    for (let index = 0; index < 900 && state.tasks.length < 16; index += 1) {
+      state = sim.step(0.2);
+    }
+
+    const rows = state.tasks
+      .slice(0, 16)
+      .map((task) => /^storage-r(\d+)-c\d+$/.exec(task.dropoffNodeId)?.[1] ?? '');
+    expect(state.tasks.length).toBeGreaterThanOrEqual(16);
+    expect(rows).toEqual(Array.from({ length: 16 }, (_, index) => String(index + 1).padStart(2, '0')));
+  }, 30000);
+
+  it('agent-refresh plans loaded dropoff through the lift column without a side-aisle loop or stored-load crossing', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh'
+      }
+    }));
+    sim.setVehicleRouteForTest('SH-01', ['inbound-lift-bottom-02']);
+    sim.addLoadForTest({ id: 'refresh-load', state: 'carried', nodeId: null, vehicleId: 'SH-01', weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'refresh-drop-r08',
+      kind: 'inbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'inbound-lift-bottom-02',
+      dropoffNodeId: 'storage-r08-c01',
+      loadId: 'refresh-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleTaskForTest('SH-01', 'refresh-drop-r08', true);
+
+    const state = sim.step(0.2);
+    const vehicle = state.vehicles[0]!;
+    const route = vehicle.plannedRouteNodeIds;
+    const storageColumns = route.flatMap((nodeId) => storageColumn(nodeId) ?? []);
+
+    expect(route[0]).toBe('inbound-lift-bottom-02');
+    expect(route[1]).toBe('inbound-lift-bottom-02-row-08-transfer');
+    expect(route.at(-1)).toBe('storage-r08-c01');
+    expect(route).not.toContain('right-row-08');
+    expect(route).not.toContain('left-row-08');
+    for (let index = 1; index < storageColumns.length; index += 1) {
+      expect(storageColumns[index]).toBeLessThan(storageColumns[index - 1]!);
+    }
+    expectNoLoadedStorageTransitThroughStoredLoads(state);
+  });
+
+  it('agent-refresh makes the lower-priority empty shuttle side-yield instead of reversing', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['right-row-08', 'storage-r08-c24', 'storage-r08-c23']);
+    sim.setVehicleTaskForTest('SH-01', null, true);
+    sim.setVehicleRouteForTest('SH-02', ['storage-r08-c24', 'right-row-08']);
+
+    const state = sim.step(0.2);
+    const empty = state.vehicles.find((vehicle) => vehicle.id === 'SH-02');
+    const yieldEvent = sim.getEventLog().find((event) => event.eventType === 'route-replanned' && event.vehicleId === 'SH-02' && event.reason === 'agent-refresh-side-yield');
+
+    expect(yieldEvent?.details.route).toBe('storage-r08-c24>storage-r08-c23');
+    expect(empty?.routeNodeIds.slice(0, 2)).toEqual(['storage-r08-c24', 'storage-r08-c23']);
+    expect(empty?.targetNodeId).toBe('storage-r08-c23');
+    expect(empty?.routeNodeIds.slice(0, 2)).not.toEqual(['storage-r08-c24', 'right-row-08']);
+  });
+
   it('agent-minimal keeps a committed task route instead of reselecting at each node', () => {
     const scenario = createDefaultShuttleScenario({
       liftMode: 'all-inbound',
@@ -1629,7 +1816,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(storageColumns).toHaveLength(24);
     expect(storageNodes).toHaveLength(384);
     expect(storageRows.every((z) => storageNodes.filter((node) => node.z === z).length === storageColumns.length)).toBe(true);
-    expect(fifoLaneEdges).toHaveLength(storageRows.length * (storageColumns.length + 1) + 12);
+    expect(fifoLaneEdges).toHaveLength(storageRows.length * (storageColumns.length + 1) + 224);
     expect(fifoLaneEdges.every((edge) => edge.directionMode === 'twoWay')).toBe(true);
     expect(storageColumnGaps.filter((gap) => gap > 1.3)).toHaveLength(3);
     expect(storageColumnGaps.filter((gap) => gap <= 1.3)).toHaveLength(20);
@@ -1721,12 +1908,12 @@ describe('shuttle phase 0 SimCore', () => {
       storageCellCount: 384,
       blockedCellCount: 0,
       structuralCellCount: 0,
-      trackBedCount: 496,
-      storageLaneTrackCount: 412,
+      trackBedCount: 830,
+      storageLaneTrackCount: 624,
       sideAisleTrackCount: 42,
       crossAisleTrackCount: 12,
-      inboundConnectorTrackCount: 11,
-      outboundConnectorTrackCount: 11,
+      inboundConnectorTrackCount: 72,
+      outboundConnectorTrackCount: 72,
       parkingConnectorTrackCount: 8,
       diagonalTrackCount: 0,
       inboundLiftPadCount: 4,
@@ -1818,7 +2005,7 @@ describe('shuttle phase 0 SimCore', () => {
       )
     ).toEqual(Array.from({ length: 16 }, () => Array.from({ length: 24 }, (_, columnIndex) => columnIndex + 1)));
     expect(contract.trackBeds.every((track) => track.orientation === 'x' || track.orientation === 'z')).toBe(true);
-    expect(contract.trackBeds.filter((track) => track.category === 'storageLane')).toHaveLength(412);
+    expect(contract.trackBeds.filter((track) => track.category === 'storageLane')).toHaveLength(624);
     expect(contract.trackBeds.find((track) => track.id === 'right-row-01-storage-r01-c24')).toMatchObject({
       category: 'storageLane',
       zM: -10.6,

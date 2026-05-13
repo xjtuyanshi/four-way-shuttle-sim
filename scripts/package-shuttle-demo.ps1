@@ -248,7 +248,7 @@ const scenario = createDefaultShuttleScenario({
     maxTasks: 16
   },
   trafficPolicy: {
-    controllerMode: 'agent-simple',
+    controllerMode: 'agent-refresh',
     liftApproachCapacity: 8,
     minimumClearanceSec: 0.4,
     deadlockDetectSec: 2,
