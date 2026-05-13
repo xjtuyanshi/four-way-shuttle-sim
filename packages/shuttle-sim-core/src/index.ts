@@ -2043,9 +2043,12 @@ export class ShuttleSimCore {
     if (!vehicle.taskId) {
       this.clearTasklessRouteReservations(vehicle);
     }
+    const agentMinimal = this.agentMinimalEnabled();
     const agentSimple = this.agentSimpleEnabled();
     vehicle.taskId = task.id;
-    if (agentSimple) {
+    if (agentMinimal) {
+      this.installAgentTaskRoute(vehicle, task, task.pickupNodeId);
+    } else if (agentSimple) {
       this.resetNavigationAtCurrentNode(vehicle);
     } else {
       vehicle.routeNodeIds = route;
@@ -2071,9 +2074,19 @@ export class ShuttleSimCore {
       agentSimple ? 'nearest-available-agent-goal' : 'nearest-available',
       this.vehiclePosition(vehicle),
       agentSimple
-        ? { pickupNodeId: task.pickupNodeId, dropoffNodeId: task.dropoffNodeId, dispatcherRouteInstalled: false }
+        ? agentMinimal
+          ? { pickupNodeId: task.pickupNodeId, dropoffNodeId: task.dropoffNodeId, dispatcherRouteInstalled: false, route: vehicle.routeNodeIds.join('>') }
+          : { pickupNodeId: task.pickupNodeId, dropoffNodeId: task.dropoffNodeId, dispatcherRouteInstalled: false }
         : { route: route.join('>') }
     );
+  }
+
+  private installAgentTaskRoute(vehicle: MutableVehicle, task: TaskStateRecord, goalNodeId: string): string[] {
+    const route = this.agentNominalRouteToGoal(vehicle, task, goalNodeId);
+    vehicle.routeNodeIds = route;
+    vehicle.routeIndex = 0;
+    vehicle.targetNodeId = route[1] ?? null;
+    return route;
   }
 
   private resetNavigationAtCurrentNode(vehicle: MutableVehicle): void {
@@ -3460,6 +3473,17 @@ export class ShuttleSimCore {
       }
       vehicle.state = 'assigned';
       this.logEvent('lift-complete', vehicle.id, task.id, task.loadId, task.pickupNodeId, vehicle.currentNodeId, 'lift-time-elapsed', this.vehiclePosition(vehicle), {});
+      if (this.agentMinimalEnabled()) {
+        const route = this.installAgentTaskRoute(vehicle, task, task.dropoffNodeId);
+        vehicle.waitReason = null;
+        vehicle.blockingReservationId = null;
+        vehicle.blockingVehicleId = null;
+        vehicle.directionSwitchReadyNodeId = null;
+        this.logEvent('route-replanned', vehicle.id, task.id, task.loadId, vehicle.currentNodeId, route.at(-1) ?? null, 'loaded-shortest-path', this.vehiclePosition(vehicle), {
+          route: route.join('>')
+        });
+        return;
+      }
       if (this.agentSimpleEnabled()) {
         this.resetNavigationAtCurrentNode(vehicle);
         vehicle.waitReason = null;
@@ -3695,8 +3719,6 @@ export class ShuttleSimCore {
 
   private agentRouteToGoal(vehicle: MutableVehicle, task: TaskStateRecord | null, goalNodeId: string): string[] {
     if (this.agentMinimalEnabled()) {
-      const directRoute = this.agentNominalRouteToGoal(vehicle, task, goalNodeId);
-
       const committedYieldRoute = this.agentCommittedYieldRoute(vehicle, goalNodeId);
       if (committedYieldRoute) {
         const committedNextNodeId = committedYieldRoute[1] ?? null;
@@ -3708,19 +3730,15 @@ export class ShuttleSimCore {
       const committedRoute = this.agentCommittedRoute(vehicle, goalNodeId);
       if (committedRoute) {
         const committedNextNodeId = committedRoute[1] ?? null;
-        const directRouteKey = directRoute.join('>');
-        const committedRouteKey = committedRoute.join('>');
         if (
           committedNextNodeId &&
-          committedRouteKey !== directRouteKey &&
-          this.agentLocalRerouteAcceptable(directRoute, committedRoute) &&
           (!this.collisionAvoidanceEnabled() || !this.agentMinimalMoveBlocker(vehicle, committedNextNodeId))
         ) {
           return committedRoute;
         }
       }
 
-      return directRoute;
+      return this.agentNominalRouteToGoal(vehicle, task, goalNodeId);
     }
 
     const committedRoute = this.agentCommittedRoute(vehicle, goalNodeId);
@@ -5824,6 +5842,15 @@ export class ShuttleSimCore {
       return {
         plannedGoalNodeId: goalNodeId,
         plannedRouteNodeIds: goalNodeId ? [vehicle.currentNodeId] : [],
+        localRouteNodeIds: [],
+        localRouteReason: null
+      };
+    }
+
+    if (this.agentMinimalEnabled() && activeRoute.length >= 2 && activeRoute.at(-1) === goalNodeId) {
+      return {
+        plannedGoalNodeId: goalNodeId,
+        plannedRouteNodeIds: activeRoute,
         localRouteNodeIds: [],
         localRouteReason: null
       };

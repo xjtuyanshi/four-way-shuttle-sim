@@ -911,6 +911,95 @@ describe('shuttle phase 0 SimCore', () => {
     expect(vehicle?.blockingVehicleId).toBe('SH-02');
   });
 
+  it('agent-minimal installs a shortest pickup route when the task is assigned', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-minimal'
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['main-north-05']);
+    sim.addLoadForTest({ id: 'pickup-load', state: 'waiting', nodeId: 'outbound-lift-top-02', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'pickup-task',
+      kind: 'inbound',
+      state: 'queued',
+      createdAtSec: 0,
+      assignedAtSec: null,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'outbound-lift-top-02',
+      dropoffNodeId: 'storage-r08-c20',
+      loadId: 'pickup-load',
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: null
+    });
+
+    const state = sim.step(0.2);
+    const vehicle = state.vehicles[0]!;
+    const assigned = sim.getEventLog().find((event) => event.eventType === 'task-assigned' && event.taskId === 'pickup-task');
+
+    expect(assigned?.details.dispatcherRouteInstalled).toBe(false);
+    expect(assigned?.details.route).toBe('main-north-05>main-north-04>outbound-lift-top-02');
+    expect(vehicle.routeNodeIds).toEqual(['main-north-05', 'main-north-04', 'outbound-lift-top-02']);
+    expect(vehicle.plannedRouteNodeIds).toEqual(['main-north-05', 'main-north-04', 'outbound-lift-top-02']);
+    expect(vehicle.localRouteNodeIds).toEqual([]);
+  });
+
+  it('agent-minimal keeps a committed task route instead of reselecting at each node', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-minimal'
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['main-north-05', 'main-south-05', 'main-south-04', 'outbound-lift-top-02']);
+    sim.addLoadForTest({ id: 'committed-load', state: 'waiting', nodeId: 'outbound-lift-top-02', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'committed-task',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'outbound-lift-top-02',
+      dropoffNodeId: 'storage-r08-c20',
+      loadId: 'committed-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleTaskForTest('SH-01', 'committed-task', false);
+
+    const state = sim.step(0.2);
+    const vehicle = state.vehicles[0]!;
+
+    expect(vehicle.targetNodeId).toBe('main-south-05');
+    expect(vehicle.routeNodeIds).toEqual(['main-north-05', 'main-south-05', 'main-south-04', 'outbound-lift-top-02']);
+    expect(vehicle.plannedRouteNodeIds).toEqual(['main-north-05', 'main-south-05', 'main-south-04', 'outbound-lift-top-02']);
+    expect(vehicle.localRouteNodeIds).toEqual([]);
+  });
+
   it('agent-minimal does not stop for a same-target claimant until both vehicles are close to the target', () => {
     const scenario = createDefaultShuttleScenario({
       liftMode: 'all-inbound',
