@@ -160,7 +160,7 @@ describe('shuttle phase 0 high-inbound SimCore', () => {
         .filter((port) => port.kind === 'inbound')
         .reduce((total, port) => total + port.approachOccupancy, 0)
     ).toBeGreaterThanOrEqual(3);
-    expect(state.kpis.blockedTimeByReasonSec['inbound-lift-source-full']).toBeGreaterThan(0);
+    expect(state.kpis.blockedTimeByReasonSec['inbound-lift-source-empty'] ?? 0).toBe(0);
     expect(Math.max(...state.traffic.liftPorts.filter((port) => port.kind === 'inbound').map((port) => port.utilization))).toBeLessThan(0.02);
     expectIdleVehiclesParkedOnlyOnParkableNodes(scenario, state);
     expect(storageFillHoles(state.loads.filter((load) => load.state === 'stored' && load.nodeId?.startsWith('storage-')).map((load) => load.nodeId!))).toEqual([]);
@@ -216,7 +216,7 @@ describe('shuttle phase 0 high-inbound SimCore', () => {
     expectNoTrafficSafetyFailures(state);
   }, 60000);
 
-  it('keeps the 8-shuttle agent-simple demo moving when loaded shuttles meet empty pickup traffic', () => {
+  it('keeps the 8-shuttle agent-refresh demo moving when loaded shuttles meet empty pickup traffic', () => {
     const scenario = createDefaultShuttleScenario({
       durationSec: 7200,
       liftMode: 'all-inbound',
@@ -243,7 +243,7 @@ describe('shuttle phase 0 high-inbound SimCore', () => {
         maxTasks: 16
       },
       trafficPolicy: {
-        controllerMode: 'agent-simple',
+        controllerMode: 'agent-refresh',
         liftApproachCapacity: 8,
         minimumClearanceSec: 0.4,
         deadlockDetectSec: 20

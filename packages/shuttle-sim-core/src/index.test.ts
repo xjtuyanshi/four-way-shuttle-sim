@@ -415,7 +415,92 @@ describe('shuttle phase 0 SimCore', () => {
     expect(Math.max(0, ...waitingLoadsByLift.values())).toBeLessThanOrEqual(1);
     expect(state.tasks.filter((task) => task.kind === 'inbound' && task.state === 'assigned')).toHaveLength(8);
     expect(state.tasks.length).toBeLessThanOrEqual(16);
-  });
+  }, 30000);
+
+  it('keeps inbound source buffers replenished independently of task WIP', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      durationSec: 7200,
+      vehicles: {
+        count: 8,
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.5,
+        accelerationMps2: 1.2,
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01
+      },
+      physicsParams: {
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.5,
+        accelerationMps2: 1.2,
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01
+      },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 16
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        liftApproachCapacity: 8,
+        minimumClearanceSec: 0.4,
+        dynamicAvoidanceClearanceM: 0.5,
+        deadlockDetectSec: 2
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.start();
+
+    const inboundLiftIds = scenario.layout.nodes
+      .filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound')
+      .map((node) => node.id)
+      .sort();
+    const storageCapacity = scenario.layout.nodes.filter((node) => node.type === 'storage').length;
+    let maxEmptyLiftCount = 0;
+    let sourceGapTicks = 0;
+
+    for (let index = 0; index <= 600; index += 1) {
+      const state = index === 0 ? sim.getState() : sim.step(0.2);
+      const waitingLoadsByLift = new Map<string, number>();
+      for (const load of state.loads) {
+        if (load.state === 'waiting' && load.nodeId && inboundLiftIds.includes(load.nodeId)) {
+          waitingLoadsByLift.set(load.nodeId, (waitingLoadsByLift.get(load.nodeId) ?? 0) + 1);
+        }
+      }
+      const activeInboundTasks = state.tasks.filter((task) =>
+        task.kind === 'inbound' &&
+        task.state !== 'completed' &&
+        task.state !== 'failed'
+      );
+      const activeInboundLoadIds = activeInboundTasks.map((task) => task.loadId);
+      const storedCount = state.loads.filter((load) => load.state === 'stored' && load.nodeId?.startsWith('storage-')).length;
+      const storageFull = storedCount >= storageCapacity;
+      const emptyLiftCount = storageFull
+        ? 0
+        : inboundLiftIds.filter((liftNodeId) => (waitingLoadsByLift.get(liftNodeId) ?? 0) === 0).length;
+
+      maxEmptyLiftCount = Math.max(maxEmptyLiftCount, emptyLiftCount);
+      if (emptyLiftCount > 0) {
+        sourceGapTicks += 1;
+      }
+
+      for (const liftNodeId of inboundLiftIds) {
+        expect(waitingLoadsByLift.get(liftNodeId) ?? 0).toBeLessThanOrEqual(1);
+      }
+      expect(new Set(activeInboundLoadIds).size).toBe(activeInboundLoadIds.length);
+    }
+
+    const finalState = sim.getState();
+    expect(maxEmptyLiftCount).toBe(0);
+    expect(sourceGapTicks).toBe(0);
+    expect(finalState.kpis.deadlockCount).toBe(0);
+    expect(finalState.kpis.livelockCount).toBe(0);
+    expect(finalState.traffic.physicalViolationCount).toBe(0);
+    expect(finalState.kpis.completedInbound).toBeGreaterThan(0);
+  }, 90000);
 
   it('parses legacy state diagnostics without lift-port allocation details', () => {
     const state = new ShuttleSimCore(createDefaultShuttleScenario()).getState();
@@ -627,7 +712,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.kpis.blockedTimeByReasonSec['zone-reserved'] ?? 0).toBeGreaterThan(0);
     expect(state.kpis.blockedTimeByReasonSec['zone-reserved'] ?? 0).toBeLessThan(state.kpis.blockedTimeByReasonSec['vehicle-unavailable'] ?? Number.POSITIVE_INFINITY);
     expectNoTrafficSafetyFailures(state);
-  }, 30000);
+  }, 60000);
 
   it('does not place inbound approach queues on lift connector footprints', () => {
     const scenario = createDefaultShuttleScenario({

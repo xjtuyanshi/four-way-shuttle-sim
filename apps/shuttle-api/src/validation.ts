@@ -371,7 +371,12 @@ function bottleneckCategoryForReason(reason: string): BottleneckCategory {
     reason.startsWith('inbound-lift-approach-full:') ||
     reason.startsWith('outbound-lift-approach-full:')
   ) return 'liftPort';
-  if (reason === 'inbound-lift-source-full' || reason === 'outbound-lift-unavailable') return 'liftSource';
+  if (
+    reason === 'inbound-lift-source-full' ||
+    reason === 'inbound-lift-source-empty' ||
+    reason === 'inbound-lift-source-assigned' ||
+    reason === 'outbound-lift-unavailable'
+  ) return 'liftSource';
   if (reason === 'vehicle-unavailable') return 'vehicleFleet';
   if (reason === 'zone-hold' || reason === 'legacy-zone-reserved') return 'legacyReservation';
   if (reason === 'zone-reserved') return 'intersectionToken';

@@ -76,6 +76,11 @@ const scenario = createDefaultShuttleScenario({
 
 const graph = buildGraph(scenario);
 const nodesById = new Map(scenario.layout.nodes.map((node) => [node.id, node]));
+const inboundLiftNodeIds = scenario.layout.nodes
+  .filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound')
+  .map((node) => node.id)
+  .sort();
+const storageNodeCount = scenario.layout.nodes.filter((node) => node.type === 'storage').length;
 const sim = new ShuttleSimCore(scenario);
 const traces = new Map<string, VehicleTrace>();
 const anomalies: Anomaly[] = [];
@@ -143,11 +148,63 @@ function auditState(current: ShuttleSimState): void {
 
   auditPhysicalCommonSense(current);
   auditTaskCommonSense(current);
+  auditInboundSourceBuffers(current);
   auditLoadedRoutesThroughStoredLoads(current);
   for (const vehicle of current.vehicles) {
     auditVehicleTrace(current, vehicle);
     auditVehicleCommonSense(current, vehicle);
     auditRouteDetour(current, vehicle);
+  }
+}
+
+function auditInboundSourceBuffers(current: ShuttleSimState): void {
+  if (scenario.taskGeneration.inboundRatePerHour <= 0 || inboundLiftNodeIds.length === 0) {
+    return;
+  }
+
+  const inboundLiftIdSet = new Set(inboundLiftNodeIds);
+  const waitingLoadsByLift = new Map<string, string[]>();
+  for (const load of current.loads) {
+    if (load.state !== 'waiting' || !load.nodeId || !inboundLiftIdSet.has(load.nodeId)) {
+      continue;
+    }
+    waitingLoadsByLift.set(load.nodeId, [...(waitingLoadsByLift.get(load.nodeId) ?? []), load.id]);
+  }
+
+  for (const [liftNodeId, loadIds] of waitingLoadsByLift) {
+    if (loadIds.length > 1) {
+      addAnomaly(current.simTimeSec, null, 'lift-source-buffer-overfilled', 'critical', `${liftNodeId}: ${loadIds.join(',')}`);
+    }
+  }
+
+  const storedCount = current.loads.filter((load) => load.state === 'stored' && load.nodeId?.startsWith('storage-')).length;
+  const storageFull = storageNodeCount > 0 && storedCount >= storageNodeCount;
+  if (!storageFull) {
+    const emptyLiftIds = inboundLiftNodeIds.filter((liftNodeId) => (waitingLoadsByLift.get(liftNodeId) ?? []).length === 0);
+    if (emptyLiftIds.length > 0) {
+      addAnomaly(
+        current.simTimeSec,
+        null,
+        'inbound-source-buffer-empty',
+        'critical',
+        `empty=${emptyLiftIds.join(',')} stored=${storedCount}/${storageNodeCount}`
+      );
+    }
+  }
+
+  const activeInboundTasks = current.tasks.filter((task) =>
+    task.kind === 'inbound' &&
+    task.state !== 'completed' &&
+    task.state !== 'failed'
+  );
+  const tasksByLoadId = new Map<string, string[]>();
+  for (const task of activeInboundTasks) {
+    tasksByLoadId.set(task.loadId, [...(tasksByLoadId.get(task.loadId) ?? []), task.id]);
+  }
+  for (const [loadId, taskIds] of tasksByLoadId) {
+    if (taskIds.length > 1) {
+      addAnomaly(current.simTimeSec, null, 'duplicate-active-inbound-source-task', 'critical', `${loadId}: ${taskIds.join(',')}`);
+    }
   }
 }
 

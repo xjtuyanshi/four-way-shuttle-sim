@@ -1100,6 +1100,7 @@ export class ShuttleSimCore {
   private recentEvents: EventLogEntry[] = [];
   private eventSequence = 0;
   private taskSequence = 0;
+  private sourceLoadSequence = 0;
   private nextInboundSec = 0;
   private nextOutboundSec = 0;
   private completedTaskCycleTimes: number[] = [];
@@ -1155,6 +1156,7 @@ export class ShuttleSimCore {
     this.recentEvents = [];
     this.eventSequence = 0;
     this.taskSequence = 0;
+    this.sourceLoadSequence = 0;
     this.completedTaskCycleTimes = [];
     this.completedTaskWaitTimes = [];
     this.completedInbound = 0;
@@ -1330,9 +1332,11 @@ export class ShuttleSimCore {
     this.simTimeSec = round(this.simTimeSec + stepSec);
     this.reservations = this.reservations.filter((reservation) => reservation.endTimeSec >= this.simTimeSec - 1);
 
+    this.replenishInboundSourceBuffers();
     this.generateDueTasks(stepSec);
     this.assignQueuedTasks(stepSec);
     this.advanceVehicles(stepSec);
+    this.replenishInboundSourceBuffers();
     this.updateLiftPortUtilization(stepSec);
     this.updateDeadlockSmokeCounters();
 
@@ -1573,15 +1577,17 @@ export class ShuttleSimCore {
       return { created: false, reason: kind === 'inbound' ? 'storage-full' : 'storage-empty' };
     }
 
-    const liftNodeId = this.selectLiftPortNodeId(kind, storageSelection.nodeId);
+    const inboundSourceSelection = kind === 'inbound' ? this.selectInboundSourceLoadForTask(storageSelection.nodeId) : null;
+    const liftNodeId = kind === 'inbound'
+      ? inboundSourceSelection?.liftNodeId ?? null
+      : this.selectLiftPortNodeId(kind, storageSelection.nodeId);
     if (!liftNodeId) {
-      return { created: false, reason: kind === 'inbound' ? 'inbound-lift-source-full' : 'outbound-lift-unavailable' };
+      return { created: false, reason: kind === 'inbound' ? this.inboundSourceUnavailableReason() : 'outbound-lift-unavailable' };
     }
 
     this.taskSequence += 1;
     const taskId = `task-${String(this.taskSequence).padStart(4, '0')}`;
-    const generatedLoadId = `load-${String(this.taskSequence).padStart(4, '0')}`;
-    const loadId = kind === 'inbound' ? generatedLoadId : storageSelection.loadId;
+    const loadId = kind === 'inbound' ? inboundSourceSelection!.loadId : storageSelection.loadId;
     const pickupNodeId = kind === 'inbound' ? liftNodeId : storageSelection.nodeId;
     const dropoffNodeId = kind === 'inbound' ? storageSelection.nodeId : liftNodeId;
     const task: TaskStateRecord = {
@@ -1599,16 +1605,6 @@ export class ShuttleSimCore {
       replanCount: 0,
       waitReason: null
     };
-    if (kind === 'inbound') {
-      const load: LoadStateRecord = {
-        id: loadId,
-        state: 'waiting',
-        nodeId: pickupNodeId,
-        vehicleId: null,
-        weightKg: 450 + Math.round(this.rng.next() * 350)
-      };
-      this.loads.push(load);
-    }
     this.tasks.push(task);
     this.logEvent('task-created', null, task.id, loadId, null, pickupNodeId, 'task-generation', nodePosition(this.scenario, pickupNodeId), {
       kind,
@@ -1639,11 +1635,74 @@ export class ShuttleSimCore {
     return kind === 'inbound' ? null : fallbackNodeId;
   }
 
+  private replenishInboundSourceBuffers(): void {
+    if (this.scenario.taskGeneration.inboundRatePerHour <= 0) {
+      return;
+    }
+
+    for (const liftNode of this.inboundLiftNodes()) {
+      if (this.inboundLiftWaitingSourceLoad(liftNode.id)) {
+        continue;
+      }
+      this.sourceLoadSequence += 1;
+      const load: LoadStateRecord = {
+        id: `source-load-${String(this.sourceLoadSequence).padStart(5, '0')}`,
+        state: 'waiting',
+        nodeId: liftNode.id,
+        vehicleId: null,
+        weightKg: 450 + Math.round(this.rng.next() * 350)
+      };
+      this.loads.push(load);
+      this.logEvent('source-load-replenished', null, null, load.id, null, liftNode.id, 'inbound-source-buffer-refill', nodePosition(this.scenario, liftNode.id), {});
+    }
+  }
+
+  private selectInboundSourceLoadForTask(relatedNodeId: string): { liftNodeId: string; loadId: string } | null {
+    const assignedLoadIds = new Set(
+      this.tasks
+        .filter((task) => task.kind === 'inbound' && task.state !== 'completed' && task.state !== 'failed')
+        .map((task) => task.loadId)
+    );
+    const relatedNode = this.scenario.layout.nodes.find((node) => node.id === relatedNodeId);
+    const candidates = this.inboundLiftNodes()
+      .flatMap((liftNode) => {
+        const sourceLoad = this.inboundLiftWaitingSourceLoad(liftNode.id);
+        return sourceLoad && !assignedLoadIds.has(sourceLoad.id)
+          ? [{
+              liftNodeId: liftNode.id,
+              loadId: sourceLoad.id,
+              plannedLoad: this.liftPortPlannedLoad('inbound', liftNode.id),
+              distanceM: relatedNode ? Math.abs(liftNode.z - relatedNode.z) + Math.abs(liftNode.x - relatedNode.x) : 0
+            }]
+          : [];
+      })
+      .sort((left, right) =>
+        left.plannedLoad - right.plannedLoad ||
+        left.distanceM - right.distanceM ||
+        left.liftNodeId.localeCompare(right.liftNodeId)
+      );
+    return candidates[0] ? { liftNodeId: candidates[0].liftNodeId, loadId: candidates[0].loadId } : null;
+  }
+
+  private inboundLiftWaitingSourceLoad(liftNodeId: string): LoadStateRecord | null {
+    return this.loads
+      .filter((load) => load.state === 'waiting' && load.nodeId === liftNodeId && load.vehicleId === null)
+      .sort((left, right) => left.id.localeCompare(right.id))[0] ?? null;
+  }
+
+  private inboundSourceUnavailableReason(): string {
+    const waitingSourceLoadCount = this.inboundLiftNodes()
+      .filter((liftNode) => this.inboundLiftWaitingSourceLoad(liftNode.id))
+      .length;
+    return waitingSourceLoadCount > 0 ? 'inbound-lift-source-assigned' : 'inbound-lift-source-empty';
+  }
+
   private primeInboundSourceBacklog(): void {
     if (!this.shouldPrimeInboundSourceBacklog()) {
       return;
     }
 
+    this.replenishInboundSourceBuffers();
     const inboundLiftCount = this.scenario.layout.nodes.filter((node) => liftKindForNode(node) === 'inbound').length;
     const targetTaskCount = Math.min(inboundLiftCount, this.scenario.taskGeneration.maxTasks);
     while (this.activeTaskCount() < targetTaskCount) {
@@ -1668,21 +1727,7 @@ export class ShuttleSimCore {
   }
 
   private inboundLiftHasWaitingSourceLoad(liftNodeId: string): boolean {
-    return this.tasks.some((task) => {
-      if (
-        task.kind !== 'inbound' ||
-        task.state === 'completed' ||
-        task.state === 'failed' ||
-        task.pickupNodeId !== liftNodeId
-      ) {
-        return false;
-      }
-      return this.loads.some((load) =>
-        load.id === task.loadId &&
-        load.state === 'waiting' &&
-        load.nodeId === liftNodeId
-      );
-    });
+    return this.inboundLiftWaitingSourceLoad(liftNodeId) !== null;
   }
 
   private liftPortPlannedLoad(kind: 'inbound' | 'outbound', liftNodeId: string): number {
@@ -2013,25 +2058,29 @@ export class ShuttleSimCore {
     }
 
     const inboundTaskOrdinal = this.tasks.filter((task) => task.kind === 'inbound').length + 1;
-    const lane = lanes[(inboundTaskOrdinal - 1) % lanes.length]!;
-    const rowLabel = this.nodeStorageRowLabel(lane[0]?.id ?? '');
-    if (rowLabel && this.activeInboundStorageRowTaskCount(rowLabel) > 0) {
-      return null;
-    }
-
     const occupancy = this.storageNodeLoadOccupancy(true);
-    const firstEmptyIndex = lane.findIndex((node) => !occupancy.has(node.id) && !this.currentNodeOccupancy.has(node.id));
-    if (firstEmptyIndex < 0) {
-      return null;
+    for (let offset = 0; offset < lanes.length; offset += 1) {
+      const lane = lanes[(inboundTaskOrdinal - 1 + offset) % lanes.length]!;
+      const rowLabel = this.nodeStorageRowLabel(lane[0]?.id ?? '');
+      if (rowLabel && this.activeInboundStorageRowTaskCount(rowLabel) > 0) {
+        continue;
+      }
+
+      const firstEmptyIndex = lane.findIndex((node) => !occupancy.has(node.id) && !this.currentNodeOccupancy.has(node.id));
+      if (firstEmptyIndex < 0) {
+        continue;
+      }
+
+      const occupiedTowardOutfeed = lane.slice(0, firstEmptyIndex).every((leftSideNode) => occupancy.has(leftSideNode.id));
+      const emptyTowardInfeed = lane.slice(firstEmptyIndex + 1).every((rightSideNode) => !occupancy.has(rightSideNode.id));
+      if (!occupiedTowardOutfeed || !emptyTowardInfeed) {
+        continue;
+      }
+
+      return { nodeId: lane[firstEmptyIndex]!.id, loadId: '' };
     }
 
-    const occupiedTowardOutfeed = lane.slice(0, firstEmptyIndex).every((leftSideNode) => occupancy.has(leftSideNode.id));
-    const emptyTowardInfeed = lane.slice(firstEmptyIndex + 1).every((rightSideNode) => !occupancy.has(rightSideNode.id));
-    if (!occupiedTowardOutfeed || !emptyTowardInfeed) {
-      return null;
-    }
-
-    return { nodeId: lane[firstEmptyIndex]!.id, loadId: '' };
+    return null;
   }
 
   private activeStorageRowTaskCount(rowLabel: string): number {
