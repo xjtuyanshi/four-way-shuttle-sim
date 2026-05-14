@@ -545,7 +545,12 @@ function trackIntentionalRetreats(current: ShuttleSimState): void {
     if (
       event.vehicleId &&
       event.eventType === 'route-replanned' &&
-      (event.reason === 'loaded-retreats-from-faceoff' || event.reason === 'empty-retreats-to-local-yield')
+      (
+        event.reason === 'agent-refresh-near-faceoff-yield' ||
+        event.reason === 'agent-refresh-side-yield' ||
+        event.reason === 'loaded-retreats-from-faceoff' ||
+        event.reason === 'empty-retreats-to-local-yield'
+      )
     ) {
       intentionalRetreatUntilSec.set(event.vehicleId, Math.max(intentionalRetreatUntilSec.get(event.vehicleId) ?? 0, event.timeSec + 30));
     }

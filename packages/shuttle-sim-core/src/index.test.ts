@@ -1601,6 +1601,63 @@ describe('shuttle phase 0 SimCore', () => {
     expect(shuttle?.currentEdgeId).toBe('storage-r12-c13-outbound-lift-top-01-row-12-transfer');
   });
 
+  it('agent-refresh does not pre-yield adjacent loaded lift-column moves before near contact', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      durationSec: 30,
+      vehicles: {
+        count: 8,
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.5,
+        accelerationMps2: 1.2,
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01
+      },
+      physicsParams: {
+        emptySpeedMps: 2,
+        loadedSpeedMps: 1.5,
+        accelerationMps2: 1.2,
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01
+      },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 16
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        liftApproachCapacity: 8,
+        dynamicAvoidanceClearanceM: 0.5,
+        deadlockDetectSec: 2
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.start();
+    for (let index = 0; index < 40; index += 1) {
+      sim.advanceByInPlace(0.2);
+    }
+
+    const state = sim.getState();
+    const shuttle8 = state.vehicles.find((vehicle) => vehicle.id === 'SH-08');
+    const earlyColumnYield = sim.getEventLog().find((event) =>
+      event.timeSec <= 8 &&
+      event.vehicleId === 'SH-08' &&
+      event.reason === 'lift-column-near'
+    );
+
+    expect(shuttle8?.waitReason).toBeNull();
+    expect(shuttle8?.blockingVehicleId).toBeNull();
+    expect(shuttle8?.localRouteNodeIds).toEqual([]);
+    expect(earlyColumnYield).toBeUndefined();
+    expect(state.traffic.conflictSessions.some((session) =>
+      session.participantVehicleIds.includes('SH-02') &&
+      session.participantVehicleIds.includes('SH-08')
+    )).toBe(false);
+  });
+
   it('agent-refresh does not keep a cleared side-yield shuttle waiting on far lift-column traffic', () => {
     const scenario = createDefaultShuttleScenario({
       liftMode: 'all-inbound',
