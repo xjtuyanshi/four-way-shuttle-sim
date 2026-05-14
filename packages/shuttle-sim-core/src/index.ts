@@ -1395,6 +1395,14 @@ export class ShuttleSimCore {
     return this.status;
   }
 
+  getClock(): { simTimeSec: number; tickIndex: number; status: ShuttleSimState['status'] } {
+    return {
+      simTimeSec: round(this.simTimeSec),
+      tickIndex: this.tickIndex,
+      status: this.status
+    };
+  }
+
   private stepInPlace(dtSec = this.scenario.timeStepSec): void {
     if (this.status === 'idle') {
       this.status = 'running';
@@ -1435,7 +1443,7 @@ export class ShuttleSimCore {
     return this.getState();
   }
 
-  advanceBy(dtSec: number): ShuttleSimState {
+  advanceByInPlace(dtSec: number): void {
     const maxStepSec = Math.max(0.001, this.scenario.timeStepSec);
     let remainingSec = dtSec;
     while (remainingSec > 1e-9 && this.status === 'running') {
@@ -1443,6 +1451,10 @@ export class ShuttleSimCore {
       this.stepInPlace(stepSec);
       remainingSec -= stepSec;
     }
+  }
+
+  advanceBy(dtSec: number): ShuttleSimState {
+    this.advanceByInPlace(dtSec);
     return this.getState();
   }
 

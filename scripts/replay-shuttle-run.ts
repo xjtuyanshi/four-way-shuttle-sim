@@ -110,7 +110,7 @@ let snapshotIndex = snapshots.findIndex((record) => record.tickIndex > startSnap
 if (snapshotIndex < 0) snapshotIndex = snapshots.length;
 
 function applyDueCommands(): void {
-  const tickIndex = sim.createSnapshot().tickIndex;
+  const tickIndex = sim.getClock().tickIndex;
   while (commandIndex < commands.length && commands[commandIndex]!.appliedTickIndex <= tickIndex) {
     const command = commands[commandIndex]!;
     applyCommand(sim, command);
@@ -144,12 +144,12 @@ function assertDueSnapshots(): void {
 applyDueCommands();
 assertDueSnapshots();
 
-while (sim.createSnapshot().simTimeSec < toSec - 1e-9) {
-  const state = sim.getState();
-  if (state.status === 'idle' || state.status === 'paused') {
+while (sim.getClock().simTimeSec < toSec - 1e-9) {
+  const clock = sim.getClock();
+  if (clock.status === 'idle' || clock.status === 'paused') {
     sim.resume();
   }
-  sim.step(fixedDtSec);
+  sim.advanceByInPlace(fixedDtSec);
   applyDueCommands();
   assertDueSnapshots();
 }

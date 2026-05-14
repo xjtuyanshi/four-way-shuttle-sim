@@ -91,8 +91,10 @@ sim.start();
 let state = sim.getState();
 let nextSampleSec = 0;
 for (let elapsedSec = 0; elapsedSec < durationSec; elapsedSec = Number((elapsedSec + dtSec).toFixed(6))) {
-  state = sim.step(dtSec);
-  if (state.simTimeSec + 1e-6 >= nextSampleSec) {
+  sim.advanceByInPlace(dtSec);
+  const clock = sim.getClock();
+  if (clock.simTimeSec + 1e-6 >= nextSampleSec) {
+    state = sim.getState();
     auditState(state);
     nextSampleSec = Number((nextSampleSec + sampleSec).toFixed(6));
   }

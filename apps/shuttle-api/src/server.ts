@@ -248,7 +248,7 @@ function advanceLiveSimulation(deltaSec: number): void {
   const fixedDtSec = sim.getScenario().timeStepSec;
   let guard = 0;
   while (liveTickCreditSec + 1e-9 >= fixedDtSec && sim.getStatus() === 'running') {
-    sim.step(fixedDtSec);
+    sim.advanceByInPlace(fixedDtSec);
     liveTickCreditSec = Math.max(0, liveTickCreditSec - fixedDtSec);
     guard += 1;
     if (guard > 1000) {
@@ -283,7 +283,7 @@ app.get('/api/shuttle/playbackSpeed', (_request: Request, response: Response) =>
 });
 
 app.post('/api/shuttle/playbackSpeed', (request: Request, response: Response) => {
-  const receivedAtSimTimeSec = sim.getState().simTimeSec;
+  const receivedAtSimTimeSec = sim.getClock().simTimeSec;
   const speed = parsePlaybackSpeed(request.body?.speed);
   if (speed === null) {
     response.status(422).json({ ok: false, error: 'Playback speed must be greater than 0 and at most 20.' });
@@ -344,7 +344,7 @@ app.post('/api/shuttle/validatePhase0', async (request: Request, response: Respo
 
 app.post('/api/shuttle/loadScenario', (request: Request, response: Response, next: NextFunction) => {
   try {
-    const receivedAtSimTimeSec = sim.getState().simTimeSec;
+    const receivedAtSimTimeSec = sim.getClock().simTimeSec;
     const command = ShuttleCommandSchema.parse({ type: 'loadScenario', scenario: request.body });
     if (command.type !== 'loadScenario') throw new Error('Invalid loadScenario command');
     sim.loadScenario(command.scenario);
@@ -360,7 +360,7 @@ app.post('/api/shuttle/loadScenario', (request: Request, response: Response, nex
 
 app.post('/api/shuttle/reset', (request: Request, response: Response, next: NextFunction) => {
   try {
-    const receivedAtSimTimeSec = sim.getState().simTimeSec;
+    const receivedAtSimTimeSec = sim.getClock().simTimeSec;
     const command = ShuttleCommandSchema.parse({ type: 'reset', seed: request.body?.seed });
     if (command.type !== 'reset') throw new Error('Invalid reset command');
     sim.reset(command.seed);
@@ -376,7 +376,7 @@ app.post('/api/shuttle/reset', (request: Request, response: Response, next: Next
 
 app.post('/api/shuttle/pause', (_request: Request, response: Response, next: NextFunction) => {
   try {
-    const receivedAtSimTimeSec = sim.getState().simTimeSec;
+    const receivedAtSimTimeSec = sim.getClock().simTimeSec;
     sim.pause();
     recordTraceCommand('pause', {}, { ok: true }, receivedAtSimTimeSec);
     commandResponse(response);
@@ -387,7 +387,7 @@ app.post('/api/shuttle/pause', (_request: Request, response: Response, next: Nex
 
 app.post('/api/shuttle/resume', (_request: Request, response: Response, next: NextFunction) => {
   try {
-    const receivedAtSimTimeSec = sim.getState().simTimeSec;
+    const receivedAtSimTimeSec = sim.getClock().simTimeSec;
     sim.resume();
     recordTraceCommand('resume', {}, { ok: true }, receivedAtSimTimeSec);
     commandResponse(response);
@@ -398,7 +398,7 @@ app.post('/api/shuttle/resume', (_request: Request, response: Response, next: Ne
 
 app.post('/api/shuttle/setParam', (request: Request, response: Response, next: NextFunction) => {
   try {
-    const receivedAtSimTimeSec = sim.getState().simTimeSec;
+    const receivedAtSimTimeSec = sim.getClock().simTimeSec;
     const command = ShuttleCommandSchema.parse({ type: 'setParam', ...request.body });
     if (command.type !== 'setParam') throw new Error('Invalid setParam command');
     const result = sim.setParam(command.path, command.value);

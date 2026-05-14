@@ -506,6 +506,28 @@ function isAxisAlignedSegment(from: { x: number; z: number }, to: { x: number; z
   return Math.abs(from.x - to.x) <= tolerance || Math.abs(from.z - to.z) <= tolerance;
 }
 
+function remainingRouteNodeIds(vehicle: VehicleState, preferredNodeIds: string[]): string[] {
+  const fallback = vehicle.routeNodeIds.slice(Math.max(0, vehicle.routeIndex));
+  const source = preferredNodeIds.length >= 2 ? preferredNodeIds : fallback;
+  if (source.length < 2) {
+    return source;
+  }
+
+  if (vehicle.currentEdgeId && vehicle.targetNodeId) {
+    const targetIndex = source.indexOf(vehicle.targetNodeId);
+    if (targetIndex >= 0) {
+      return [vehicle.currentNodeId, ...source.slice(targetIndex)];
+    }
+  }
+
+  const currentIndex = source.indexOf(vehicle.currentNodeId);
+  if (currentIndex >= 0) {
+    return source.slice(currentIndex);
+  }
+
+  return fallback.length >= 2 ? fallback : source;
+}
+
 export function summarizeResourceUtilization(
   scenario: ShuttleScenario | null,
   state: ShuttleSimState | null
@@ -866,7 +888,7 @@ function AuthoritativeMap({
       })}
       {layers.routes && (state?.vehicles ?? [])
         .flatMap((vehicle) => [
-          ...routeSegments(vehicle, vehicle.plannedRouteNodeIds.length >= 2 ? vehicle.plannedRouteNodeIds : vehicle.routeNodeIds.slice(Math.max(0, vehicle.routeIndex)), 'planned'),
+          ...routeSegments(vehicle, remainingRouteNodeIds(vehicle, vehicle.plannedRouteNodeIds), 'planned'),
           ...routeSegments(vehicle, vehicle.localRouteNodeIds, 'local')
         ])
         .map((segment) => (
@@ -1059,9 +1081,7 @@ function CanvasLiteMap({
       if (layers.routes) {
         for (const vehicle of state?.vehicles ?? []) {
           const selected = selectedVehicleId === vehicle.id;
-          const plannedNodes = vehicle.plannedRouteNodeIds.length >= 2
-            ? vehicle.plannedRouteNodeIds
-            : vehicle.routeNodeIds.slice(Math.max(0, vehicle.routeIndex));
+          const plannedNodes = remainingRouteNodeIds(vehicle, vehicle.plannedRouteNodeIds);
           const color = vehicle.loaded ? '#4fc190' : vehicle.taskId ? '#56a9c9' : '#8d78ff';
           drawRoute(vehicle, plannedNodes, color, selected ? 4.8 : 3, selected ? 0.98 : 0.76);
           drawRoute(vehicle, vehicle.localRouteNodeIds, '#e2b84b', selected ? 5.5 : 4.2, selected ? 1 : 0.84);

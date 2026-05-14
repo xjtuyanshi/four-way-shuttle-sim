@@ -1177,6 +1177,28 @@ function isAxisAlignedRouteSegment(from: { x: number; z: number }, to: { x: numb
   return Math.abs(from.x - to.x) <= tolerance || Math.abs(from.z - to.z) <= tolerance;
 }
 
+function remainingRouteNodeIds(vehicle: VehicleState, preferredNodeIds: string[]): string[] {
+  const fallback = vehicle.routeNodeIds.slice(Math.max(0, vehicle.routeIndex));
+  const source = preferredNodeIds.length >= 2 ? preferredNodeIds : fallback;
+  if (source.length < 2) {
+    return source;
+  }
+
+  if (vehicle.currentEdgeId && vehicle.targetNodeId) {
+    const targetIndex = source.indexOf(vehicle.targetNodeId);
+    if (targetIndex >= 0) {
+      return [vehicle.currentNodeId, ...source.slice(targetIndex)];
+    }
+  }
+
+  const currentIndex = source.indexOf(vehicle.currentNodeId);
+  if (currentIndex >= 0) {
+    return source.slice(currentIndex);
+  }
+
+  return fallback.length >= 2 ? fallback : source;
+}
+
 function addRoutePath(
   group: THREE.Group,
   points: Array<{ x: number; z: number }>,
@@ -1320,9 +1342,7 @@ function updateDynamicScene(
     for (const vehicle of state?.vehicles ?? []) {
       const selected = selectedVehicleId === vehicle.id;
       const routeColor = vehicleRouteColor(vehicle);
-      const plannedRouteNodes = vehicle.plannedRouteNodeIds.length >= 2
-        ? vehicle.plannedRouteNodeIds
-        : vehicle.routeNodeIds.slice(Math.max(0, vehicle.routeIndex));
+      const plannedRouteNodes = remainingRouteNodeIds(vehicle, vehicle.plannedRouteNodeIds);
       const plannedRoutePoints = routePointsForNodeIds(runtime, vehicle, plannedRouteNodes);
       if (plannedRoutePoints.length >= 2) {
         addRoutePath(runtime.routeGroup, plannedRoutePoints, {
@@ -1436,8 +1456,8 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
     runtime.staticGroup.add(nodeMesh);
   }
 
-  runtime.root.scale.set(-1, 1, 1);
-  runtime.root.position.set(bounds.centerX * 2, 0, 0);
+  runtime.root.scale.set(1, 1, 1);
+  runtime.root.position.set(0, 0, 0);
   runtime.cameraTarget.set(bounds.centerX, 0, bounds.centerZ);
   const defaultCameraOffset = new THREE.Vector3(0, Math.max(13, bounds.size * 0.86), -bounds.size * 0.34);
   runtime.baseCameraDistance = defaultCameraOffset.length();
