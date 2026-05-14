@@ -547,6 +547,7 @@ function trackIntentionalRetreats(current: ShuttleSimState): void {
       event.eventType === 'route-replanned' &&
       (
         event.reason === 'agent-refresh-near-faceoff-yield' ||
+        event.reason === 'agent-refresh-forward-pocket-yield' ||
         event.reason === 'agent-refresh-side-yield' ||
         event.reason === 'loaded-retreats-from-faceoff' ||
         event.reason === 'empty-retreats-to-local-yield'

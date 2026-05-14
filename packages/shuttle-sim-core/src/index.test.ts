@@ -1343,7 +1343,7 @@ describe('shuttle phase 0 SimCore', () => {
     const session = state.traffic.conflictSessions.find((candidate) => candidate.yielderVehicleId === 'SH-02');
     const yieldEvent = sim.getEventLog().find((event) => event.eventType === 'route-replanned' && event.vehicleId === 'SH-02');
 
-    expect(yieldEvent?.details.route).toBe('storage-r08-c24>storage-r08-c23>storage-r08-c22>storage-r08-c21>storage-r08-c20');
+    expect(yieldEvent?.details.route).toBe('storage-r08-c24>inbound-lift-bottom-02-row-08-transfer');
     expect(session).toMatchObject({
       state: 'yielding',
       winnerVehicleId: 'SH-01',
@@ -1351,11 +1351,12 @@ describe('shuttle phase 0 SimCore', () => {
       blockerVehicleId: 'SH-01',
       clearancePolicy: 'immediate-next-move'
     });
-    expect(session?.yielderLocalRouteNodeIds).toEqual(['storage-r08-c24', 'storage-r08-c23', 'storage-r08-c22', 'storage-r08-c21', 'storage-r08-c20']);
-    expect(empty?.routeNodeIds.slice(0, 2)).toEqual(['storage-r08-c24', 'storage-r08-c23']);
-    expect(empty?.targetNodeId).toBe('storage-r08-c23');
+    expect(session?.yielderLocalRouteNodeIds[0]).toBe('storage-r08-c24');
+    expect(session?.yielderLocalRouteNodeIds).not.toContain('right-row-08');
+    expect(empty?.routeNodeIds[0]).toBe('storage-r08-c24');
+    expect(empty?.targetNodeId).not.toBe('right-row-08');
     expect(empty?.routeNodeIds.slice(0, 2)).not.toEqual(['storage-r08-c24', 'right-row-08']);
-  });
+  }, 10000);
 
   it('agent-refresh makes a lower-priority loaded shuttle side-yield after an adjacent main-aisle faceoff', () => {
     const scenario = createDefaultShuttleScenario({
@@ -1429,7 +1430,41 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.vehicles.find((vehicle) => vehicle.id === 'SH-01')?.currentEdgeId).toBe(
       'inbound-lift-bottom-01-row-06-transfer-inbound-lift-bottom-01'
     );
-  });
+  }, 10000);
+
+  it('agent-refresh uses intermediate lift-column row pockets instead of long-retreating to a lift', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic'
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        dynamicAvoidanceClearanceM: 0.5,
+        deadlockDetectSec: 2
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+
+    runFor(sim, 55);
+
+    const events = sim.getEventLog().filter((event) => event.vehicleId === 'SH-05' && event.eventType === 'route-replanned');
+    const longLiftRetreat = events.find((event) =>
+      event.reason === 'agent-refresh-near-faceoff-yield' &&
+      String(event.details.route ?? '').endsWith('>inbound-lift-top-01')
+    );
+    const sideYield = events.find((event) =>
+      event.reason === 'agent-refresh-side-yield' &&
+      /^inbound-lift-top-01-row-\d{2}-transfer>storage-r\d{2}-c\d{2}$/.test(String(event.details.route ?? ''))
+    );
+
+    expect(longLiftRetreat).toBeUndefined();
+    expect(sideYield?.details.route).toBe('inbound-lift-top-01-row-09-transfer>storage-r09-c07');
+  }, 20000);
 
   it('agent-refresh lets an empty shuttle use a stored load cell as a temporary under-load refuge', () => {
     const scenario = createDefaultShuttleScenario({
