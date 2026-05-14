@@ -515,6 +515,30 @@ export const TrafficWaitingVehicleSchema = z.object({
   blockingVehicleId: z.string().nullable()
 });
 
+export const ConflictSessionSchema = z.object({
+  id: z.string(),
+  kind: z.enum(['pair', 'resource']),
+  resourceKey: z.string(),
+  state: z.enum(['open', 'yielding', 'holding-pocket', 'returning', 'cleared', 'timed-out']),
+  participantVehicleIds: z.array(z.string()),
+  winnerVehicleId: z.string(),
+  yielderVehicleId: z.string(),
+  createdAtSec: z.number().nonnegative(),
+  createdAtTick: z.number().int().nonnegative(),
+  updatedAtSec: z.number().nonnegative(),
+  expiresAtSec: z.number().nonnegative(),
+  timeoutAtSec: z.number().nonnegative(),
+  trigger: z.enum(['head-on', 'same-node', 'column-exit', 'swept-footprint', 'deadlock-break']),
+  initialBlockerVehicleId: z.string(),
+  blockerVehicleId: z.string(),
+  yielderOriginalNodeId: z.string(),
+  yielderPocketNodeId: z.string().nullable(),
+  yielderLocalRouteNodeIds: z.array(z.string()),
+  resumeNodeId: z.string().nullable(),
+  clearancePolicy: z.enum(['immediate-next-move', 'short-horizon', 'full-route']),
+  closeReason: z.string().nullable()
+});
+
 export const LiftPortDiagnosticsSchema = z.object({
   nodeId: z.string(),
   kind: z.enum(['inbound', 'outbound']),
@@ -537,6 +561,7 @@ export const TrafficDiagnosticsSchema = z.object({
   legacyZoneHoldEnabled: z.boolean().default(false),
   activeReservationCount: z.number().int().nonnegative(),
   waitingVehicles: z.array(TrafficWaitingVehicleSchema),
+  conflictSessions: z.array(ConflictSessionSchema).default([]),
   liftPorts: z.array(LiftPortDiagnosticsSchema).default([]),
   deadlockCandidateVehicleIds: z.array(z.string()),
   minVehicleSeparationM: z.number().nonnegative().nullable(),
@@ -590,6 +615,7 @@ export type TaskStateRecord = z.infer<typeof TaskStateRecordSchema>;
 export type LoadStateRecord = z.infer<typeof LoadStateRecordSchema>;
 export type Reservation = z.infer<typeof ReservationSchema>;
 export type TrafficDiagnostics = z.infer<typeof TrafficDiagnosticsSchema>;
+export type ConflictSession = z.infer<typeof ConflictSessionSchema>;
 export type KpiSnapshot = z.infer<typeof KpiSnapshotSchema>;
 export type EventLogEntry = z.infer<typeof EventLogEntrySchema>;
 export type ShuttleSimState = z.infer<typeof ShuttleSimStateSchema>;

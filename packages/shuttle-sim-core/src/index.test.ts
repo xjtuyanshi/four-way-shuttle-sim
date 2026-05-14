@@ -7,6 +7,7 @@ import {
   calculateTravelTimeSec,
   createDefaultShuttleScenario,
   hashEventLog,
+  hashEngineSnapshot,
   motionProfileAt,
   summarizeScenarioStaticSceneContract,
   verticalStorageFootprintEdgeViolations
@@ -1160,6 +1161,63 @@ describe('shuttle phase 0 SimCore', () => {
     expect(shuttle8?.plannedRouteNodeIds).toEqual(shuttle8?.routeNodeIds);
   });
 
+  it('restores agent-refresh snapshots deterministically for replay debugging', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      durationSec: 120,
+      vehicles: {
+        count: 8,
+        emptySpeedMps: 3,
+        loadedSpeedMps: 2,
+        accelerationMps2: 2,
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01
+      },
+      physicsParams: {
+        emptySpeedMps: 3,
+        loadedSpeedMps: 2,
+        accelerationMps2: 2,
+        liftTimeSec: 0.01,
+        lowerTimeSec: 0.01,
+        switchDirectionSec: 0
+      },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 32
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        liftApproachCapacity: 8,
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.start();
+    for (let index = 0; index < 150; index += 1) {
+      sim.step(0.2);
+    }
+    const snapshot = sim.createSnapshot();
+    expect(hashEngineSnapshot(snapshot)).toBe(snapshot.stateHash);
+
+    for (let index = 0; index < 50; index += 1) {
+      sim.step(0.2);
+    }
+    const expected = sim.createSnapshot();
+
+    const replay = new ShuttleSimCore(scenario);
+    replay.restoreSnapshot(snapshot);
+    for (let index = 0; index < 50; index += 1) {
+      replay.step(0.2);
+    }
+    const actual = replay.createSnapshot();
+
+    expect(actual.stateHash).toBe(expected.stateHash);
+    expect(actual.eventLogHash).toBe(expected.eventLogHash);
+  }, 30000);
+
   it('agent-refresh assigns the first sixteen inbound jobs to rows 1 through 16', () => {
     const scenario = createDefaultShuttleScenario({
       liftMode: 'all-inbound',
@@ -1282,12 +1340,58 @@ describe('shuttle phase 0 SimCore', () => {
 
     const state = sim.step(0.2);
     const empty = state.vehicles.find((vehicle) => vehicle.id === 'SH-02');
-    const yieldEvent = sim.getEventLog().find((event) => event.eventType === 'route-replanned' && event.vehicleId === 'SH-02' && event.reason === 'agent-refresh-side-yield');
+    const session = state.traffic.conflictSessions.find((candidate) => candidate.yielderVehicleId === 'SH-02');
+    const yieldEvent = sim.getEventLog().find((event) => event.eventType === 'route-replanned' && event.vehicleId === 'SH-02');
 
-    expect(yieldEvent?.details.route).toBe('storage-r08-c24>storage-r08-c23');
+    expect(yieldEvent?.details.route).toBe('storage-r08-c24>storage-r08-c23>storage-r08-c22>storage-r08-c21>storage-r08-c20');
+    expect(session).toMatchObject({
+      state: 'yielding',
+      winnerVehicleId: 'SH-01',
+      yielderVehicleId: 'SH-02',
+      blockerVehicleId: 'SH-01',
+      clearancePolicy: 'immediate-next-move'
+    });
+    expect(session?.yielderLocalRouteNodeIds).toEqual(['storage-r08-c24', 'storage-r08-c23', 'storage-r08-c22', 'storage-r08-c21', 'storage-r08-c20']);
     expect(empty?.routeNodeIds.slice(0, 2)).toEqual(['storage-r08-c24', 'storage-r08-c23']);
     expect(empty?.targetNodeId).toBe('storage-r08-c23');
     expect(empty?.routeNodeIds.slice(0, 2)).not.toEqual(['storage-r08-c24', 'right-row-08']);
+  });
+
+  it('agent-refresh makes a lower-priority loaded shuttle side-yield after an adjacent main-aisle faceoff', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['main-north-05', 'main-south-05', 'right-row-09', 'storage-r09-c24']);
+    sim.setVehicleTaskForTest('SH-01', null, true);
+    sim.setVehicleRouteForTest('SH-02', ['main-south-05', 'main-north-05', 'right-row-08', 'storage-r08-c24']);
+    sim.setVehicleTaskForTest('SH-02', null, true);
+
+    const state = sim.step(0.2);
+    const yielder = state.vehicles.find((vehicle) => vehicle.id === 'SH-02');
+    const session = state.traffic.conflictSessions.find((candidate) => candidate.yielderVehicleId === 'SH-02');
+
+    expect(session).toMatchObject({
+      winnerVehicleId: 'SH-01',
+      yielderVehicleId: 'SH-02',
+      blockerVehicleId: 'SH-01',
+      clearancePolicy: 'immediate-next-move'
+    });
+    expect(yielder?.routeNodeIds[0]).toBe('main-south-05');
+    expect(yielder?.routeNodeIds[1]).not.toBe('main-north-05');
+    expect(session?.yielderLocalRouteNodeIds.length).toBeGreaterThanOrEqual(2);
   });
 
   it('agent-refresh lets one empty transfer-faceoff shuttle side-yield and clears the lift column', () => {

@@ -1,11 +1,18 @@
 import http from 'node:http';
+import { randomUUID } from 'node:crypto';
 
 import cors from 'cors';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { WebSocketServer, type WebSocket } from 'ws';
 
 import { ShuttleCommandSchema, type ShuttleStreamMessage } from '@four-way-shuttle/schemas';
-import { ShuttleSimCore, createDefaultShuttleScenario, hashEventLog } from '@four-way-shuttle/sim-core';
+import {
+  ShuttleSimCore,
+  createDefaultShuttleScenario,
+  hashEventLog,
+  hashScenario,
+  type ShuttleEngineSnapshotV1
+} from '@four-way-shuttle/sim-core';
 
 import { collectPrerequisites } from './prerequisites.js';
 import { validatePhase0Scenario } from './validation.js';
@@ -14,6 +21,47 @@ const port = Number(process.env.SHUTTLE_PORT ?? process.env.PORT ?? 8791);
 const tickMs = Number(process.env.SHUTTLE_TICK_MS ?? 100);
 const streamBroadcastIntervalMs = Number(process.env.SHUTTLE_STREAM_TICK_MS ?? 250);
 const fullStateBroadcastIntervalMs = Number(process.env.SHUTTLE_FULL_STATE_TICK_MS ?? 1000);
+const traceSnapshotCadenceSec = Number(process.env.SHUTTLE_TRACE_SNAPSHOT_SEC ?? 1);
+const maxTraceSnapshots = Number(process.env.SHUTTLE_TRACE_MAX_SNAPSHOTS ?? 1800);
+
+type ReplayCommandRecordV1 = {
+  sequence: number;
+  wallClockMs: number;
+  receivedAtSimTimeSec: number;
+  appliedTickIndex: number;
+  type: 'loadScenario' | 'reset' | 'pause' | 'resume' | 'setParam' | 'playbackSpeed';
+  payload: unknown;
+  result: unknown;
+  stateHashAfter: string;
+};
+
+type ReplaySnapshotRecordV1 = {
+  sequence: number;
+  reason: 'initial' | 'periodic' | 'command' | 'anomaly';
+  wallClockMs: number;
+  simTimeSec: number;
+  tickIndex: number;
+  snapshot: ShuttleEngineSnapshotV1;
+  markerId?: string;
+  note?: string;
+};
+
+type RunTraceV1 = {
+  schemaVersion: 'shuttle.runTrace.v1';
+  runId: string;
+  createdAtIso: string;
+  repoCommitSha: string;
+  packageVersion: string;
+  scenarioHash: string;
+  scenario: ReturnType<ShuttleSimCore['getScenario']>;
+  seed: number;
+  fixedDtSec: number;
+  initialSnapshot: ShuttleEngineSnapshotV1;
+  commands: ReplayCommandRecordV1[];
+  snapshots: ReplaySnapshotRecordV1[];
+  eventLog: ReturnType<ShuttleSimCore['getEventLog']>;
+  anomalyMarkers: ReplaySnapshotRecordV1[];
+};
 
 function parsePlaybackSpeed(value: unknown): number | null {
   if (typeof value !== 'number' && typeof value !== 'string') {
@@ -37,6 +85,118 @@ const clients = new Set<WebSocket>();
 let lastEventSequence = -1;
 let lastStreamBroadcastMs = 0;
 let lastFullStateBroadcastMs = 0;
+let liveTickCreditSec = 0;
+let runId = randomUUID();
+let traceCreatedAtIso = new Date().toISOString();
+let traceCommandSequence = 0;
+let traceSnapshotSequence = 0;
+let traceCommands: ReplayCommandRecordV1[] = [];
+let traceSnapshots: ReplaySnapshotRecordV1[] = [];
+let anomalyMarkers: ReplaySnapshotRecordV1[] = [];
+let lastTraceSnapshotSimTimeSec = -Infinity;
+let traceInitialSnapshot: ShuttleEngineSnapshotV1 | null = null;
+
+function resetTrace(reason: 'initial' | 'command' = 'initial'): void {
+  runId = randomUUID();
+  traceCreatedAtIso = new Date().toISOString();
+  traceCommandSequence = 0;
+  traceSnapshotSequence = 0;
+  traceCommands = [];
+  traceSnapshots = [];
+  anomalyMarkers = [];
+  lastTraceSnapshotSimTimeSec = -Infinity;
+  const initial = recordTraceSnapshot(reason);
+  traceInitialSnapshot = initial.snapshot;
+}
+
+function recordTraceSnapshot(reason: ReplaySnapshotRecordV1['reason'], options: { markerId?: string; note?: string } = {}): ReplaySnapshotRecordV1 {
+  const snapshot = sim.createSnapshot();
+  const record: ReplaySnapshotRecordV1 = {
+    sequence: traceSnapshotSequence,
+    reason,
+    wallClockMs: Date.now(),
+    simTimeSec: snapshot.simTimeSec,
+    tickIndex: snapshot.tickIndex,
+    snapshot,
+    ...options
+  };
+  traceSnapshotSequence += 1;
+  traceSnapshots.push(record);
+  if (reason === 'anomaly') {
+    anomalyMarkers.push(record);
+  }
+  if (traceSnapshots.length > maxTraceSnapshots) {
+    traceSnapshots = traceSnapshots.slice(-maxTraceSnapshots);
+  }
+  lastTraceSnapshotSimTimeSec = snapshot.simTimeSec;
+  return record;
+}
+
+function maybeRecordPeriodicTraceSnapshot(): void {
+  const snapshot = sim.createSnapshot();
+  if (snapshot.simTimeSec - lastTraceSnapshotSimTimeSec >= traceSnapshotCadenceSec - 1e-9) {
+    const record: ReplaySnapshotRecordV1 = {
+      sequence: traceSnapshotSequence,
+      reason: 'periodic',
+      wallClockMs: Date.now(),
+      simTimeSec: snapshot.simTimeSec,
+      tickIndex: snapshot.tickIndex,
+      snapshot
+    };
+    traceSnapshotSequence += 1;
+    traceSnapshots.push(record);
+    if (traceSnapshots.length > maxTraceSnapshots) {
+      traceSnapshots = traceSnapshots.slice(-maxTraceSnapshots);
+    }
+    lastTraceSnapshotSimTimeSec = snapshot.simTimeSec;
+  }
+}
+
+function recordTraceCommand(
+  type: ReplayCommandRecordV1['type'],
+  payload: unknown,
+  result: unknown,
+  receivedAtSimTimeSec: number
+): void {
+  const snapshot = sim.createSnapshot();
+  traceCommands.push({
+    sequence: traceCommandSequence,
+    wallClockMs: Date.now(),
+    receivedAtSimTimeSec,
+    appliedTickIndex: snapshot.tickIndex,
+    type,
+    payload,
+    result,
+    stateHashAfter: snapshot.stateHash
+  });
+  traceCommandSequence += 1;
+  recordTraceSnapshot('command');
+}
+
+function exportRunTrace(): RunTraceV1 {
+  if (traceSnapshots.length === 0) {
+    recordTraceSnapshot('initial');
+  }
+  const scenario = sim.getScenario();
+  return {
+    schemaVersion: 'shuttle.runTrace.v1',
+    runId,
+    createdAtIso: traceCreatedAtIso,
+    repoCommitSha: process.env.SHUTTLE_COMMIT_SHA ?? process.env.GIT_COMMIT ?? 'unknown',
+    packageVersion: process.env.npm_package_version ?? '0.1.0',
+    scenarioHash: hashScenario(scenario),
+    scenario,
+    seed: scenario.seed,
+    fixedDtSec: scenario.timeStepSec,
+    initialSnapshot: traceInitialSnapshot ?? traceSnapshots[0]!.snapshot,
+    commands: structuredClone(traceCommands),
+    snapshots: structuredClone(traceSnapshots),
+    eventLog: sim.getEventLog(),
+    anomalyMarkers: structuredClone(anomalyMarkers)
+  };
+}
+
+resetTrace('initial');
 
 function send(socket: WebSocket, message: ShuttleStreamMessage): void {
   if (socket.readyState === socket.OPEN) {
@@ -84,7 +244,18 @@ function commandResponse(response: Response): void {
 }
 
 function advanceLiveSimulation(deltaSec: number): void {
-  sim.advanceBy(deltaSec);
+  liveTickCreditSec += deltaSec;
+  const fixedDtSec = sim.getScenario().timeStepSec;
+  let guard = 0;
+  while (liveTickCreditSec + 1e-9 >= fixedDtSec && sim.getStatus() === 'running') {
+    sim.step(fixedDtSec);
+    liveTickCreditSec = Math.max(0, liveTickCreditSec - fixedDtSec);
+    guard += 1;
+    if (guard > 1000) {
+      throw new Error('Live simulation tick guard tripped; playback speed or tick interval is too high.');
+    }
+  }
+  maybeRecordPeriodicTraceSnapshot();
 }
 
 app.get('/api/shuttle/health', (_request: Request, response: Response) => {
@@ -112,12 +283,14 @@ app.get('/api/shuttle/playbackSpeed', (_request: Request, response: Response) =>
 });
 
 app.post('/api/shuttle/playbackSpeed', (request: Request, response: Response) => {
+  const receivedAtSimTimeSec = sim.getState().simTimeSec;
   const speed = parsePlaybackSpeed(request.body?.speed);
   if (speed === null) {
     response.status(422).json({ ok: false, error: 'Playback speed must be greater than 0 and at most 20.' });
     return;
   }
   playbackSpeed = speed;
+  recordTraceCommand('playbackSpeed', { speed }, { ok: true, speed: playbackSpeed }, receivedAtSimTimeSec);
   response.json({ ok: true, speed: playbackSpeed, state: sim.getState() });
 });
 
@@ -132,6 +305,19 @@ app.get('/api/shuttle/exportLog', (_request: Request, response: Response) => {
     eventLog: sim.getEventLog(),
     hash: hashEventLog(sim.getEventLog())
   });
+});
+
+app.get('/api/shuttle/exportTrace', (_request: Request, response: Response) => {
+  response.json(exportRunTrace());
+});
+
+app.post('/api/shuttle/markAnomaly', (request: Request, response: Response) => {
+  const markerId = typeof request.body?.markerId === 'string' && request.body.markerId.trim()
+    ? request.body.markerId.trim()
+    : `marker-${Date.now()}`;
+  const note = typeof request.body?.note === 'string' ? request.body.note : undefined;
+  const marker = recordTraceSnapshot('anomaly', { markerId, note });
+  response.json({ ok: true, markerId, marker, state: sim.getState() });
 });
 
 app.post('/api/shuttle/validatePhase0', async (request: Request, response: Response, next: NextFunction) => {
@@ -158,9 +344,13 @@ app.post('/api/shuttle/validatePhase0', async (request: Request, response: Respo
 
 app.post('/api/shuttle/loadScenario', (request: Request, response: Response, next: NextFunction) => {
   try {
+    const receivedAtSimTimeSec = sim.getState().simTimeSec;
     const command = ShuttleCommandSchema.parse({ type: 'loadScenario', scenario: request.body });
     if (command.type !== 'loadScenario') throw new Error('Invalid loadScenario command');
     sim.loadScenario(command.scenario);
+    liveTickCreditSec = 0;
+    resetTrace('command');
+    recordTraceCommand('loadScenario', command.scenario, { ok: true }, receivedAtSimTimeSec);
     lastEventSequence = -1;
     commandResponse(response);
   } catch (error) {
@@ -170,9 +360,13 @@ app.post('/api/shuttle/loadScenario', (request: Request, response: Response, nex
 
 app.post('/api/shuttle/reset', (request: Request, response: Response, next: NextFunction) => {
   try {
+    const receivedAtSimTimeSec = sim.getState().simTimeSec;
     const command = ShuttleCommandSchema.parse({ type: 'reset', seed: request.body?.seed });
     if (command.type !== 'reset') throw new Error('Invalid reset command');
     sim.reset(command.seed);
+    liveTickCreditSec = 0;
+    resetTrace('command');
+    recordTraceCommand('reset', { seed: command.seed }, { ok: true }, receivedAtSimTimeSec);
     lastEventSequence = -1;
     commandResponse(response);
   } catch (error) {
@@ -182,7 +376,9 @@ app.post('/api/shuttle/reset', (request: Request, response: Response, next: Next
 
 app.post('/api/shuttle/pause', (_request: Request, response: Response, next: NextFunction) => {
   try {
+    const receivedAtSimTimeSec = sim.getState().simTimeSec;
     sim.pause();
+    recordTraceCommand('pause', {}, { ok: true }, receivedAtSimTimeSec);
     commandResponse(response);
   } catch (error) {
     next(error);
@@ -191,7 +387,9 @@ app.post('/api/shuttle/pause', (_request: Request, response: Response, next: Nex
 
 app.post('/api/shuttle/resume', (_request: Request, response: Response, next: NextFunction) => {
   try {
+    const receivedAtSimTimeSec = sim.getState().simTimeSec;
     sim.resume();
+    recordTraceCommand('resume', {}, { ok: true }, receivedAtSimTimeSec);
     commandResponse(response);
   } catch (error) {
     next(error);
@@ -200,6 +398,7 @@ app.post('/api/shuttle/resume', (_request: Request, response: Response, next: Ne
 
 app.post('/api/shuttle/setParam', (request: Request, response: Response, next: NextFunction) => {
   try {
+    const receivedAtSimTimeSec = sim.getState().simTimeSec;
     const command = ShuttleCommandSchema.parse({ type: 'setParam', ...request.body });
     if (command.type !== 'setParam') throw new Error('Invalid setParam command');
     const result = sim.setParam(command.path, command.value);
@@ -207,6 +406,7 @@ app.post('/api/shuttle/setParam', (request: Request, response: Response, next: N
       response.status(422).json({ ok: false, result });
       return;
     }
+    recordTraceCommand('setParam', { path: command.path, value: command.value }, result, receivedAtSimTimeSec);
     broadcastState();
     response.json({ ok: true, result, state: sim.getState() });
   } catch (error) {

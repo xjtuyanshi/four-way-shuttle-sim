@@ -96,6 +96,7 @@ function state(overrides: Partial<ShuttleSimState> = {}): ShuttleSimState {
       legacyZoneHoldEnabled: false,
       activeReservationCount: 0,
       waitingVehicles: [],
+      conflictSessions: [],
       liftPorts: [],
       deadlockCandidateVehicleIds: [],
       minVehicleSeparationM: null,
@@ -200,6 +201,7 @@ describe('dashboard resource utilization', () => {
         legacyZoneHoldEnabled: false,
         activeReservationCount: 0,
         waitingVehicles: [],
+        conflictSessions: [],
         liftPorts: [
           {
             nodeId: 'inbound-lift-top-01',

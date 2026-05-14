@@ -45,7 +45,7 @@ type RuntimeStatus = ShuttleSimState['status'];
 
 const COLLISION_AVOIDANCE_PARAM = '/trafficPolicy/collisionAvoidanceEnabled';
 
-type MutableVehicle = VehicleState & {
+export type MutableVehicle = VehicleState & {
   targetSpeedMps: number;
   waitingSinceSec: number | null;
   lastMovementAxis: 'x' | 'z' | null;
@@ -56,6 +56,30 @@ type MutableVehicle = VehicleState & {
   tasklessTravelTimeSec: number;
   yieldHoldUntilSec: number | null;
   yieldHoldNodeId: string | null;
+};
+
+export type ConflictSessionV1 = {
+  id: string;
+  kind: 'pair' | 'resource';
+  resourceKey: string;
+  state: 'open' | 'yielding' | 'holding-pocket' | 'returning' | 'cleared' | 'timed-out';
+  participantVehicleIds: string[];
+  winnerVehicleId: string;
+  yielderVehicleId: string;
+  createdAtSec: number;
+  createdAtTick: number;
+  updatedAtSec: number;
+  expiresAtSec: number;
+  timeoutAtSec: number;
+  trigger: 'head-on' | 'same-node' | 'column-exit' | 'swept-footprint' | 'deadlock-break';
+  initialBlockerVehicleId: string;
+  blockerVehicleId: string;
+  yielderOriginalNodeId: string;
+  yielderPocketNodeId: string | null;
+  yielderLocalRouteNodeIds: string[];
+  resumeNodeId: string | null;
+  clearancePolicy: 'immediate-next-move' | 'short-horizon' | 'full-route';
+  closeReason: string | null;
 };
 
 type SetParamResult = {
@@ -109,6 +133,47 @@ export type ShuttleSimDebugState = {
 
 type Rng = {
   next: () => number;
+  getState: () => number;
+  setState: (state: number) => void;
+};
+
+export type ShuttleEngineSnapshotV1 = {
+  schemaVersion: 'shuttle.engineSnapshot.v1';
+  simTimeSec: number;
+  tickIndex: number;
+  status: RuntimeStatus;
+  sessionId: string;
+  rngState: number;
+  eventSequence: number;
+  taskSequence: number;
+  sourceLoadSequence: number;
+  nextInboundSec: number | null;
+  nextOutboundSec: number | null;
+  vehicles: MutableVehicle[];
+  tasks: TaskStateRecord[];
+  loads: LoadStateRecord[];
+  reservations: Reservation[];
+  completedTaskCycleTimes: number[];
+  completedTaskWaitTimes: number[];
+  completedInbound: number;
+  completedOutbound: number;
+  reservationConflictCount: number;
+  replanCount: number;
+  deadlockCount: number;
+  livelockCount: number;
+  deadlockCandidateSignature: string | null;
+  deadlockCandidateSinceSec: number | null;
+  blockedTimeByReasonSec: Array<[string, number]>;
+  deferredTaskReasons: Record<'inbound' | 'outbound', string | null>;
+  liftPortBusyTimeSec: Array<[string, number]>;
+  currentNodeOccupancy: Array<{ nodeId: string; vehicleId: string }>;
+  storageNodeOccupancy: Array<{ nodeId: string; loadId: string }>;
+  conflictSessions: ConflictSessionV1[];
+  recentEvents: EventLogEntry[];
+  eventLog: EventLogEntry[];
+  error: string | null;
+  eventLogHash: string;
+  stateHash: string;
 };
 
 const SHUTTLE_Y_M = 0.08;
@@ -121,6 +186,10 @@ function makeRng(seed: number): Rng {
     next: () => {
       state = (1664525 * state + 1013904223) >>> 0;
       return state / 0x100000000;
+    },
+    getState: () => state >>> 0,
+    setState: (nextState: number) => {
+      state = nextState >>> 0;
     }
   };
 }
@@ -227,6 +296,15 @@ export function hashEventLog(events: EventLogEntry[]): string {
     reason: event.reason,
     details: event.details
   }));
+  return createHash('sha256').update(stableJson(projected)).digest('hex');
+}
+
+export function hashScenario(scenario: ShuttleScenario): string {
+  return createHash('sha256').update(stableJson(scenario)).digest('hex');
+}
+
+export function hashEngineSnapshot(snapshot: Omit<ShuttleEngineSnapshotV1, 'stateHash'> | ShuttleEngineSnapshotV1): string {
+  const { stateHash: _stateHash, ...projected } = snapshot as ShuttleEngineSnapshotV1;
   return createHash('sha256').update(stableJson(projected)).digest('hex');
 }
 
@@ -1086,11 +1164,12 @@ type TheoreticalCapacityBaseline = Omit<TheoreticalCapacitySnapshot, 'achievedIn
 
 export class ShuttleSimCore {
   private scenario: ShuttleScenario;
-  private readonly sessionId = randomUUID();
+  private sessionId: string = randomUUID();
   private traffic: TrafficControllerV2;
   private rng: Rng;
   private status: RuntimeStatus = 'idle';
   private simTimeSec = 0;
+  private tickIndex = 0;
   private vehicles: MutableVehicle[] = [];
   private tasks: TaskStateRecord[] = [];
   private loads: LoadStateRecord[] = [];
@@ -1118,6 +1197,7 @@ export class ShuttleSimCore {
   private liftPortBusyTimeSec = new Map<string, number>();
   private neighborByNodeId = new Map<string, Array<{ nodeId: string; lengthM: number }>>();
   private theoreticalCapacityBaseline: TheoreticalCapacityBaseline | null = null;
+  private conflictSessions: ConflictSessionV1[] = [];
   private error: string | null = null;
 
   constructor(scenario: ShuttleScenario = createDefaultShuttleScenario()) {
@@ -1148,6 +1228,7 @@ export class ShuttleSimCore {
   reset(seed = this.scenario.seed): ShuttleSimState {
     this.status = 'idle';
     this.simTimeSec = 0;
+    this.tickIndex = 0;
     this.tasks = [];
     this.loads = [];
     this.reservations = [];
@@ -1170,6 +1251,7 @@ export class ShuttleSimCore {
     this.blockedTimeByReasonSec = new Map();
     this.deferredTaskReasons = { inbound: null, outbound: null };
     this.liftPortBusyTimeSec = new Map();
+    this.conflictSessions = [];
     this.error = null;
     this.rng = makeRng(seed);
     this.scenario = { ...this.scenario, seed };
@@ -1330,12 +1412,14 @@ export class ShuttleSimCore {
 
     const stepSec = Math.min(dtSec, this.scenario.durationSec - this.simTimeSec);
     this.simTimeSec = round(this.simTimeSec + stepSec);
+    this.tickIndex += 1;
     this.reservations = this.reservations.filter((reservation) => reservation.endTimeSec >= this.simTimeSec - 1);
 
     this.replenishInboundSourceBuffers();
     this.generateDueTasks(stepSec);
     this.assignQueuedTasks(stepSec);
     this.advanceVehicles(stepSec);
+    this.updateConflictSessions();
     this.replenishInboundSourceBuffers();
     this.updateLiftPortUtilization(stepSec);
     this.updateDeadlockSmokeCounters();
@@ -1406,6 +1490,97 @@ export class ShuttleSimCore {
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([nodeId, loadId]) => ({ nodeId, loadId }))
     };
+  }
+
+  createSnapshot(): ShuttleEngineSnapshotV1 {
+    const debugState = this.getDebugState();
+    const snapshotWithoutHash: Omit<ShuttleEngineSnapshotV1, 'stateHash'> = {
+      schemaVersion: 'shuttle.engineSnapshot.v1',
+      simTimeSec: round(this.simTimeSec),
+      tickIndex: this.tickIndex,
+      status: this.status,
+      sessionId: this.sessionId,
+      rngState: this.rng.getState(),
+      eventSequence: this.eventSequence,
+      taskSequence: this.taskSequence,
+      sourceLoadSequence: this.sourceLoadSequence,
+      nextInboundSec: Number.isFinite(this.nextInboundSec) ? this.nextInboundSec : null,
+      nextOutboundSec: Number.isFinite(this.nextOutboundSec) ? this.nextOutboundSec : null,
+      vehicles: structuredClone(this.vehicles),
+      tasks: structuredClone(this.tasks),
+      loads: structuredClone(this.loads),
+      reservations: structuredClone(this.reservations),
+      completedTaskCycleTimes: [...this.completedTaskCycleTimes],
+      completedTaskWaitTimes: [...this.completedTaskWaitTimes],
+      completedInbound: this.completedInbound,
+      completedOutbound: this.completedOutbound,
+      reservationConflictCount: this.reservationConflictCount,
+      replanCount: this.replanCount,
+      deadlockCount: this.deadlockCount,
+      livelockCount: this.livelockCount,
+      deadlockCandidateSignature: this.deadlockCandidateSignature,
+      deadlockCandidateSinceSec: this.deadlockCandidateSinceSec,
+      blockedTimeByReasonSec: [...this.blockedTimeByReasonSec.entries()].sort(([left], [right]) => left.localeCompare(right)),
+      deferredTaskReasons: { ...this.deferredTaskReasons },
+      liftPortBusyTimeSec: [...this.liftPortBusyTimeSec.entries()].sort(([left], [right]) => left.localeCompare(right)),
+      currentNodeOccupancy: debugState.currentNodeOccupancy,
+      storageNodeOccupancy: debugState.storageNodeOccupancy,
+      conflictSessions: structuredClone(this.conflictSessions),
+      recentEvents: structuredClone(this.recentEvents),
+      eventLog: structuredClone(this.eventLog),
+      error: this.error,
+      eventLogHash: hashEventLog(this.eventLog)
+    };
+    return {
+      ...snapshotWithoutHash,
+      stateHash: hashEngineSnapshot(snapshotWithoutHash)
+    };
+  }
+
+  restoreSnapshot(snapshot: ShuttleEngineSnapshotV1): ShuttleSimState {
+    if (snapshot.schemaVersion !== 'shuttle.engineSnapshot.v1') {
+      throw new Error(`Unsupported engine snapshot schema ${String((snapshot as { schemaVersion?: unknown }).schemaVersion)}`);
+    }
+    const expectedHash = hashEngineSnapshot(snapshot);
+    if (snapshot.stateHash && expectedHash !== snapshot.stateHash) {
+      throw new Error(`Snapshot state hash mismatch: expected ${snapshot.stateHash}, got ${expectedHash}`);
+    }
+
+    this.status = snapshot.status;
+    this.simTimeSec = snapshot.simTimeSec;
+    this.tickIndex = snapshot.tickIndex;
+    this.sessionId = snapshot.sessionId;
+    this.rng.setState(snapshot.rngState);
+    this.eventSequence = snapshot.eventSequence;
+    this.taskSequence = snapshot.taskSequence;
+    this.sourceLoadSequence = snapshot.sourceLoadSequence;
+    this.nextInboundSec = snapshot.nextInboundSec ?? Infinity;
+    this.nextOutboundSec = snapshot.nextOutboundSec ?? Infinity;
+    this.vehicles = structuredClone(snapshot.vehicles);
+    this.tasks = structuredClone(snapshot.tasks);
+    this.loads = structuredClone(snapshot.loads);
+    this.reservations = structuredClone(snapshot.reservations);
+    this.completedTaskCycleTimes = [...snapshot.completedTaskCycleTimes];
+    this.completedTaskWaitTimes = [...snapshot.completedTaskWaitTimes];
+    this.completedInbound = snapshot.completedInbound;
+    this.completedOutbound = snapshot.completedOutbound;
+    this.reservationConflictCount = snapshot.reservationConflictCount;
+    this.replanCount = snapshot.replanCount;
+    this.deadlockCount = snapshot.deadlockCount;
+    this.livelockCount = snapshot.livelockCount;
+    this.deadlockCandidateSignature = snapshot.deadlockCandidateSignature;
+    this.deadlockCandidateSinceSec = snapshot.deadlockCandidateSinceSec;
+    this.blockedTimeByReasonSec = new Map(snapshot.blockedTimeByReasonSec);
+    this.deferredTaskReasons = { ...snapshot.deferredTaskReasons };
+    this.liftPortBusyTimeSec = new Map(snapshot.liftPortBusyTimeSec);
+    this.currentNodeOccupancy = new Map(snapshot.currentNodeOccupancy.map((entry) => [entry.nodeId, entry.vehicleId]));
+    this.conflictSessions = structuredClone(snapshot.conflictSessions ?? []);
+    this.recentEvents = structuredClone(snapshot.recentEvents);
+    this.eventLog = structuredClone(snapshot.eventLog);
+    this.error = snapshot.error;
+    this.traffic = new TrafficControllerV2(this.scenario);
+    this.rebuildGraphNeighbors();
+    return this.getState();
   }
 
   setVehicleRouteForTest(vehicleId: string, routeNodeIds: string[]): ShuttleSimState {
@@ -3989,7 +4164,14 @@ export class ShuttleSimCore {
     vehicle: MutableVehicle,
     toNodeId: string
   ): { reason: string; blockingVehicleId: string | null } | null {
-    return this.agentMinimalMoveBlocker(vehicle, toNodeId) ?? this.agentRefreshColumnEdgeBlocker(vehicle, toNodeId);
+    const immediateBlock = this.agentMinimalMoveBlocker(vehicle, toNodeId);
+    if (immediateBlock) {
+      return immediateBlock;
+    }
+    if (this.isStorageNode(vehicle.currentNodeId)) {
+      return null;
+    }
+    return this.agentRefreshColumnEdgeBlocker(vehicle, toNodeId);
   }
 
   private agentRefreshColumnEdgeBlocker(
@@ -4066,25 +4248,44 @@ export class ShuttleSimCore {
       return false;
     }
 
+    const existingSession = this.activeConflictSessionForPair(vehicle.id, blocker.id);
+    if (existingSession) {
+      existingSession.updatedAtSec = this.simTimeSec;
+      if (vehicle.id === existingSession.winnerVehicleId) {
+        return false;
+      }
+      if (
+        vehicle.id === existingSession.yielderVehicleId &&
+        !vehicle.currentEdgeId &&
+        vehicle.legRemainingM <= 0 &&
+        existingSession.yielderPocketNodeId === null
+      ) {
+        existingSession.yielderOriginalNodeId = vehicle.currentNodeId;
+        return this.agentRefreshInstallSideYield(vehicle, existingSession.resumeNodeId ?? blockedTargetNodeId, blocker, existingSession);
+      }
+      return false;
+    }
+
     if (this.isStorageNode(vehicle.currentNodeId) && this.liftStorageTransferTargetLiftId(blockedTargetNodeId) !== null) {
       return false;
     }
 
-    if (this.agentRefreshHasHigherPriority(vehicle, blocker)) {
-      if (this.agentRefreshInstallSideYield(blocker, blockedTargetNodeId, vehicle)) {
+    const session = this.createAgentRefreshConflictSession(vehicle, blocker, blockedTargetNodeId, block.reason);
+    if (session.yielderVehicleId === blocker.id) {
+      if (this.agentRefreshInstallSideYield(blocker, blockedTargetNodeId, vehicle, session)) {
         return false;
       }
       if (vehicle.loaded) {
         return false;
       }
-      return this.agentRefreshInstallSideYield(vehicle, blockedTargetNodeId, blocker);
+      return this.agentRefreshInstallSideYield(vehicle, blockedTargetNodeId, blocker, session);
     }
 
     if (vehicle.loaded) {
       return false;
     }
 
-    return this.agentRefreshInstallSideYield(vehicle, blockedTargetNodeId, blocker);
+    return this.agentRefreshInstallSideYield(vehicle, blockedTargetNodeId, blocker, session);
   }
 
   private agentRefreshHasHigherPriority(left: MutableVehicle, right: MutableVehicle): boolean {
@@ -4093,10 +4294,183 @@ export class ShuttleSimCore {
     return leftPriority > rightPriority || (leftPriority === rightPriority && left.id.localeCompare(right.id) < 0);
   }
 
+  private activeConflictSessions(): ConflictSessionV1[] {
+    return this.conflictSessions
+      .filter((session) => session.state !== 'cleared' && session.state !== 'timed-out')
+      .map((session) => structuredClone(session));
+  }
+
+  private activeConflictSessionForVehicle(vehicleId: string): ConflictSessionV1 | null {
+    return this.conflictSessions.find((session) =>
+      session.state !== 'cleared' &&
+      session.state !== 'timed-out' &&
+      session.participantVehicleIds.includes(vehicleId)
+    ) ?? null;
+  }
+
+  private activeConflictSessionForPair(leftVehicleId: string, rightVehicleId: string): ConflictSessionV1 | null {
+    return this.conflictSessions.find((session) =>
+      session.state !== 'cleared' &&
+      session.state !== 'timed-out' &&
+      session.participantVehicleIds.includes(leftVehicleId) &&
+      session.participantVehicleIds.includes(rightVehicleId)
+    ) ?? null;
+  }
+
+  private updateConflictSessions(): void {
+    for (const session of this.conflictSessions) {
+      if (session.state === 'cleared' || session.state === 'timed-out') {
+        continue;
+      }
+      const yielder = this.vehicles.find((vehicle) => vehicle.id === session.yielderVehicleId) ?? null;
+      const winner = this.vehicles.find((vehicle) => vehicle.id === session.winnerVehicleId) ?? null;
+      if (!yielder || !winner) {
+        this.closeConflictSession(session, 'participant-missing');
+        continue;
+      }
+      if (this.simTimeSec >= session.timeoutAtSec) {
+        session.state = 'timed-out';
+        session.updatedAtSec = this.simTimeSec;
+        session.closeReason = 'timeout';
+        this.logEvent('conflict-session-timed-out', yielder.id, yielder.taskId, null, yielder.currentNodeId, yielder.targetNodeId, 'timeout', this.vehiclePosition(yielder), {
+          sessionId: session.id,
+          winnerVehicleId: session.winnerVehicleId,
+          yielderVehicleId: session.yielderVehicleId
+        });
+        continue;
+      }
+      if (
+        session.yielderPocketNodeId &&
+        yielder.currentNodeId === session.yielderPocketNodeId &&
+        yielder.currentEdgeId === null &&
+        yielder.legRemainingM <= 0 &&
+        session.state === 'yielding'
+      ) {
+        session.state = 'holding-pocket';
+        session.updatedAtSec = this.simTimeSec;
+      }
+      if (
+        session.state === 'holding-pocket' &&
+        yielder.currentNodeId !== session.yielderPocketNodeId
+      ) {
+        session.state = 'returning';
+        session.updatedAtSec = this.simTimeSec;
+      }
+      if (
+        session.state === 'returning' &&
+        (yielder.currentEdgeId !== null || yielder.waitReason === null) &&
+        this.simTimeSec > session.updatedAtSec + this.scenario.timeStepSec
+      ) {
+        this.closeConflictSession(session, 'yielder-returning');
+      }
+      if (this.simTimeSec >= session.expiresAtSec) {
+        this.closeConflictSession(session, 'expired');
+      }
+    }
+
+    if (this.conflictSessions.length > 400) {
+      this.conflictSessions = this.conflictSessions.slice(-300);
+    }
+  }
+
+  private closeConflictSession(session: ConflictSessionV1, reason: string): void {
+    if (session.state === 'cleared' || session.state === 'timed-out') {
+      return;
+    }
+    session.state = 'cleared';
+    session.updatedAtSec = this.simTimeSec;
+    session.closeReason = reason;
+    this.logEvent('conflict-session-closed', session.yielderVehicleId, null, null, session.yielderPocketNodeId, session.resumeNodeId, reason, null, {
+      sessionId: session.id,
+      winnerVehicleId: session.winnerVehicleId,
+      yielderVehicleId: session.yielderVehicleId
+    });
+  }
+
+  private createAgentRefreshConflictSession(
+    requester: MutableVehicle,
+    blocker: MutableVehicle,
+    blockedTargetNodeId: string,
+    reason: string
+  ): ConflictSessionV1 {
+    const winner = this.agentRefreshHasHigherPriority(requester, blocker) ? requester : blocker;
+    const yielder = winner.id === requester.id ? blocker : requester;
+    const participantVehicleIds = [requester.id, blocker.id].sort((left, right) => left.localeCompare(right));
+    const resourceKey = this.agentRefreshConflictResourceKey(requester, blocker, blockedTargetNodeId, reason);
+    const existing = this.conflictSessions.find((session) =>
+      session.state !== 'cleared' &&
+      session.state !== 'timed-out' &&
+      session.resourceKey === resourceKey
+    );
+    if (existing) {
+      existing.updatedAtSec = this.simTimeSec;
+      return existing;
+    }
+
+    const session: ConflictSessionV1 = {
+      id: `conflict-${String(this.conflictSessions.length + 1).padStart(5, '0')}`,
+      kind: 'pair',
+      resourceKey,
+      state: 'open',
+      participantVehicleIds,
+      winnerVehicleId: winner.id,
+      yielderVehicleId: yielder.id,
+      createdAtSec: this.simTimeSec,
+      createdAtTick: this.tickIndex,
+      updatedAtSec: this.simTimeSec,
+      expiresAtSec: round(this.simTimeSec + 20),
+      timeoutAtSec: round(this.simTimeSec + 12),
+      trigger: this.agentRefreshConflictTrigger(reason),
+      initialBlockerVehicleId: blocker.id,
+      blockerVehicleId: winner.id,
+      yielderOriginalNodeId: yielder.currentNodeId,
+      yielderPocketNodeId: null,
+      yielderLocalRouteNodeIds: [],
+      resumeNodeId: blockedTargetNodeId,
+      clearancePolicy: 'immediate-next-move',
+      closeReason: null
+    };
+    this.conflictSessions.push(session);
+    this.logEvent('conflict-session-opened', yielder.id, yielder.taskId, null, yielder.currentNodeId, blockedTargetNodeId, reason, this.vehiclePosition(yielder), {
+      sessionId: session.id,
+      winnerVehicleId: session.winnerVehicleId,
+      yielderVehicleId: session.yielderVehicleId,
+      blockerVehicleId: session.blockerVehicleId,
+      resourceKey: session.resourceKey
+    });
+    return session;
+  }
+
+  private agentRefreshConflictResourceKey(
+    requester: MutableVehicle,
+    blocker: MutableVehicle,
+    blockedTargetNodeId: string,
+    reason: string
+  ): string {
+    const pairKey = [requester.id, blocker.id].sort((left, right) => left.localeCompare(right)).join('+');
+    if (reason === 'node-occupied' || reason === 'node-target-near') {
+      return `node:${blockedTargetNodeId}:${pairKey}`;
+    }
+    const edge = this.traffic.findEdge(requester.currentNodeId, blockedTargetNodeId);
+    if (edge) {
+      return `edge:${edge.id}:${pairKey}`;
+    }
+    return `${reason}:${blockedTargetNodeId}:${pairKey}`;
+  }
+
+  private agentRefreshConflictTrigger(reason: string): ConflictSessionV1['trigger'] {
+    if (reason === 'edge-head-on') return 'head-on';
+    if (reason === 'node-occupied' || reason === 'node-target-near') return 'same-node';
+    if (reason === 'lift-column-near') return 'column-exit';
+    if (reason === 'avoidance-clearance' || reason === 'min-separation') return 'swept-footprint';
+    return 'deadlock-break';
+  }
+
   private agentRefreshInstallSideYield(
     vehicle: MutableVehicle,
     blockedTargetNodeId: string,
-    requester: MutableVehicle
+    requester: MutableVehicle,
+    session: ConflictSessionV1 | null = null
   ): boolean {
     if (
       vehicle.currentEdgeId !== null ||
@@ -4116,6 +4490,10 @@ export class ShuttleSimCore {
     }
     if (requester.targetNodeId) {
       forbiddenNodeIds.add(requester.targetNodeId);
+    }
+    const requesterContinuationNodeId = this.agentRouteNodeAfter(requester, blockedTargetNodeId);
+    if (requesterContinuationNodeId) {
+      forbiddenNodeIds.add(requesterContinuationNodeId);
     }
 
     const candidate = this.neighbors(currentNodeId)
@@ -4148,8 +4526,25 @@ export class ShuttleSimCore {
     vehicle.yieldHoldNodeId = candidate.nodeId;
     vehicle.localRouteNodeIds = route;
     vehicle.localRouteReason = 'temporary-yield';
+    if (session) {
+      session.state = 'yielding';
+      session.updatedAtSec = this.simTimeSec;
+      session.yielderPocketNodeId = candidate.nodeId;
+      session.yielderLocalRouteNodeIds = route;
+      session.resumeNodeId = blockedTargetNodeId;
+      session.clearancePolicy = 'immediate-next-move';
+    }
     this.logAgentReroute(vehicle, this.taskForVehicle(vehicle), blockedTargetNodeId, route, 'agent-refresh-side-yield', { countTaskReplan: false });
     return true;
+  }
+
+  private agentRouteNodeAfter(vehicle: MutableVehicle, nodeId: string): string | null {
+    const routeIndex = vehicle.routeNodeIds.indexOf(nodeId, Math.max(0, vehicle.routeIndex));
+    if (routeIndex >= 0) {
+      return vehicle.routeNodeIds[routeIndex + 1] ?? null;
+    }
+    const plannedIndex = vehicle.plannedRouteNodeIds.indexOf(nodeId);
+    return plannedIndex >= 0 ? vehicle.plannedRouteNodeIds[plannedIndex + 1] ?? null : null;
   }
 
   private agentRefreshYieldPocketAllowed(vehicle: MutableVehicle, nodeId: string): boolean {
@@ -4925,20 +5320,29 @@ export class ShuttleSimCore {
     block: { reason: string; blockingVehicleId: string | null },
     dtSec: number
   ): void {
-    const shouldLogWait = this.shouldLogVehicleWait(vehicle, targetNodeId, block.reason, null, block.blockingVehicleId);
+    const conflictSession = this.agentRefreshEnabled() ? this.activeConflictSessionForVehicle(vehicle.id) : null;
+    const stableBlockingVehicleId =
+      conflictSession && conflictSession.yielderVehicleId === vehicle.id
+        ? conflictSession.blockerVehicleId
+        : block.blockingVehicleId;
+    if (conflictSession && conflictSession.yielderVehicleId === vehicle.id) {
+      conflictSession.updatedAtSec = this.simTimeSec;
+    }
+    const shouldLogWait = this.shouldLogVehicleWait(vehicle, targetNodeId, block.reason, null, stableBlockingVehicleId);
     this.reservationConflictCount += 1;
     vehicle.state = 'waiting-blocked';
     vehicle.speedMps = 0;
     vehicle.targetNodeId = targetNodeId;
     vehicle.waitReason = block.reason;
     vehicle.blockingReservationId = null;
-    vehicle.blockingVehicleId = block.blockingVehicleId;
+    vehicle.blockingVehicleId = stableBlockingVehicleId;
     vehicle.waitingSinceSec ??= this.simTimeSec;
     vehicle.blockedTimeSec = round(vehicle.blockedTimeSec + dtSec);
     this.blockedTimeByReasonSec.set(block.reason, round((this.blockedTimeByReasonSec.get(block.reason) ?? 0) + dtSec));
     if (shouldLogWait) {
       this.logEvent('vehicle-waiting', vehicle.id, vehicle.taskId, null, vehicle.currentNodeId, targetNodeId, block.reason, this.vehiclePosition(vehicle), {
-        blockingVehicleId: block.blockingVehicleId
+        blockingVehicleId: stableBlockingVehicleId,
+        conflictSessionId: conflictSession?.id ?? null
       });
     }
   }
@@ -5062,6 +5466,16 @@ export class ShuttleSimCore {
             isTaskGoal ? 'empty-task-route-clears-loaded' : 'empty-yields-to-loaded',
             { countTaskReplan: false }
           );
+        }
+        const session = this.agentRefreshEnabled() ? this.activeConflictSessionForPair(requester.id, blocker.id) : null;
+        if (session && session.yielderVehicleId === blocker.id) {
+          session.state = 'yielding';
+          session.updatedAtSec = this.simTimeSec;
+          session.yielderOriginalNodeId = blocker.currentNodeId;
+          session.yielderPocketNodeId = route.at(-1) ?? null;
+          session.yielderLocalRouteNodeIds = route;
+          session.resumeNodeId = blockedTargetNodeId;
+          session.clearancePolicy = 'immediate-next-move';
         }
         return true;
       } catch {
@@ -6845,6 +7259,7 @@ export class ShuttleSimCore {
       legacyZoneHoldEnabled: false,
       activeReservationCount: this.reservations.length,
       waitingVehicles,
+      conflictSessions: this.activeConflictSessions(),
       liftPorts: this.liftPortDiagnostics(),
       deadlockCandidateVehicleIds,
       minVehicleSeparationM: minVehicleSeparationM === null ? null : round(minVehicleSeparationM),
