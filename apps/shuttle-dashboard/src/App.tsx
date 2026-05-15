@@ -989,8 +989,23 @@ function CanvasLiteMap({
       if (!context) return;
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
       context.clearRect(0, 0, width, height);
-      context.fillStyle = '#091016';
+      context.fillStyle = '#f5f7f8';
       context.fillRect(0, 0, width, height);
+
+      context.strokeStyle = '#e3e8eb';
+      context.lineWidth = 1;
+      for (let x = 0; x <= width; x += 42) {
+        context.beginPath();
+        context.moveTo(x, 0);
+        context.lineTo(x, height);
+        context.stroke();
+      }
+      for (let y = 0; y <= height; y += 42) {
+        context.beginPath();
+        context.moveTo(0, y);
+        context.lineTo(width, y);
+        context.stroke();
+      }
 
       const project = (point: { x: number; z: number }) => ({
         x: padding + ((point.x - geometry.minX) / geometry.width) * (width - padding * 2),
@@ -1049,19 +1064,19 @@ function CanvasLiteMap({
         const from = geometry.nodeMap.get(edge.from);
         const to = geometry.nodeMap.get(edge.to);
         if (!from || !to) continue;
-        drawLine(from, to, reservedEdgeIds.has(edge.id) ? '#e2b84b' : '#4e5f6d', reservedEdgeIds.has(edge.id) ? 2.2 : 1.1, reservedEdgeIds.has(edge.id) ? 0.8 : 0.36);
+        drawLine(from, to, reservedEdgeIds.has(edge.id) ? '#c28a12' : '#9da8b2', reservedEdgeIds.has(edge.id) ? 2.6 : 1.4, reservedEdgeIds.has(edge.id) ? 0.9 : 0.68);
       }
 
       if (geometry.nodes.length <= 2500) {
-        context.globalAlpha = 0.9;
+        context.globalAlpha = 0.95;
         for (const node of geometry.nodes) {
           const point = project(node);
           if (node.type === 'storage') {
-            context.fillStyle = 'rgba(176,111,255,0.5)';
-            context.fillRect(point.x - 1.2, point.y - 1.2, 2.4, 2.4);
+            context.fillStyle = '#9d82cc';
+            context.fillRect(point.x - 1.6, point.y - 1.6, 3.2, 3.2);
           } else if (node.type === 'intersection') {
-            context.fillStyle = 'rgba(226,184,75,0.68)';
-            context.fillRect(point.x - 2.2, point.y - 2.2, 4.4, 4.4);
+            context.fillStyle = '#c8a53a';
+            context.fillRect(point.x - 2.5, point.y - 2.5, 5, 5);
           }
         }
         context.globalAlpha = 1;
@@ -1073,8 +1088,13 @@ function CanvasLiteMap({
           const node = geometry.nodeMap.get(load.nodeId);
           if (!node) continue;
           const point = project(node);
-          context.fillStyle = load.state === 'waiting' ? '#b98a4a' : '#9aa4ad';
-          context.fillRect(point.x - 3.5, point.y - 3.5, 7, 7);
+          context.fillStyle = load.state === 'waiting' ? '#d09a3a' : '#8b96a0';
+          context.strokeStyle = '#ffffff';
+          context.lineWidth = 1.2;
+          context.beginPath();
+          context.roundRect(point.x - 4.2, point.y - 4.2, 8.4, 8.4, 1.2);
+          context.fill();
+          context.stroke();
         }
       }
 
@@ -1082,9 +1102,9 @@ function CanvasLiteMap({
         for (const vehicle of state?.vehicles ?? []) {
           const selected = selectedVehicleId === vehicle.id;
           const plannedNodes = remainingRouteNodeIds(vehicle, vehicle.plannedRouteNodeIds);
-          const color = vehicle.loaded ? '#4fc190' : vehicle.taskId ? '#56a9c9' : '#8d78ff';
+          const color = vehicle.loaded ? '#2f9e6d' : vehicle.taskId ? '#1976d2' : '#7c5ed8';
           drawRoute(vehicle, plannedNodes, color, selected ? 4.8 : 3, selected ? 0.98 : 0.76);
-          drawRoute(vehicle, vehicle.localRouteNodeIds, '#e2b84b', selected ? 5.5 : 4.2, selected ? 1 : 0.84);
+          drawRoute(vehicle, vehicle.localRouteNodeIds, '#d29b22', selected ? 5.5 : 4.2, selected ? 1 : 0.86);
         }
       }
 
@@ -1095,8 +1115,8 @@ function CanvasLiteMap({
         const pickupNode = geometry.nodeMap.get(task.pickupNodeId);
         if (!vehicle || !pickupNode || vehicle.loaded) continue;
         const point = project(pickupNode);
-        context.fillStyle = '#2f78d4';
-        context.strokeStyle = '#c0e2ff';
+        context.fillStyle = '#1976d2';
+        context.strokeStyle = '#ffffff';
         context.lineWidth = 1.5;
         context.beginPath();
         context.arc(point.x, point.y - 12, 8, 0, Math.PI * 2);
@@ -1113,18 +1133,24 @@ function CanvasLiteMap({
         const point = project(vehicle);
         const selected = selectedVehicleId === vehicle.id;
         context.fillStyle = vehicle.state === 'waiting-blocked'
-          ? '#9b7a31'
+          ? '#b7892c'
           : vehicle.loaded
-            ? '#2d8462'
+            ? '#2f9e6d'
             : vehicle.taskId
-              ? '#2f78d4'
+              ? '#1976d2'
               : vehicle.state === 'idle'
-                ? '#344554'
-                : '#6158c7';
-        context.strokeStyle = selected ? '#ffffff' : vehicle.loaded ? '#b9efcf' : '#bfe3ff';
+                ? '#66717b'
+                : '#7c5ed8';
+        context.strokeStyle = selected ? '#111820' : vehicle.loaded ? '#dff6e8' : '#e7f2ff';
         context.lineWidth = selected ? 3 : 1.6;
-        context.fillRect(point.x - 11, point.y - 8, 22, 16);
-        context.strokeRect(point.x - 11, point.y - 8, 22, 16);
+        context.shadowColor = 'rgba(20, 28, 34, 0.18)';
+        context.shadowBlur = selected ? 10 : 5;
+        context.shadowOffsetY = 1.5;
+        context.beginPath();
+        context.roundRect(point.x - 12, point.y - 9, 24, 18, 3);
+        context.fill();
+        context.shadowColor = 'transparent';
+        context.stroke();
         context.fillStyle = '#f8fbff';
         context.font = '800 11px system-ui, sans-serif';
         context.textAlign = 'center';

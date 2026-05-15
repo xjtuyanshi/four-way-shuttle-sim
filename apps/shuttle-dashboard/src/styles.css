@@ -671,8 +671,8 @@ input[type="range"] {
   inset: 12px;
   width: calc(100% - 24px);
   height: calc(100% - 24px);
-  border: 1px solid #334251;
-  background: #091016;
+  border: 1px solid #8fa0aa;
+  background: #f5f7f8;
   cursor: crosshair;
 }
 
