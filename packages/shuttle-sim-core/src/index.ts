@@ -4254,7 +4254,7 @@ export class ShuttleSimCore {
       if (vehicle.loaded) {
         return false;
       }
-      return this.agentRefreshInstallSideYield(vehicle, blockedTargetNodeId, blocker, session);
+      return this.installSideYieldWithReassignedConflictSession(session, blocker, vehicle, blockedTargetNodeId);
     }
 
     if (vehicle.loaded) {
@@ -4262,6 +4262,64 @@ export class ShuttleSimCore {
     }
 
     return this.agentRefreshInstallSideYield(vehicle, blockedTargetNodeId, blocker, session);
+  }
+
+  private installSideYieldWithReassignedConflictSession(
+    session: ConflictSessionV1,
+    winner: MutableVehicle,
+    yielder: MutableVehicle,
+    resumeNodeId: string | null
+  ): boolean {
+    const previousSessionState = {
+      winnerVehicleId: session.winnerVehicleId,
+      yielderVehicleId: session.yielderVehicleId,
+      blockerVehicleId: session.blockerVehicleId,
+      yielderOriginalNodeId: session.yielderOriginalNodeId,
+      yielderPocketNodeId: session.yielderPocketNodeId,
+      yielderLocalRouteNodeIds: [...session.yielderLocalRouteNodeIds],
+      resumeNodeId: session.resumeNodeId,
+      updatedAtSec: session.updatedAtSec,
+      clearancePolicy: session.clearancePolicy
+    };
+    this.reassignAgentRefreshConflictSession(session, winner, yielder, resumeNodeId);
+    if (this.agentRefreshInstallSideYield(yielder, resumeNodeId ?? yielder.targetNodeId ?? yielder.currentNodeId, winner, session)) {
+      this.logEvent('conflict-session-reassigned', yielder.id, yielder.taskId, null, yielder.currentNodeId, resumeNodeId, 'actual-yielder-side-yield', this.vehiclePosition(yielder), {
+        sessionId: session.id,
+        winnerVehicleId: session.winnerVehicleId,
+        yielderVehicleId: session.yielderVehicleId,
+        blockerVehicleId: session.blockerVehicleId,
+        resourceKey: session.resourceKey
+      });
+      return true;
+    }
+
+    session.winnerVehicleId = previousSessionState.winnerVehicleId;
+    session.yielderVehicleId = previousSessionState.yielderVehicleId;
+    session.blockerVehicleId = previousSessionState.blockerVehicleId;
+    session.yielderOriginalNodeId = previousSessionState.yielderOriginalNodeId;
+    session.yielderPocketNodeId = previousSessionState.yielderPocketNodeId;
+    session.yielderLocalRouteNodeIds = previousSessionState.yielderLocalRouteNodeIds;
+    session.resumeNodeId = previousSessionState.resumeNodeId;
+    session.updatedAtSec = previousSessionState.updatedAtSec;
+    session.clearancePolicy = previousSessionState.clearancePolicy;
+    return false;
+  }
+
+  private reassignAgentRefreshConflictSession(
+    session: ConflictSessionV1,
+    winner: MutableVehicle,
+    yielder: MutableVehicle,
+    resumeNodeId: string | null
+  ): void {
+    session.winnerVehicleId = winner.id;
+    session.yielderVehicleId = yielder.id;
+    session.blockerVehicleId = winner.id;
+    session.yielderOriginalNodeId = yielder.currentNodeId;
+    session.yielderPocketNodeId = null;
+    session.yielderLocalRouteNodeIds = [];
+    session.resumeNodeId = resumeNodeId;
+    session.updatedAtSec = this.simTimeSec;
+    session.clearancePolicy = 'immediate-next-move';
   }
 
   private agentRefreshHasHigherPriority(left: MutableVehicle, right: MutableVehicle): boolean {
@@ -4812,10 +4870,127 @@ export class ShuttleSimCore {
   }
 
   private agentRefreshNominalRouteToGoal(vehicle: MutableVehicle, task: TaskStateRecord | null, goalNodeId: string): string[] {
+    if (task?.kind === 'inbound' && vehicle.loaded && goalNodeId === task.dropoffNodeId) {
+      return this.agentRefreshLoadedInboundRouteToDropoff(vehicle.currentNodeId, task);
+    }
+
     const blockedNodeIds = this.agentRefreshBlockedNodeIds(vehicle, task, goalNodeId);
     return this.agentRefreshExpandLiftColumnSegments(
       this.agentRefreshShortestPath(vehicle.currentNodeId, goalNodeId, blockedNodeIds)
     );
+  }
+
+  private agentRefreshLoadedInboundRouteToDropoff(currentNodeId: string, task: TaskStateRecord): string[] {
+    const route: string[] = [currentNodeId];
+    const dropoffRowLabel = this.nodeStorageRowLabel(task.dropoffNodeId);
+    const currentRowLabel = this.nodeStorageRowLabel(currentNodeId);
+    const alreadyInsideDropoffRow = this.isStorageNode(currentNodeId) && currentRowLabel !== null && currentRowLabel === dropoffRowLabel;
+    const currentStorageExitNodeId = this.isStorageNode(currentNodeId) && currentRowLabel !== dropoffRowLabel
+      ? this.storageSideNodeId(currentNodeId, 'right') ?? this.nearestStorageSideNodeId(currentNodeId)
+      : null;
+    const candidateLiftRowTransferNodeId = alreadyInsideDropoffRow ? null : this.agentRefreshLiftRowTransferNodeId(currentNodeId, task.dropoffNodeId);
+    const liftRowTransferNodeId = candidateLiftRowTransferNodeId && this.agentRefreshLoadedInboundSegmentAvailable(candidateLiftRowTransferNodeId, task.dropoffNodeId, task)
+      ? candidateLiftRowTransferNodeId
+      : null;
+    const rightEntryNodeId = alreadyInsideDropoffRow || liftRowTransferNodeId ? null : this.storageSideNodeId(task.dropoffNodeId, 'right');
+    const targets = alreadyInsideDropoffRow
+      ? [task.dropoffNodeId]
+      : [
+          currentStorageExitNodeId,
+          liftRowTransferNodeId,
+          rightEntryNodeId,
+          task.dropoffNodeId
+        ];
+
+    for (const target of targets) {
+      if (!target || target === route[route.length - 1]) {
+        continue;
+      }
+      const fromNodeId = route[route.length - 1]!;
+      try {
+        this.appendAgentRefreshLoadedInboundSegment(route, target, task);
+      } catch (error) {
+        const fallbackRoute = target === task.dropoffNodeId
+          ? this.agentRefreshLoadedInboundRightEntryFallbackRoute(fromNodeId, task)
+          : null;
+        if (!fallbackRoute) {
+          throw error;
+        }
+        route.push(...fallbackRoute.slice(1));
+        return route;
+      }
+    }
+
+    return route;
+  }
+
+  private appendAgentRefreshLoadedInboundSegment(
+    route: string[],
+    target: string,
+    task: TaskStateRecord
+  ): void {
+    const fromNodeId = route[route.length - 1]!;
+    const blockedStorageNodeIds = this.blockedStorageTransitNodeIds(fromNodeId, target, { blockStoredLoads: true });
+    blockedStorageNodeIds.delete(fromNodeId);
+    blockedStorageNodeIds.delete(target);
+    blockedStorageNodeIds.delete(task.pickupNodeId);
+    blockedStorageNodeIds.delete(task.dropoffNodeId);
+    const segment = this.agentRefreshShortestPath(fromNodeId, target, blockedStorageNodeIds);
+    route.push(...segment.slice(1));
+  }
+
+  private agentRefreshLoadedInboundSegmentAvailable(
+    fromNodeId: string,
+    target: string,
+    task: TaskStateRecord
+  ): boolean {
+    const route = [fromNodeId];
+    try {
+      this.appendAgentRefreshLoadedInboundSegment(route, target, task);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private agentRefreshLoadedInboundRightEntryFallbackRoute(
+    fromNodeId: string,
+    task: TaskStateRecord
+  ): string[] | null {
+    const rightEntryNodeId = this.storageSideNodeId(task.dropoffNodeId, 'right');
+    if (!rightEntryNodeId) {
+      return null;
+    }
+    const route = [fromNodeId];
+    const fromLiftId = this.liftStorageTransferTargetLiftId(fromNodeId);
+    const targets = [
+      fromLiftId,
+      rightEntryNodeId,
+      task.dropoffNodeId
+    ];
+    try {
+      for (const target of targets) {
+        if (!target || target === route[route.length - 1]) {
+          continue;
+        }
+        this.appendAgentRefreshLoadedInboundSegment(route, target, task);
+      }
+      return route;
+    } catch {
+      return null;
+    }
+  }
+
+  private agentRefreshLiftRowTransferNodeId(currentNodeId: string, storageNodeId: string): string | null {
+    const liftId = this.layoutNode(currentNodeId)?.type === 'lift-blackbox'
+      ? currentNodeId
+      : this.liftStorageTransferTargetLiftId(currentNodeId);
+    const storagePosition = this.storageGridPosition(storageNodeId);
+    if (!liftId || !storagePosition) {
+      return null;
+    }
+    const transferNodeId = `${liftId}-row-${String(storagePosition.row).padStart(2, '0')}-transfer`;
+    return this.layoutNode(transferNodeId) ? transferNodeId : null;
   }
 
   private agentRefreshExpandLiftColumnSegments(route: string[]): string[] {
@@ -6656,6 +6831,11 @@ export class ShuttleSimCore {
       return;
     }
     if (this.deadlockCandidateSinceSec !== null && this.simTimeSec - this.deadlockCandidateSinceSec >= this.scenario.trafficPolicy.deadlockDetectSec) {
+      if (this.agentRefreshEnabled() && this.tryBreakAgentRefreshLoadedStorageSwap(deadlockCandidateVehicleIds)) {
+        this.deadlockCandidateSignature = null;
+        this.deadlockCandidateSinceSec = null;
+        return;
+      }
       if (this.agentRefreshEnabled() && this.tryRetreatAgentRefreshNearFaceoff(deadlockCandidateVehicleIds)) {
         this.deadlockCandidateSignature = null;
         this.deadlockCandidateSinceSec = null;
@@ -6807,10 +6987,15 @@ export class ShuttleSimCore {
       if (!edge) {
         continue;
       }
-      const forwardPocketNodeId = this.liftStorageTransferTargetLiftId(fromBlockedNodeId)
-        ? this.agentRefreshYieldPocketNodeId(vehicle, fromBlockedNodeId, retreatNodeId)
+      const blocker = vehicle.blockingVehicleId
+        ? this.vehicles.find((candidate) => candidate.id === vehicle.blockingVehicleId) ?? null
         : null;
+      const forwardPocketNodeId = this.agentRefreshForwardYieldPocketNodeId(vehicle, retreatNodeId, fromBlockedNodeId, blocker);
       if (forwardPocketNodeId) {
+        const routeNodeIds = [retreatNodeId, fromBlockedNodeId, forwardPocketNodeId];
+        if (this.agentRefreshTemporaryRouteAlreadyActive(vehicle, routeNodeIds)) {
+          return true;
+        }
         this.startAgentRefreshForwardPocketYield(
           vehicle,
           edge,
@@ -6826,18 +7011,299 @@ export class ShuttleSimCore {
       if (!continuationNodeId && !canShortRetreatOnly) {
         continue;
       }
+      const routeNodeIds = continuationNodeId ? [fromBlockedNodeId, retreatNodeId, continuationNodeId] : [fromBlockedNodeId, retreatNodeId];
+      if (this.agentRefreshTemporaryRouteAlreadyActive(vehicle, routeNodeIds)) {
+        return true;
+      }
       this.startAgentMinimalReverseLeg(
         vehicle,
         edge,
         fromBlockedNodeId,
         retreatNodeId,
-        continuationNodeId ? [fromBlockedNodeId, retreatNodeId, continuationNodeId] : [fromBlockedNodeId, retreatNodeId],
+        routeNodeIds,
         'agent-refresh-near-faceoff-yield',
         continuationNodeId ? 0 : 4
       );
       return true;
     }
     return false;
+  }
+
+  private agentRefreshTemporaryRouteAlreadyActive(vehicle: MutableVehicle, routeNodeIds: string[]): boolean {
+    return vehicle.localRouteReason === 'temporary-yield' &&
+      vehicle.routeNodeIds.join('>') === routeNodeIds.join('>') &&
+      vehicle.localRouteNodeIds.join('>') === routeNodeIds.join('>');
+  }
+
+  private tryBreakAgentRefreshLoadedStorageSwap(candidateVehicleIds: string[]): boolean {
+    const candidateIds = new Set(candidateVehicleIds);
+    const consideredPairs = new Set<string>();
+    const candidates = this.vehicles
+      .filter((vehicle) =>
+        candidateIds.has(vehicle.id) &&
+        vehicle.loaded &&
+        vehicle.state === 'waiting-blocked' &&
+        vehicle.waitReason === 'node-occupied' &&
+        vehicle.currentEdgeId === null &&
+        vehicle.legRemainingM <= 0 &&
+        vehicle.targetNodeId !== null &&
+        vehicle.blockingVehicleId !== null
+      )
+      .sort((left, right) =>
+        this.agentTurnPriority(left) - this.agentTurnPriority(right) ||
+        right.id.localeCompare(left.id)
+      );
+
+    for (const vehicle of candidates) {
+      const blocker = this.vehicles.find((candidate) => candidate.id === vehicle.blockingVehicleId) ?? null;
+      if (
+        !blocker ||
+        !candidateIds.has(blocker.id) ||
+        !this.agentRefreshLoadedStorageSwapPair(vehicle, blocker)
+      ) {
+        continue;
+      }
+      const pairKey = [vehicle.id, blocker.id].sort((left, right) => left.localeCompare(right)).join('+');
+      if (consideredPairs.has(pairKey)) {
+        continue;
+      }
+      consideredPairs.add(pairKey);
+
+      const plans = [
+        this.agentRefreshLoadedStorageSwapClearancePlan(vehicle, blocker),
+        this.agentRefreshLoadedStorageSwapClearancePlan(blocker, vehicle)
+      ]
+        .filter((plan): plan is { vehicle: MutableVehicle; blocker: MutableVehicle; routeNodeIds: string[]; score: number } => plan !== null)
+        .sort((left, right) =>
+          left.score - right.score ||
+          this.agentTurnPriority(left.vehicle) - this.agentTurnPriority(right.vehicle) ||
+          right.vehicle.id.localeCompare(left.vehicle.id)
+        );
+      const plan = plans[0];
+      if (!plan) {
+        continue;
+      }
+
+      const session = this.activeConflictSessionForPair(plan.vehicle.id, plan.blocker.id);
+      if (session) {
+        this.closeConflictSession(session, 'loaded-storage-swap-clearance');
+      }
+      this.installAgentRefreshLoadedStorageSwapClearance(plan.vehicle, plan.blocker, plan.routeNodeIds);
+      return true;
+    }
+    return false;
+  }
+
+  private agentRefreshLoadedStorageSwapPair(vehicle: MutableVehicle, blocker: MutableVehicle): boolean {
+    if (
+      !vehicle.loaded ||
+      !blocker.loaded ||
+      blocker.state !== 'waiting-blocked' ||
+      blocker.waitReason !== 'node-occupied' ||
+      blocker.currentEdgeId !== null ||
+      blocker.legRemainingM > 0 ||
+      blocker.targetNodeId !== vehicle.currentNodeId ||
+      vehicle.targetNodeId !== blocker.currentNodeId
+    ) {
+      return false;
+    }
+    const vehiclePosition = this.storageGridPosition(vehicle.currentNodeId);
+    const blockerPosition = this.storageGridPosition(blocker.currentNodeId);
+    return Boolean(
+      vehiclePosition &&
+      blockerPosition &&
+      vehiclePosition.row === blockerPosition.row &&
+      Math.abs(vehiclePosition.column - blockerPosition.column) === 1
+    );
+  }
+
+  private agentRefreshLoadedStorageSwapClearancePlan(
+    vehicle: MutableVehicle,
+    blocker: MutableVehicle
+  ): { vehicle: MutableVehicle; blocker: MutableVehicle; routeNodeIds: string[]; score: number } | null {
+    const currentPosition = this.storageGridPosition(vehicle.currentNodeId);
+    const blockerPosition = this.storageGridPosition(blocker.currentNodeId);
+    if (!currentPosition || !blockerPosition || currentPosition.row !== blockerPosition.row) {
+      return null;
+    }
+
+    const escapeSide: 'left' | 'right' = currentPosition.column > blockerPosition.column ? 'right' : 'left';
+    const sideNodeId = this.storageSideNodeId(vehicle.currentNodeId, escapeSide);
+    if (!sideNodeId) {
+      return null;
+    }
+
+    try {
+      const blockedNodeIds = this.blockedStorageTransitNodeIds(vehicle.currentNodeId, sideNodeId, { blockStoredLoads: true });
+      blockedNodeIds.delete(vehicle.currentNodeId);
+      blockedNodeIds.delete(sideNodeId);
+      blockedNodeIds.add(blocker.currentNodeId);
+      const sideRoute = this.agentRefreshShortestPath(vehicle.currentNodeId, sideNodeId, blockedNodeIds);
+      if (
+        sideRoute.length < 2 ||
+        sideRoute.includes(blocker.currentNodeId) ||
+        sideRoute.slice(1, -1).some((nodeId) => this.storedLoadIdAtNode(nodeId))
+      ) {
+        return null;
+      }
+
+      const routeNodeIds = [...sideRoute];
+      const aisleEscapeNodeId = this.agentRefreshLoadedStorageSwapAisleEscapeNodeId(sideNodeId, vehicle, blocker);
+      if (aisleEscapeNodeId) {
+        routeNodeIds.push(aisleEscapeNodeId);
+      }
+
+      const nextNodeId = routeNodeIds[1] ?? null;
+      if (!nextNodeId || this.agentRefreshMoveBlocker(vehicle, nextNodeId)) {
+        return null;
+      }
+
+      return {
+        vehicle,
+        blocker,
+        routeNodeIds,
+        score: this.routeDistanceM(routeNodeIds)
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private agentRefreshLoadedStorageSwapAisleEscapeNodeId(sideNodeId: string, vehicle: MutableVehicle, blocker: MutableVehicle): string | null {
+    const sideMatch = /^(left|right)-row-(\d+)$/.exec(sideNodeId);
+    if (!sideMatch) {
+      return null;
+    }
+    const side = sideMatch[1] as 'left' | 'right';
+    const row = Number(sideMatch[2]);
+    const blockerTask = this.taskForVehicle(blocker);
+    const blockerGoalNodeId = this.agentGoalNodeId(blocker, blockerTask);
+    const blockerGoalRow = blockerGoalNodeId ? this.storageGridPosition(blockerGoalNodeId)?.row ?? null : null;
+    const preferredDirection = blockerGoalRow !== null && blockerGoalRow !== row
+      ? -Math.sign(blockerGoalRow - row)
+      : -1;
+    const directions = [preferredDirection, -preferredDirection].filter((direction, index, self) =>
+      direction !== 0 && self.indexOf(direction) === index
+    );
+
+    for (const direction of directions) {
+      const candidateNodeId = `${side}-row-${String(row + direction).padStart(2, '0')}`;
+      if (
+        this.layoutNode(candidateNodeId) &&
+        this.traffic.findEdge(sideNodeId, candidateNodeId) &&
+        !this.currentNodeOccupancy.has(candidateNodeId) &&
+        !this.nodeClaimedByOtherVehicle(candidateNodeId, vehicle.id)
+      ) {
+        return candidateNodeId;
+      }
+    }
+    return null;
+  }
+
+  private installAgentRefreshLoadedStorageSwapClearance(
+    vehicle: MutableVehicle,
+    blocker: MutableVehicle,
+    routeNodeIds: string[]
+  ): void {
+    vehicle.routeNodeIds = routeNodeIds;
+    vehicle.routeIndex = 0;
+    vehicle.targetNodeId = routeNodeIds[1] ?? null;
+    vehicle.state = vehicle.loaded ? 'loaded-moving' : vehicle.taskId ? 'moving-to-pickup' : 'returning';
+    vehicle.waitReason = null;
+    vehicle.blockingReservationId = null;
+    vehicle.blockingVehicleId = null;
+    vehicle.waitingSinceSec = null;
+    vehicle.yieldHoldUntilSec = null;
+    vehicle.yieldHoldNodeId = null;
+    vehicle.localRouteNodeIds = routeNodeIds;
+    vehicle.localRouteReason = 'temporary-yield';
+    this.logAgentReroute(vehicle, this.taskForVehicle(vehicle), blocker.currentNodeId, routeNodeIds, 'agent-refresh-loaded-storage-swap-clearance', { countTaskReplan: false });
+  }
+
+  private agentRefreshForwardYieldPocketNodeId(
+    vehicle: MutableVehicle,
+    currentNodeId: string,
+    forwardNodeId: string,
+    blocker: MutableVehicle | null = null
+  ): string | null {
+    const occupantId = this.currentNodeOccupancy.get(forwardNodeId);
+    if (occupantId && occupantId !== vehicle.id) {
+      return null;
+    }
+
+    const pocketNodeId = this.agentRefreshYieldPocketNodeId(vehicle, forwardNodeId, currentNodeId);
+    if (!pocketNodeId) {
+      return null;
+    }
+    if (!this.agentRefreshForwardYieldPocketAllowed(vehicle, currentNodeId, pocketNodeId)) {
+      return null;
+    }
+    if (blocker && this.agentRefreshForwardPocketWouldPassBlocker(vehicle, currentNodeId, forwardNodeId, blocker)) {
+      return null;
+    }
+
+    const current = nodePosition(this.scenario, currentNodeId);
+    const forward = nodePosition(this.scenario, forwardNodeId);
+    const distanceToCurrentM = Math.hypot(vehicle.x - current.x, vehicle.z - current.z);
+    const distanceToForwardM = Math.hypot(vehicle.x - forward.x, vehicle.z - forward.z);
+    const nearForwardThresholdM = Math.max(
+      this.scenario.trafficPolicy.dynamicAvoidanceClearanceM + this.scenario.vehicles.lengthM,
+      1.8
+    );
+    const forwardIsTransfer = this.liftStorageTransferTargetLiftId(forwardNodeId) !== null;
+    const alreadyCommittedForward = distanceToForwardM <= distanceToCurrentM + 0.25;
+    const nearEnoughToTurnIn = distanceToForwardM <= nearForwardThresholdM;
+    if (!forwardIsTransfer && !alreadyCommittedForward && !nearEnoughToTurnIn) {
+      return null;
+    }
+
+    return pocketNodeId;
+  }
+
+  private agentRefreshForwardPocketWouldPassBlocker(
+    vehicle: MutableVehicle,
+    currentNodeId: string,
+    forwardNodeId: string,
+    blocker: MutableVehicle
+  ): boolean {
+    if (!vehicle.loaded) {
+      return false;
+    }
+    const current = nodePosition(this.scenario, currentNodeId);
+    const forward = nodePosition(this.scenario, forwardNodeId);
+    const sameVerticalLine = Math.abs(current.x - forward.x) <= 1e-6 &&
+      Math.abs(blocker.x - current.x) <= this.scenario.vehicles.widthM;
+    if (sameVerticalLine) {
+      const minZ = Math.min(current.z, forward.z);
+      const maxZ = Math.max(current.z, forward.z);
+      return blocker.z > minZ + 0.05 && blocker.z < maxZ - 0.05;
+    }
+    const sameHorizontalLine = Math.abs(current.z - forward.z) <= 1e-6 &&
+      Math.abs(blocker.z - current.z) <= this.scenario.vehicles.widthM;
+    if (sameHorizontalLine) {
+      const minX = Math.min(current.x, forward.x);
+      const maxX = Math.max(current.x, forward.x);
+      return blocker.x > minX + 0.05 && blocker.x < maxX - 0.05;
+    }
+    return false;
+  }
+
+  private agentRefreshForwardYieldPocketAllowed(
+    vehicle: MutableVehicle,
+    currentNodeId: string,
+    pocketNodeId: string
+  ): boolean {
+    const task = this.taskForVehicle(vehicle);
+    if (
+      !vehicle.loaded ||
+      !task ||
+      task.kind !== 'inbound' ||
+      this.layoutNode(currentNodeId)?.type !== 'lift-blackbox' ||
+      !this.isStorageNode(pocketNodeId)
+    ) {
+      return true;
+    }
+    return this.nodeStorageRowLabel(pocketNodeId) === this.nodeStorageRowLabel(task.dropoffNodeId);
   }
 
   private tryBreakAgentRefreshWaitCycle(candidateVehicleIds: string[]): boolean {
