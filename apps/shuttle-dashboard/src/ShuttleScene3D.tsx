@@ -81,6 +81,62 @@ const CAD_BLOCKED_FILL = 'rgba(101, 118, 111, 0.26)';
 const CAD_BLOCKED_STROKE = 'rgba(151, 183, 167, 0.88)';
 const CAD_DIMENSION_STROKE = 'rgba(222, 231, 236, 0.76)';
 
+function toVisualX(x: number): number {
+  return -x;
+}
+
+function toVisualYaw(yaw: number): number {
+  return normalizeAngle(Math.PI - yaw);
+}
+
+function toVisualNode(node: ShuttleNode): ShuttleNode {
+  return { ...node, x: toVisualX(node.x) };
+}
+
+function toVisualMeterRecord<T extends { xM: number }>(record: T): T {
+  return { ...record, xM: toVisualX(record.xM) };
+}
+
+export function resolveScene3DVisualScenario(scenario: ShuttleScenario): ShuttleScenario {
+  return {
+    ...scenario,
+    layout: {
+      ...scenario.layout,
+      nodes: scenario.layout.nodes.map(toVisualNode)
+    }
+  };
+}
+
+export function resolveScene3DVisualStaticScene(staticScene: ShuttleStaticSceneContract): ShuttleStaticSceneContract {
+  return {
+    ...staticScene,
+    storageCells: staticScene.storageCells.map(toVisualMeterRecord),
+    blockedCells: staticScene.blockedCells.map(toVisualMeterRecord),
+    trackBeds: staticScene.trackBeds.map(toVisualMeterRecord),
+    liftPads: staticScene.liftPads.map(toVisualMeterRecord),
+    parkingPads: staticScene.parkingPads.map(toVisualMeterRecord),
+    storageBlockMinXM: toVisualX(staticScene.storageBlockMaxXM),
+    storageBlockMaxXM: toVisualX(staticScene.storageBlockMinXM),
+    inboundLiftXM: toVisualX(staticScene.inboundLiftXM),
+    outboundLiftXM: toVisualX(staticScene.outboundLiftXM)
+  };
+}
+
+export function resolveScene3DVisualState(state: ShuttleSimState | null): ShuttleSimState | null {
+  if (!state) {
+    return null;
+  }
+
+  return {
+    ...state,
+    vehicles: state.vehicles.map((vehicle) => ({
+      ...vehicle,
+      x: toVisualX(vehicle.x),
+      yaw: toVisualYaw(vehicle.yaw)
+    }))
+  };
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -1376,6 +1432,10 @@ function updateDynamicScene(
 }
 
 function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, cameraView: ShuttleSceneCameraView): void {
+  const visualScenario = resolveScene3DVisualScenario(scenario);
+  const staticScene = resolveDashboardStaticSceneContract(scenario);
+  const visualStaticScene = resolveScene3DVisualStaticScene(staticScene);
+
   clearGroup(runtime.staticGroup);
   clearGroup(runtime.routeGroup);
   clearGroup(runtime.reservationGroup);
@@ -1385,18 +1445,17 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
   runtime.reservationOverlayKey = '';
   runtime.routeOverlayKey = '';
   runtime.vehicleObjects.clear();
-  runtime.nodeById = new Map(scenario.layout.nodes.map((node) => [node.id, node]));
-  runtime.edgeById = new Map(scenario.layout.edges.map((edge) => [edge.id, edge]));
-  const staticScene = resolveDashboardStaticSceneContract(scenario);
-  const liftPadById = new Map(staticScene.liftPads.map((pad) => [pad.id, pad]));
-  const parkingPadById = new Map(staticScene.parkingPads.map((pad) => [pad.id, pad]));
+  runtime.nodeById = new Map(visualScenario.layout.nodes.map((node) => [node.id, node]));
+  runtime.edgeById = new Map(visualScenario.layout.edges.map((edge) => [edge.id, edge]));
+  const liftPadById = new Map(visualStaticScene.liftPads.map((pad) => [pad.id, pad]));
+  const parkingPadById = new Map(visualStaticScene.parkingPads.map((pad) => [pad.id, pad]));
 
-  const bounds = computeBounds(scenario.layout.nodes);
-  const floor = createCadFloor(scenario, staticScene, bounds);
+  const bounds = computeBounds(visualScenario.layout.nodes);
+  const floor = createCadFloor(visualScenario, visualStaticScene, bounds);
   floor.receiveShadow = true;
   runtime.staticGroup.add(floor);
 
-  const storageBlock = createStorageRackBlock(staticScene);
+  const storageBlock = createStorageRackBlock(visualStaticScene);
   if (storageBlock) {
     runtime.staticGroup.add(storageBlock);
   }
@@ -1404,7 +1463,7 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
   const edgeMaterial = new THREE.MeshStandardMaterial({ color: 0xf0ce3b, roughness: 0.52, metalness: 0.18 });
   const fifoEdgeMaterial = new THREE.MeshStandardMaterial({ color: 0x8d78ff, roughness: 0.54, metalness: 0.2 });
   const edgeBedMaterial = new THREE.MeshStandardMaterial({ color: 0x1a232b, roughness: 0.86, metalness: 0.06 });
-  for (const track of staticScene.trackBeds) {
+  for (const track of visualStaticScene.trackBeds) {
     const [from, to] = trackBedEndpoints(track);
     const isFifoLane = track.category === 'storageLane';
     const segment = createBoxTrackSegment(from, to, {
@@ -1421,15 +1480,15 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
     }
   }
 
-  for (const cell of staticScene.storageCells) {
+  for (const cell of visualStaticScene.storageCells) {
     runtime.staticGroup.add(createStorageTrackCell(cell));
   }
 
-  for (const cell of staticScene.blockedCells) {
+  for (const cell of visualStaticScene.blockedCells) {
     runtime.staticGroup.add(createBlockedCellMarker(cell));
   }
 
-  for (const node of scenario.layout.nodes) {
+  for (const node of visualScenario.layout.nodes) {
     if (node.type === 'storage') {
       continue;
     }
@@ -1672,7 +1731,7 @@ export function ShuttleScene3D({
       return;
     }
     buildStaticScene(runtime, scenario, cameraViewRef.current);
-    updateDynamicScene(runtime, scenario, state, layers, selectedVehicleId);
+    updateDynamicScene(runtime, scenario, resolveScene3DVisualState(state), layers, selectedVehicleId);
   }, [scenario]);
 
   useEffect(() => {
@@ -1680,7 +1739,7 @@ export function ShuttleScene3D({
     if (!runtime || !scenario) {
       return;
     }
-    updateDynamicScene(runtime, scenario, state, layers, selectedVehicleId);
+    updateDynamicScene(runtime, scenario, resolveScene3DVisualState(state), layers, selectedVehicleId);
   }, [scenario, state, layers, selectedVehicleId]);
 
   return <div className="shuttle-scene-3d" ref={hostRef} />;

@@ -10,7 +10,13 @@ import {
   shouldResumeAfterParamUpdate,
   summarizeResourceUtilization
 } from './App.js';
-import { resolveCadDimensionAnnotations, resolveDashboardStaticSceneContract } from './ShuttleScene3D.js';
+import {
+  resolveCadDimensionAnnotations,
+  resolveDashboardStaticSceneContract,
+  resolveScene3DVisualScenario,
+  resolveScene3DVisualState,
+  resolveScene3DVisualStaticScene
+} from './ShuttleScene3D.js';
 
 function vehicle(overrides: Partial<VehicleState> & { id: string }): VehicleState {
   const { id, ...rest } = overrides;
@@ -275,6 +281,33 @@ describe('dashboard resource utilization', () => {
 });
 
 describe('dashboard static scene contract', () => {
+  it('mirrors the 3D visual X axis while preserving authoritative SimCore coordinates', () => {
+    const scenario = createDefaultShuttleScenario();
+    const visualScenario = resolveScene3DVisualScenario(scenario);
+    const sourceNode = scenario.layout.nodes.find((node) => Math.abs(node.x) > 0.1);
+    expect(sourceNode).toBeDefined();
+
+    const visualNode = visualScenario.layout.nodes.find((node) => node.id === sourceNode?.id);
+    expect(visualNode?.x).toBeCloseTo(-(sourceNode?.x ?? 0), 6);
+    expect(visualNode?.z).toBeCloseTo(sourceNode?.z ?? 0, 6);
+
+    const contract = resolveDashboardStaticSceneContract(scenario);
+    const visualContract = resolveScene3DVisualStaticScene(contract);
+    expect(visualContract.storageCells[0]?.xM).toBeCloseTo(-(contract.storageCells[0]?.xM ?? 0), 6);
+    expect(visualContract.storageCells[0]?.zM).toBeCloseTo(contract.storageCells[0]?.zM ?? 0, 6);
+    expect(visualContract.storageBlockMinXM).toBeCloseTo(-contract.storageBlockMaxXM, 6);
+    expect(visualContract.storageBlockMaxXM).toBeCloseTo(-contract.storageBlockMinXM, 6);
+
+    const visualState = resolveScene3DVisualState(state({
+      vehicles: [
+        vehicle({ id: 'SH-03', x: 4.25, z: -2.5, yaw: 0 })
+      ]
+    }));
+    expect(visualState?.vehicles[0]?.x).toBeCloseTo(-4.25, 6);
+    expect(visualState?.vehicles[0]?.z).toBeCloseTo(-2.5, 6);
+    expect(Math.abs((visualState?.vehicles[0]?.yaw ?? 0) - Math.PI)).toBeLessThan(1e-6);
+  });
+
   it('uses the SimCore item-level layout contract for the browser visual twin', () => {
     const contract = resolveDashboardStaticSceneContract(createDefaultShuttleScenario());
     const cadDimensions = resolveCadDimensionAnnotations(contract);
