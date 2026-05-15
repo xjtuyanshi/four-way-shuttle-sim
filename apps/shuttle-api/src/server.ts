@@ -29,7 +29,7 @@ type ReplayCommandRecordV1 = {
   wallClockMs: number;
   receivedAtSimTimeSec: number;
   appliedTickIndex: number;
-  type: 'loadScenario' | 'reset' | 'pause' | 'resume' | 'setParam' | 'playbackSpeed';
+  type: 'loadScenario' | 'reset' | 'pause' | 'resume' | 'setParam' | 'playbackSpeed' | 'runToTime';
   payload: unknown;
   result: unknown;
   stateHashAfter: string;
@@ -75,6 +75,17 @@ function parsePlaybackSpeed(value: unknown): number | null {
 }
 
 let playbackSpeed = parsePlaybackSpeed(process.env.SHUTTLE_SPEED) ?? 1;
+
+function parseFiniteNonNegativeNumber(value: unknown): number | null {
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    return null;
+  }
+  if (typeof value === 'string' && value.trim() === '') {
+    return null;
+  }
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
 
 const app = express();
 app.use(cors());
@@ -292,6 +303,60 @@ app.post('/api/shuttle/playbackSpeed', (request: Request, response: Response) =>
   playbackSpeed = speed;
   recordTraceCommand('playbackSpeed', { speed }, { ok: true, speed: playbackSpeed }, receivedAtSimTimeSec);
   response.json({ ok: true, speed: playbackSpeed, state: sim.getState() });
+});
+
+app.post('/api/shuttle/runToTime', (request: Request, response: Response, next: NextFunction) => {
+  try {
+    const receivedAtSimTimeSec = sim.getClock().simTimeSec;
+    const requestedTargetSec = parseFiniteNonNegativeNumber(request.body?.targetSimTimeSec);
+    if (requestedTargetSec === null) {
+      response.status(422).json({ ok: false, error: 'targetSimTimeSec must be a finite non-negative number.' });
+      return;
+    }
+
+    const startedAtMs = Date.now();
+    const scenario = sim.getScenario();
+    const targetSimTimeSec = Math.min(requestedTargetSec, scenario.durationSec);
+    const resetFirst = request.body?.resetFirst === true || targetSimTimeSec + 1e-9 < sim.getClock().simTimeSec;
+    if (resetFirst) {
+      sim.reset(scenario.seed);
+      resetTrace('command');
+      lastEventSequence = -1;
+    }
+
+    if (sim.getClock().simTimeSec + 1e-9 < targetSimTimeSec) {
+      sim.resume();
+      sim.advanceByInPlace(targetSimTimeSec - sim.getClock().simTimeSec);
+    } else if (sim.getStatus() === 'idle') {
+      sim.resume();
+    }
+
+    sim.pause();
+    liveTickCreditSec = 0;
+    maybeRecordPeriodicTraceSnapshot();
+
+    const state = sim.getState();
+    const traceResult = {
+      ok: true,
+      targetSimTimeSec,
+      resetFirst,
+      elapsedMs: Date.now() - startedAtMs,
+      simTimeSec: state.simTimeSec,
+      status: state.status
+    };
+    const result = {
+      ok: true,
+      targetSimTimeSec,
+      resetFirst,
+      elapsedMs: traceResult.elapsedMs,
+      state
+    };
+    recordTraceCommand('runToTime', { targetSimTimeSec, resetFirst }, traceResult, receivedAtSimTimeSec);
+    broadcastState({ full: true });
+    response.json(result);
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get('/api/shuttle/exportLog', (_request: Request, response: Response) => {

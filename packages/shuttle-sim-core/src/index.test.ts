@@ -1500,6 +1500,57 @@ describe('shuttle phase 0 SimCore', () => {
     expect(shuttle?.routeNodeIds[1]).toMatch(/^storage-r03-c1[23]$/);
   });
 
+  it('agent-refresh makes an empty lift-column faceoff use the current row pocket before crossing the blocker', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        dynamicAvoidanceClearanceM: 0.5,
+        deadlockDetectSec: 0.2
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', [
+      'inbound-lift-bottom-02-row-07-transfer',
+      'inbound-lift-bottom-02-row-08-transfer',
+      'inbound-lift-bottom-02-row-09-transfer',
+      'storage-r09-c24'
+    ]);
+    sim.setVehicleRouteForTest('SH-02', [
+      'outbound-lift-top-02-row-10-transfer',
+      'outbound-lift-top-02-row-09-transfer',
+      'outbound-lift-top-02-row-08-transfer',
+      'outbound-lift-top-02'
+    ]);
+
+    for (let index = 0; index < 80; index += 1) {
+      sim.step(0.1);
+    }
+
+    const events = sim.getEventLog().filter((event) => event.vehicleId === 'SH-01' && event.eventType === 'route-replanned');
+    const localYield = events.find((event) =>
+      event.reason === 'agent-refresh-side-yield' &&
+      event.details.route === 'inbound-lift-bottom-02-row-08-transfer>storage-r08-c24'
+    );
+    const crossingForwardYield = events.find((event) =>
+      event.reason === 'agent-refresh-forward-pocket-yield' &&
+      event.details.route === 'inbound-lift-bottom-02-row-08-transfer>inbound-lift-bottom-02-row-09-transfer>storage-r09-c24'
+    );
+
+    expect(localYield).toBeDefined();
+    expect(crossingForwardYield).toBeUndefined();
+    expect(sim.getState().kpis.deadlockCount).toBe(0);
+    expect(sim.getState().traffic.physicalViolationCount).toBe(0);
+  });
+
   it('agent-refresh still blocks a loaded shuttle from using a stored load cell as a yield pocket', () => {
     const scenario = createDefaultShuttleScenario({
       liftMode: 'all-inbound',

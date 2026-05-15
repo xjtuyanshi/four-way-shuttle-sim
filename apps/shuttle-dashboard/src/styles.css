@@ -157,6 +157,42 @@ input:focus-visible {
   background: rgba(95, 194, 141, 0.15);
 }
 
+.jump-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-top: 10px;
+  align-items: end;
+}
+
+.jump-row label {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.jump-row label span {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.jump-row input {
+  width: 100%;
+  min-height: 34px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: #0e151d;
+  color: var(--text);
+  padding: 0 10px;
+}
+
+.jump-row button {
+  min-height: 34px;
+  padding: 0 10px;
+}
+
 .mode-row button.danger {
   border-color: rgba(214, 107, 87, 0.78);
   background: rgba(214, 107, 87, 0.14);

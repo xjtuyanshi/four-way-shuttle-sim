@@ -5,7 +5,7 @@ import { ShuttleSimCore, type ShuttleEngineSnapshotV1 } from '../packages/shuttl
 type ReplayCommandRecordV1 = {
   sequence: number;
   appliedTickIndex: number;
-  type: 'loadScenario' | 'reset' | 'pause' | 'resume' | 'setParam' | 'playbackSpeed';
+  type: 'loadScenario' | 'reset' | 'pause' | 'resume' | 'setParam' | 'playbackSpeed' | 'runToTime';
   payload: unknown;
   stateHashAfter: string;
 };
@@ -63,6 +63,18 @@ function applyCommand(sim: ShuttleSimCore, command: ReplayCommandRecordV1): void
   }
   if (command.type === 'resume') {
     sim.resume();
+    return;
+  }
+  if (command.type === 'runToTime') {
+    const payload = command.payload as { targetSimTimeSec?: number; resetFirst?: boolean };
+    if (payload.resetFirst) {
+      sim.reset(sim.getScenario().seed);
+    }
+    if (typeof payload.targetSimTimeSec === 'number' && sim.getClock().simTimeSec < payload.targetSimTimeSec - 1e-9) {
+      sim.resume();
+      sim.advanceByInPlace(payload.targetSimTimeSec - sim.getClock().simTimeSec);
+      sim.pause();
+    }
     return;
   }
   if (command.type === 'setParam') {

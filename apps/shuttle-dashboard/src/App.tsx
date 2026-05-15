@@ -55,6 +55,14 @@ type PlaybackSpeedResponse = {
   speed: number;
 };
 
+type RunToTimeResponse = {
+  ok: boolean;
+  targetSimTimeSec: number;
+  resetFirst: boolean;
+  elapsedMs: number;
+  state: ShuttleSimState;
+};
+
 type LiveStreamSnapshot = {
   simTimeSec: number;
   vehicles: VehicleState[] | null;
@@ -1875,6 +1883,7 @@ export function App() {
   const [validating, setValidating] = useState(false);
   const [commandStatus, setCommandStatus] = useState<CommandStatus>({ label: 'ready', tone: 'idle' });
   const [playbackSpeed, setPlaybackSpeedState] = useState(1);
+  const [runToTargetSec, setRunToTargetSec] = useState('2400');
   const [paramDraftValues, setParamDraftValues] = useState<Map<string, number>>(() => new Map());
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
   const [rendererInfo, setRendererInfo] = useState<ShuttleSceneRendererInfo | null>(null);
@@ -2169,6 +2178,34 @@ export function App() {
     }
   }
 
+  async function runToTime(): Promise<void> {
+    const targetSimTimeSec = Number(runToTargetSec);
+    if (!Number.isFinite(targetSimTimeSec) || targetSimTimeSec < 0) {
+      setCommandStatus({ label: 'enter a non-negative second', tone: 'error' });
+      return;
+    }
+
+    const startedAt = performance.now();
+    setCommandStatus({ label: `fast-forwarding to ${formatNumber(targetSimTimeSec, 1)}s...`, tone: 'idle' });
+    try {
+      const response = await requestJson<RunToTimeResponse>('/api/shuttle/runToTime', {
+        method: 'POST',
+        body: JSON.stringify({ targetSimTimeSec })
+      });
+      setState(response.state);
+      commitLiveStreamFromState(response.state);
+      setEvents(response.state.recentEvents);
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      const prefix = response.resetFirst ? 'reset + jumped' : 'jumped';
+      setCommandStatus({
+        label: `${prefix} to ${formatNumber(response.state.simTimeSec, 1)}s in ${elapsedMs} ms`,
+        tone: 'ok'
+      });
+    } catch (error) {
+      setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' });
+    }
+  }
+
   async function runValidation(): Promise<void> {
     setValidating(true);
     setCommandStatus({ label: 'running validation...', tone: 'idle' });
@@ -2225,6 +2262,19 @@ export function App() {
                 {speed}x
               </button>
             ))}
+          </div>
+          <div className="jump-row" aria-label="Run to simulation time">
+            <label>
+              <span>Run to sec</span>
+              <input
+                min="0"
+                step="1"
+                type="number"
+                value={runToTargetSec}
+                onChange={(event) => setRunToTargetSec(event.target.value)}
+              />
+            </label>
+            <button type="button" onClick={() => void runToTime()}>Jump & Pause</button>
           </div>
           <div className={`status-line ${commandStatus.tone}`}>
             <span>{state?.status ?? 'loading'}</span>
