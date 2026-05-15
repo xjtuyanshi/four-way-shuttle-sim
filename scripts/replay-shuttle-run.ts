@@ -36,7 +36,7 @@ function hasFlag(name: string): boolean {
 }
 
 function readJson<T>(path: string): T {
-  return JSON.parse(readFileSync(path, 'utf8')) as T;
+  return JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, '')) as T;
 }
 
 function unwrapSnapshot(value: unknown): ShuttleEngineSnapshotV1 {
@@ -70,9 +70,13 @@ function applyCommand(sim: ShuttleSimCore, command: ReplayCommandRecordV1): void
     if (payload.resetFirst) {
       sim.reset(sim.getScenario().seed);
     }
-    if (typeof payload.targetSimTimeSec === 'number' && sim.getClock().simTimeSec < payload.targetSimTimeSec - 1e-9) {
-      sim.resume();
-      sim.advanceByInPlace(payload.targetSimTimeSec - sim.getClock().simTimeSec);
+    if (typeof payload.targetSimTimeSec === 'number') {
+      if (sim.getClock().simTimeSec < payload.targetSimTimeSec - 1e-9) {
+        sim.resume();
+        sim.advanceByInPlace(payload.targetSimTimeSec - sim.getClock().simTimeSec);
+      } else if (sim.getClock().status === 'idle') {
+        sim.resume();
+      }
       sim.pause();
     }
     return;
@@ -161,7 +165,7 @@ while (sim.getClock().simTimeSec < toSec - 1e-9) {
   if (clock.status === 'idle' || clock.status === 'paused') {
     sim.resume();
   }
-  sim.advanceByInPlace(fixedDtSec);
+  sim.advanceByInPlace(Math.min(fixedDtSec, toSec - sim.getClock().simTimeSec));
   applyDueCommands();
   assertDueSnapshots();
 }
