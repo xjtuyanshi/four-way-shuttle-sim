@@ -8,7 +8,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { ShuttleCommandSchema, type ShuttleStreamMessage } from '@four-way-shuttle/schemas';
 import {
   ShuttleSimCore,
-  createDefaultShuttleScenario,
+  createInboundMvpBaselineScenario,
   hashEventLog,
   hashScenario,
   type ShuttleEngineSnapshotV1
@@ -91,7 +91,7 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '4mb' }));
 
-let sim = new ShuttleSimCore(createDefaultShuttleScenario());
+let sim = new ShuttleSimCore(createInboundMvpBaselineScenario());
 const clients = new Set<WebSocket>();
 let lastEventSequence = -1;
 let lastStreamBroadcastMs = 0;
