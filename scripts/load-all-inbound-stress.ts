@@ -1,45 +1,8 @@
-import { createDefaultShuttleScenario } from '../packages/shuttle-sim-core/src/index.ts';
+import { createInboundMvpBaselineScenario } from '../packages/shuttle-sim-core/src/index.ts';
 
 const API_BASE = process.env.SHUTTLE_API_BASE ?? 'http://localhost:8791/api/shuttle';
 
-const scenario = createDefaultShuttleScenario({
-  id: 'shuttle-all-inbound-8x-7200',
-  name: 'All Inbound 8 Shuttle 7200 PPH Stress',
-  layoutProfile: {
-    layoutKind: 'top-lift-column',
-    liftPairCount: 2,
-  },
-  durationSec: 7200,
-  vehicles: {
-    count: 8,
-    emptySpeedMps: 2,
-    loadedSpeedMps: 1.5,
-    accelerationMps2: 1.2,
-    liftTimeSec: 0.01,
-    lowerTimeSec: 0.01,
-  },
-  physicsParams: {
-    emptySpeedMps: 2,
-    loadedSpeedMps: 1.5,
-    accelerationMps2: 1.2,
-    liftTimeSec: 0.01,
-    lowerTimeSec: 0.01,
-  },
-  taskGeneration: {
-    inboundRatePerHour: 7200,
-    outboundRatePerHour: 0,
-    inboundOutboundMix: 1,
-    arrivalDistribution: 'deterministic',
-    maxTasks: 32,
-  },
-  trafficPolicy: {
-    controllerMode: 'agent-refresh',
-    liftApproachCapacity: 3,
-    minimumClearanceSec: 0.4,
-    dynamicAvoidanceClearanceM: 0.5,
-    deadlockDetectSec: 2,
-  },
-});
+const scenario = createInboundMvpBaselineScenario();
 
 async function postJson(path: string, body?: unknown) {
   const response = await fetch(`${API_BASE}${path}`, {

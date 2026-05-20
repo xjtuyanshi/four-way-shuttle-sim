@@ -153,6 +153,8 @@ describe('dashboard parameter controls', () => {
 
     expect(shouldResetAfterParamUpdate('/trafficPolicy/collisionAvoidanceEnabled', 'running')).toBe(true);
     expect(shouldResumeAfterParamUpdate('/trafficPolicy/collisionAvoidanceEnabled', 'running')).toBe(true);
+    expect(shouldResetAfterParamUpdate('/trafficPolicy/sourceBufferCapacity', 'running')).toBe(true);
+    expect(shouldResumeAfterParamUpdate('/trafficPolicy/sourceBufferCapacity', 'running')).toBe(true);
 
     expect(shouldResetAfterParamUpdate('/physicsParams/loadedSpeedMps', 'running')).toBe(false);
     expect(shouldResumeAfterParamUpdate('/physicsParams/loadedSpeedMps', 'running')).toBe(false);

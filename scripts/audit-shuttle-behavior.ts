@@ -1,6 +1,11 @@
-import type { ShuttleScenario, ShuttleSimState, TaskStateRecord, VehicleState } from '@four-way-shuttle/schemas';
+import type { EventLogEntry, ShuttleScenario, ShuttleSimState, TaskStateRecord, VehicleState } from '@four-way-shuttle/schemas';
 
-import { createDefaultShuttleScenario, ShuttleSimCore } from '../packages/shuttle-sim-core/src/index.ts';
+import {
+  createInboundMvpBaselineScenario,
+  hashDeterministicReplayState,
+  hashScenario,
+  ShuttleSimCore
+} from '../packages/shuttle-sim-core/src/index.ts';
 
 type Severity = 'info' | 'warn' | 'critical';
 
@@ -37,43 +42,16 @@ const taskStoppedWarnSec = numberArg('--task-stopped-warn', 18);
 const temporaryRouteWarnSec = numberArg('--temporary-route-warn', 20);
 const noProgressWarnSec = numberArg('--no-progress-warn', 35);
 const replanWarnCount = numberArg('--replan-warn', 8);
+const maxLocalRouteNodeCount = numberArg('--max-local-route-nodes', 4);
+const reverseRetreatWarnM = numberArg('--reverse-retreat-warn-m', 4);
 
-const scenario = createDefaultShuttleScenario({
+const scenario = createInboundMvpBaselineScenario({
   id: 'audit-agent-refresh-8-inbound',
   name: 'Audit Agent Refresh 8 Shuttle Inbound',
-  layoutProfile: {
-    layoutKind: 'top-lift-column',
-    liftPairCount: 2
-  },
+  timeStepSec: dtSec,
   durationSec: Math.max(durationSec, 1),
-  vehicles: {
-    count: 8,
-    emptySpeedMps: 2,
-    loadedSpeedMps: 1.5,
-    accelerationMps2: 1.2,
-    liftTimeSec: 0.01,
-    lowerTimeSec: 0.01
-  },
-  physicsParams: {
-    emptySpeedMps: 2,
-    loadedSpeedMps: 1.5,
-    accelerationMps2: 1.2,
-    liftTimeSec: 0.01,
-    lowerTimeSec: 0.01
-  },
-  taskGeneration: {
-    inboundRatePerHour: 7200,
-    outboundRatePerHour: 0,
-    inboundOutboundMix: 1,
-    arrivalDistribution: 'deterministic',
-    maxTasks: 32
-  },
   trafficPolicy: {
-    controllerMode: 'agent-refresh',
-    liftApproachCapacity: 3,
-    minimumClearanceSec: 0.4,
-    dynamicAvoidanceClearanceM: 0.5,
-    deadlockDetectSec: 2
+    sourceBufferCapacity: 4
   }
 });
 
@@ -84,7 +62,7 @@ const inboundLiftNodeIds = scenario.layout.nodes
   .map((node) => node.id)
   .sort();
 const inboundSourceCapacityPerLift = scenario.layout.calibrationProfile?.id === 'top-lift-column-v1'
-  ? scenario.trafficPolicy.liftApproachCapacity + 1
+  ? scenario.trafficPolicy.sourceBufferCapacity
   : 1;
 const storageNodeCount = scenario.layout.nodes.filter((node) => node.type === 'storage').length;
 const sim = new ShuttleSimCore(scenario);
@@ -97,7 +75,7 @@ sim.start();
 let state = sim.getState();
 let nextSampleSec = 0;
 for (let elapsedSec = 0; elapsedSec < durationSec; elapsedSec = Number((elapsedSec + dtSec).toFixed(6))) {
-  sim.advanceByInPlace(dtSec);
+  sim.step(Math.min(dtSec, durationSec - elapsedSec));
   const clock = sim.getClock();
   if (clock.simTimeSec + 1e-6 >= nextSampleSec) {
     state = sim.getState();
@@ -107,10 +85,25 @@ for (let elapsedSec = 0; elapsedSec < durationSec; elapsedSec = Number((elapsedS
 }
 
 const finalState = sim.getState();
+auditEventLog(finalState, sim.getEventLog());
+const finalSnapshot = sim.createSnapshot();
 const utilization = utilizationAverages(finalState);
 const report = {
   scenarioId: scenario.id,
   durationSec,
+  manifest: {
+    schemaVersion: 'shuttle.fixedStepRunManifest.v1',
+    scenarioHash: hashScenario(scenario),
+    seed: scenario.seed,
+    commitSha: process.env.SHUTTLE_COMMIT_SHA ?? process.env.GIT_COMMIT ?? 'unknown',
+    stepSec: dtSec,
+    durationSec,
+    finalSimTimeSec: finalState.simTimeSec,
+    finalTickIndex: finalSnapshot.tickIndex,
+    status: finalState.status,
+    eventLogHash: finalSnapshot.eventLogHash,
+    stateHash: hashDeterministicReplayState(finalSnapshot)
+  },
   summary: {
     completedInbound: finalState.kpis.completedInbound,
     inboundPph: finalState.kpis.inboundPph,
@@ -137,6 +130,81 @@ console.log(JSON.stringify(report, null, 2));
 
 if (anomalies.some((anomaly) => anomaly.severity === 'critical')) {
   process.exitCode = 1;
+}
+
+function auditEventLog(current: ShuttleSimState, eventLog: EventLogEntry[]): void {
+  if (current.traffic.trafficMode === 'agent-refresh' && current.traffic.clearThroughLookaheadEnabled) {
+    addAnomaly(current.simTimeSec, null, 'agent-refresh-clear-through-lookahead-enabled', 'critical', 'agent-refresh should not report legacy clear-through lookahead');
+  }
+
+  const routeHorizonEvent = eventLog.find((event) =>
+    event.eventType === 'reservation-created' &&
+    event.reason === 'route-horizon'
+  );
+  if (current.traffic.trafficMode === 'agent-refresh' && routeHorizonEvent) {
+    addAnomaly(
+      routeHorizonEvent.timeSec,
+      routeHorizonEvent.vehicleId,
+      'agent-refresh-route-horizon-leak',
+      'critical',
+      `${routeHorizonEvent.fromNodeId ?? '?'} -> ${routeHorizonEvent.toNodeId ?? '?'}`
+    );
+  }
+
+  const faceoffYieldEvents = eventLog.filter((event) =>
+    event.eventType === 'route-replanned' &&
+    (
+      event.reason === 'agent-refresh-near-faceoff-yield' ||
+      event.reason === 'agent-refresh-forward-pocket-yield' ||
+      event.reason === 'loaded-retreats-from-faceoff' ||
+      event.reason === 'empty-retreats-to-local-yield'
+    )
+  );
+  const excessiveYieldThreshold = Math.max(current.vehicles.length * 6, Math.ceil(durationSec / 45));
+  if (faceoffYieldEvents.length > excessiveYieldThreshold) {
+    addAnomaly(
+      current.simTimeSec,
+      null,
+      'excessive-near-faceoff-yields',
+      'warn',
+      `count=${faceoffYieldEvents.length} threshold=${excessiveYieldThreshold}`
+    );
+  }
+
+  for (const event of faceoffYieldEvents) {
+    const routeText = typeof event.details.route === 'string' ? event.details.route : '';
+    const route = routeText.split('>').filter(Boolean);
+    if (route.length < 2) {
+      continue;
+    }
+    const distanceM = routeDistance(route);
+    if (!Number.isFinite(distanceM)) {
+      continue;
+    }
+    if (
+      (event.reason === 'loaded-retreats-from-faceoff' || event.reason === 'empty-retreats-to-local-yield') &&
+      distanceM > reverseRetreatWarnM
+    ) {
+      addAnomaly(
+        event.timeSec,
+        event.vehicleId,
+        'reverse-retreat-too-long',
+        distanceM > reverseRetreatWarnM * 2 ? 'critical' : 'warn',
+        `${event.reason} distance=${distanceM.toFixed(1)}m route=${routeText}`
+      );
+    } else if (
+      (event.reason === 'agent-refresh-near-faceoff-yield' || event.reason === 'agent-refresh-forward-pocket-yield') &&
+      route.length > maxLocalRouteNodeCount
+    ) {
+      addAnomaly(
+        event.timeSec,
+        event.vehicleId,
+        'yield-route-too-long',
+        route.length > maxLocalRouteNodeCount + 2 ? 'critical' : 'warn',
+        `${event.reason} nodes=${route.length} route=${routeText}`
+      );
+    }
+  }
 }
 
 function auditState(current: ShuttleSimState): void {
@@ -473,6 +541,15 @@ function auditVehicleTrace(current: ShuttleSimState, vehicle: VehicleState): voi
   }
 
   if (vehicle.localRouteNodeIds.length > 1) {
+    if (vehicle.localRouteNodeIds.length > maxLocalRouteNodeCount) {
+      addAnomaly(
+        current.simTimeSec,
+        vehicle.id,
+        'temporary-route-too-many-nodes',
+        vehicle.localRouteNodeIds.length > maxLocalRouteNodeCount + 2 ? 'critical' : 'warn',
+        `${vehicle.localRouteReason ?? 'temporary-route'} nodes=${vehicle.localRouteNodeIds.length} route=${vehicle.localRouteNodeIds.join('>')}`
+      );
+    }
     const temporarySec = current.simTimeSec - trace.localRouteSinceSec;
     if (temporarySec >= temporaryRouteWarnSec) {
       addAnomaly(

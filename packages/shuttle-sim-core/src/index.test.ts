@@ -6,9 +6,11 @@ import {
   REQUIRED_CALIBRATION_DIMENSION_KEYS,
   calculateTravelTimeSec,
   createDefaultShuttleScenario,
+  createInboundMvpBaselineScenario,
   hashEventLog,
   hashEngineSnapshot,
   motionProfileAt,
+  runFixedStep,
   summarizeScenarioStaticSceneContract,
   verticalStorageFootprintEdgeViolations
 } from './index.js';
@@ -78,6 +80,7 @@ function testScenario(overrides: Partial<ShuttleScenario>): ShuttleScenario {
       nodeCapacity: 1,
       zoneCapacity: 1,
       liftApproachCapacity: 1,
+      sourceBufferCapacity: 4,
       collisionAvoidanceEnabled: true,
       minimumClearanceSec: 0.2,
       dynamicAvoidanceClearanceM: 0.5,
@@ -418,7 +421,8 @@ describe('shuttle phase 0 SimCore', () => {
       },
       trafficPolicy: {
         controllerMode: 'agent-refresh',
-        liftApproachCapacity: 3
+        liftApproachCapacity: 3,
+        sourceBufferCapacity: 4
       }
     });
     const sim = new ShuttleSimCore(scenario);
@@ -445,6 +449,71 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.tasks.filter((task) => task.kind === 'inbound')).toHaveLength(16);
     expect(state.vehicles.every((vehicle) => scenario.layout.nodes.find((node) => node.id === vehicle.currentNodeId)?.type === 'storage')).toBe(true);
     expect(state.traffic.liftPorts.filter((port) => port.kind === 'inbound').map((port) => port.sourceBufferOccupancy)).toEqual([4, 4, 4, 4]);
+  });
+
+  it('keeps top-lift inbound source capacity independent of lift approach capacity', () => {
+    const scenario = createDefaultShuttleScenario({
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 32
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        liftApproachCapacity: 8,
+        sourceBufferCapacity: 4
+      }
+    });
+    const state = new ShuttleSimCore(scenario).getState();
+    const inboundPorts = state.traffic.liftPorts.filter((port) => port.kind === 'inbound');
+
+    expect(inboundPorts.map((port) => port.approachCapacity)).toEqual([8, 8, 8, 8]);
+    expect(inboundPorts.map((port) => port.sourceBufferCapacity)).toEqual([4, 4, 4, 4]);
+    expect(inboundPorts.map((port) => port.sourceBufferOccupancy)).toEqual([4, 4, 4, 4]);
+    expect(state.loads.filter((load) => load.state === 'waiting' && load.nodeId?.startsWith('lift-')).length).toBe(16);
+  });
+
+  it('uses one canonical inbound MVP baseline for demo and audit runs', () => {
+    const scenario = createInboundMvpBaselineScenario();
+
+    expect(scenario.id).toBe('shuttle-all-inbound-8x-7200');
+    expect(scenario.layout.calibrationProfile?.id).toBe('top-lift-column-v1');
+    expect(scenario.vehicles.count).toBe(8);
+    expect(scenario.taskGeneration.inboundRatePerHour).toBe(7200);
+    expect(scenario.taskGeneration.outboundRatePerHour).toBe(0);
+    expect(scenario.trafficPolicy.controllerMode).toBe('agent-refresh');
+    expect(scenario.trafficPolicy.liftApproachCapacity).toBe(3);
+    expect(scenario.trafficPolicy.sourceBufferCapacity).toBe(4);
+  });
+
+  it('emits deterministic fixed-step replay manifests', () => {
+    const scenario = createInboundMvpBaselineScenario({
+      id: 'fixed-step-test',
+      durationSec: 10,
+      taskGeneration: { maxTasks: 16 }
+    });
+    const first = runFixedStep({ scenario, durationSec: 10, stepSec: 0.25, commitSha: 'test-commit' });
+    const second = runFixedStep({ scenario, durationSec: 10, stepSec: 0.25, commitSha: 'test-commit' });
+
+    expect(first.manifest).toMatchObject({
+      schemaVersion: 'shuttle.fixedStepRunManifest.v1',
+      scenarioId: 'fixed-step-test',
+      seed: scenario.seed,
+      commitSha: 'test-commit',
+      stepSec: 0.25,
+      durationSec: 10,
+      finalSimTimeSec: 10
+    });
+    expect(first.manifest.scenarioHash).toBe(second.manifest.scenarioHash);
+    expect(first.manifest.eventLogHash).toBe(second.manifest.eventLogHash);
+    expect(first.manifest.stateHash).toBe(second.manifest.stateHash);
   });
 
   it('limits generated inbound source loads to one waiting pallet per lift', () => {

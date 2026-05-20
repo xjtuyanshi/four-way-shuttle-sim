@@ -386,6 +386,13 @@ export function hashEngineSnapshot(snapshot: Omit<ShuttleEngineSnapshotV1, 'stat
   return createHash('sha256').update(stableJson(projected)).digest('hex');
 }
 
+export function hashDeterministicReplayState(snapshot: ShuttleEngineSnapshotV1): string {
+  return hashEngineSnapshot({
+    ...snapshot,
+    sessionId: 'deterministic-replay-session'
+  });
+}
+
 function percentile(values: number[], p: number): number {
   if (values.length === 0) {
     return 0;
@@ -1283,6 +1290,7 @@ export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides
       nodeCapacity: 1,
       zoneCapacity: 1,
       liftApproachCapacity: 3,
+      sourceBufferCapacity: 4,
       collisionAvoidanceEnabled: true,
       minimumClearanceSec: 0.4,
       dynamicAvoidanceClearanceM: 0.5,
@@ -1301,6 +1309,54 @@ export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides
     physicsParams: { ...base.physicsParams, ...overrides.physicsParams },
     routingPolicy: { ...base.routingPolicy, ...overrides.routingPolicy },
     trafficPolicy: { ...base.trafficPolicy, ...overrides.trafficPolicy }
+  });
+}
+
+export function createInboundMvpBaselineScenario(overrides: ShuttleScenarioOverrides = {}): ShuttleScenario {
+  return createDefaultShuttleScenario({
+    ...overrides,
+    id: overrides.id ?? 'shuttle-all-inbound-8x-7200',
+    name: overrides.name ?? 'All Inbound 8 Shuttle 7200 PPH Stress',
+    layoutProfile: {
+      layoutKind: 'top-lift-column',
+      liftPairCount: 2,
+      ...overrides.layoutProfile
+    },
+    durationSec: overrides.durationSec ?? 7200,
+    vehicles: {
+      count: 8,
+      emptySpeedMps: 2,
+      loadedSpeedMps: 1.5,
+      accelerationMps2: 1.2,
+      liftTimeSec: 0.01,
+      lowerTimeSec: 0.01,
+      ...overrides.vehicles
+    },
+    physicsParams: {
+      emptySpeedMps: 2,
+      loadedSpeedMps: 1.5,
+      accelerationMps2: 1.2,
+      liftTimeSec: 0.01,
+      lowerTimeSec: 0.01,
+      ...overrides.physicsParams
+    },
+    taskGeneration: {
+      inboundRatePerHour: 7200,
+      outboundRatePerHour: 0,
+      inboundOutboundMix: 1,
+      arrivalDistribution: 'deterministic',
+      maxTasks: 32,
+      ...overrides.taskGeneration
+    },
+    trafficPolicy: {
+      controllerMode: 'agent-refresh',
+      liftApproachCapacity: 3,
+      sourceBufferCapacity: 4,
+      minimumClearanceSec: 0.4,
+      dynamicAvoidanceClearanceM: 0.5,
+      deadlockDetectSec: 2,
+      ...overrides.trafficPolicy
+    }
   });
 }
 
@@ -2274,7 +2330,7 @@ export class ShuttleSimCore {
     if (!this.topLiftColumnLayoutEnabled()) {
       return 1;
     }
-    return Math.max(1, this.scenario.trafficPolicy.liftApproachCapacity + 1);
+    return Math.max(1, this.scenario.trafficPolicy.sourceBufferCapacity);
   }
 
   private liftPortPlannedLoad(kind: 'inbound' | 'outbound', liftNodeId: string): number {
@@ -5143,13 +5199,6 @@ export class ShuttleSimCore {
     }
     if (node.type === 'storage') {
       const task = this.taskForVehicle(vehicle);
-      if (
-        this.topLiftColumnLayoutEnabled() &&
-        vehicle.loaded &&
-        task?.dropoffNodeId !== nodeId
-      ) {
-        return false;
-      }
       const activeInboundDropoffs = this.activeInboundDropoffNodeIds();
       if (
         vehicle.loaded &&
@@ -7650,8 +7699,14 @@ export class ShuttleSimCore {
     return Boolean(
       vehiclePosition &&
       blockerPosition &&
-      vehiclePosition.row === blockerPosition.row &&
-      Math.abs(vehiclePosition.column - blockerPosition.column) === 1
+      (
+        (vehiclePosition.row === blockerPosition.row && Math.abs(vehiclePosition.column - blockerPosition.column) === 1) ||
+        (
+          this.topLiftColumnLayoutEnabled() &&
+          vehiclePosition.column === blockerPosition.column &&
+          Math.abs(vehiclePosition.row - blockerPosition.row) === 1
+        )
+      )
     );
   }
 
@@ -7661,7 +7716,19 @@ export class ShuttleSimCore {
   ): { vehicle: MutableVehicle; blocker: MutableVehicle; routeNodeIds: string[]; score: number } | null {
     const currentPosition = this.storageGridPosition(vehicle.currentNodeId);
     const blockerPosition = this.storageGridPosition(blocker.currentNodeId);
-    if (!currentPosition || !blockerPosition || currentPosition.row !== blockerPosition.row) {
+    if (!currentPosition || !blockerPosition) {
+      return null;
+    }
+
+    if (
+      this.topLiftColumnLayoutEnabled() &&
+      currentPosition.column === blockerPosition.column &&
+      Math.abs(currentPosition.row - blockerPosition.row) === 1
+    ) {
+      return this.agentRefreshLoadedStorageColumnSwapClearancePlan(vehicle, blocker, currentPosition, blockerPosition);
+    }
+
+    if (currentPosition.row !== blockerPosition.row) {
       return null;
     }
 
@@ -7705,6 +7772,72 @@ export class ShuttleSimCore {
     } catch {
       return null;
     }
+  }
+
+  private agentRefreshLoadedStorageColumnSwapClearancePlan(
+    vehicle: MutableVehicle,
+    blocker: MutableVehicle,
+    currentPosition: { row: number; column: number },
+    blockerPosition: { row: number; column: number }
+  ): { vehicle: MutableVehicle; blocker: MutableVehicle; routeNodeIds: string[]; score: number } | null {
+    const direction = currentPosition.row < blockerPosition.row ? -1 : 1;
+    const routeNodeIds = [vehicle.currentNodeId];
+    let row = currentPosition.row;
+    for (let depth = 0; depth < 8; depth += 1) {
+      const nextRow = row + direction;
+      const nextNodeId = `storage-r${String(nextRow).padStart(2, '0')}-c${String(currentPosition.column).padStart(2, '0')}`;
+      if (!this.layoutNode(nextNodeId) || nextNodeId === blocker.currentNodeId) {
+        return null;
+      }
+      if (!this.agentRefreshLoadedTemporaryStorageNodeAllowed(vehicle, nextNodeId)) {
+        return null;
+      }
+      routeNodeIds.push(nextNodeId);
+
+      const exitNodeId = this.neighbors(nextNodeId)
+        .map((neighbor) => neighbor.nodeId)
+        .filter((neighborNodeId) => this.liftStorageTransferTargetLiftId(neighborNodeId) !== null || isTopLiftColumnAccessNodeId(neighborNodeId))
+        .filter((neighborNodeId) => !this.currentNodeOccupancy.has(neighborNodeId))
+        .filter((neighborNodeId) => !this.nodeClaimedByOtherVehicle(neighborNodeId, vehicle.id))
+        .sort((left, right) => {
+          const leftPosition = nodePosition(this.scenario, left);
+          const rightPosition = nodePosition(this.scenario, right);
+          const current = nodePosition(this.scenario, nextNodeId);
+          return Math.abs(leftPosition.z - current.z) - Math.abs(rightPosition.z - current.z) ||
+            left.localeCompare(right);
+        })[0] ?? null;
+      if (exitNodeId) {
+        routeNodeIds.push(exitNodeId);
+        const nextMoveNodeId = routeNodeIds[1] ?? null;
+        if (!nextMoveNodeId || this.agentRefreshMoveBlocker(vehicle, nextMoveNodeId)) {
+          return null;
+        }
+        return {
+          vehicle,
+          blocker,
+          routeNodeIds,
+          score: this.routeDistanceM(routeNodeIds)
+        };
+      }
+      row = nextRow;
+    }
+    return null;
+  }
+
+  private agentRefreshLoadedTemporaryStorageNodeAllowed(vehicle: MutableVehicle, nodeId: string): boolean {
+    const occupantId = this.currentNodeOccupancy.get(nodeId);
+    if (occupantId && occupantId !== vehicle.id) {
+      return false;
+    }
+    if (this.nodeClaimedByOtherVehicle(nodeId, vehicle.id)) {
+      return false;
+    }
+    if (this.storedLoadIdAtNode(nodeId)) {
+      return false;
+    }
+    const task = this.taskForVehicle(vehicle);
+    const activeInboundDropoffs = this.activeInboundDropoffNodeIds();
+    return !activeInboundDropoffs.has(nodeId) || task?.dropoffNodeId === nodeId;
   }
 
   private agentRefreshLoadedStorageSwapAisleEscapeNodeId(sideNodeId: string, vehicle: MutableVehicle, blocker: MutableVehicle): string | null {
@@ -8316,12 +8449,16 @@ export class ShuttleSimCore {
           plannedRouteNodeIds = [vehicle.currentNodeId, goalNodeId];
         }
       }
-      const localRouteNodeIds = activeRoute.length >= 2 && activeRoute.join('>') !== plannedRouteNodeIds.join('>')
+      const activeRouteDiffers = activeRoute.length >= 2 && activeRoute.join('>') !== plannedRouteNodeIds.join('>');
+      const localRouteNodeIds = activeRouteDiffers && activeRoute.at(-1) !== goalNodeId
         ? activeRoute
         : [];
+      const visiblePlannedRouteNodeIds = activeRouteDiffers && activeRoute.at(-1) === goalNodeId
+        ? activeRoute
+        : plannedRouteNodeIds;
       return {
         plannedGoalNodeId: goalNodeId,
-        plannedRouteNodeIds,
+        plannedRouteNodeIds: visiblePlannedRouteNodeIds,
         localRouteNodeIds,
         localRouteReason: localRouteNodeIds.length === 0 ? null : 'temporary-yield'
       };
@@ -8548,6 +8685,85 @@ export class ShuttleSimCore {
       this.recentEvents = this.recentEvents.slice(-DEFAULT_RECENT_EVENTS);
     }
   }
+}
+
+export type FixedStepRunManifestV1 = {
+  schemaVersion: 'shuttle.fixedStepRunManifest.v1';
+  scenarioId: string;
+  scenarioHash: string;
+  seed: number;
+  commitSha: string;
+  stepSec: number;
+  durationSec: number;
+  finalSimTimeSec: number;
+  finalTickIndex: number;
+  status: RuntimeStatus;
+  eventLogHash: string;
+  stateHash: string;
+  completedInbound: number;
+  completedOutbound: number;
+  totalPph: number;
+  inboundPph: number;
+  deadlocks: number;
+  livelocks: number;
+  physicalViolations: number;
+};
+
+export type FixedStepRunResult = {
+  manifest: FixedStepRunManifestV1;
+  state: ShuttleSimState;
+  snapshot: ShuttleEngineSnapshotV1;
+  eventLog: EventLogEntry[];
+};
+
+export function runFixedStep(options: {
+  scenario?: ShuttleScenario;
+  durationSec?: number;
+  stepSec?: number;
+  commitSha?: string;
+} = {}): FixedStepRunResult {
+  const inputScenario = options.scenario ?? createDefaultShuttleScenario();
+  const stepSec = Math.max(0.001, options.stepSec ?? inputScenario.timeStepSec);
+  const durationSec = Math.max(0, options.durationSec ?? inputScenario.durationSec);
+  const scenario = ShuttleScenarioSchema.parse({
+    ...inputScenario,
+    durationSec,
+    timeStepSec: stepSec
+  });
+  const sim = new ShuttleSimCore(scenario);
+  sim.start();
+  while (sim.getClock().simTimeSec < durationSec - 1e-9 && sim.getClock().status === 'running') {
+    sim.step(Math.min(stepSec, durationSec - sim.getClock().simTimeSec));
+  }
+  const state = sim.getState();
+  const snapshot = sim.createSnapshot();
+  const eventLog = sim.getEventLog();
+  return {
+    manifest: {
+      schemaVersion: 'shuttle.fixedStepRunManifest.v1',
+      scenarioId: scenario.id,
+      scenarioHash: hashScenario(scenario),
+      seed: scenario.seed,
+      commitSha: options.commitSha ?? 'unknown',
+      stepSec,
+      durationSec,
+      finalSimTimeSec: state.simTimeSec,
+      finalTickIndex: snapshot.tickIndex,
+      status: state.status,
+      eventLogHash: snapshot.eventLogHash,
+      stateHash: hashDeterministicReplayState(snapshot),
+      completedInbound: state.kpis.completedInbound,
+      completedOutbound: state.kpis.completedOutbound,
+      totalPph: state.kpis.totalPph,
+      inboundPph: state.kpis.inboundPph,
+      deadlocks: state.kpis.deadlockCount,
+      livelocks: state.kpis.livelockCount,
+      physicalViolations: state.traffic.physicalViolationCount
+    },
+    state,
+    snapshot,
+    eventLog
+  };
 }
 
 function getByPointer(root: Record<string, unknown>, pointer: string): unknown {
