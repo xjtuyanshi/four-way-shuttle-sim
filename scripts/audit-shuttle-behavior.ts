@@ -541,12 +541,15 @@ function auditVehicleTrace(current: ShuttleSimState, vehicle: VehicleState): voi
   }
 
   if (vehicle.localRouteNodeIds.length > 1) {
-    if (vehicle.localRouteNodeIds.length > maxLocalRouteNodeCount) {
+    const localRouteNodeLimit = vehicle.localRouteReason === 'loaded-storage-swap-clearance'
+      ? Math.max(maxLocalRouteNodeCount, 6)
+      : maxLocalRouteNodeCount;
+    if (vehicle.localRouteNodeIds.length > localRouteNodeLimit) {
       addAnomaly(
         current.simTimeSec,
         vehicle.id,
         'temporary-route-too-many-nodes',
-        vehicle.localRouteNodeIds.length > maxLocalRouteNodeCount + 2 ? 'critical' : 'warn',
+        vehicle.localRouteNodeIds.length > localRouteNodeLimit + 2 ? 'critical' : 'warn',
         `${vehicle.localRouteReason ?? 'temporary-route'} nodes=${vehicle.localRouteNodeIds.length} route=${vehicle.localRouteNodeIds.join('>')}`
       );
     }

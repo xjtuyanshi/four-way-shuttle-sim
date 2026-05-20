@@ -618,14 +618,13 @@ function KpiStrip({ scenario, kpis }: { scenario: ShuttleScenario | null; kpis: 
     : 0;
   const utilizationBreakdowns = kpis ? Object.values(kpis.vehicleUtilizationBreakdown) : [];
   const averageWaitingPct = average(utilizationBreakdowns.map((breakdown) => breakdown.waiting)) * 100;
-  const requestedInboundPph = scenario?.taskGeneration.inboundRatePerHour ?? null;
   const requestedTotalPph = scenario
     ? scenario.taskGeneration.inboundRatePerHour + scenario.taskGeneration.outboundRatePerHour
     : null;
   const items = [
     ['Achieved total PPH', kpis ? formatNumber(kpis.totalPph, 1) : '--'],
     ['Achieved inbound PPH', kpis ? formatNumber(kpis.inboundPph, 1) : '--'],
-    ['Requested source PPH', requestedTotalPph !== null ? formatNumber(requestedTotalPph, 0) : '--'],
+    ['Requested total PPH', requestedTotalPph !== null ? formatNumber(requestedTotalPph, 0) : '--'],
     ['Active / queued', kpis ? `${kpis.activeTasks} / ${kpis.queuedTasks}` : '--'],
     ['Task assign wait', kpis ? `${formatNumber(kpis.averageTaskWaitSec, 1)}s` : '--'],
     ['Util / traffic hold', kpis ? `${formatNumber(averageUtilizationPct, 1)}% / ${formatNumber(averageWaitingPct, 1)}%` : '--'],
@@ -638,7 +637,7 @@ function KpiStrip({ scenario, kpis }: { scenario: ShuttleScenario | null; kpis: 
         <div className="metric" key={label}>
           <span>{label}</span>
           <strong>{value}</strong>
-          {label === 'Requested source PPH' ? <small>{requestedInboundPph !== null ? `${formatNumber(requestedInboundPph, 0)} inbound supply pressure` : 'upstream supply pressure'}</small> : null}
+          {label === 'Requested total PPH' ? <small>inbound + outbound task pressure</small> : null}
         </div>
       ))}
     </section>
