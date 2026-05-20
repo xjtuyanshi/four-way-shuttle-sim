@@ -1,11 +1,17 @@
 import type { LayoutCalibrationProfile } from '@four-way-shuttle/schemas';
 
 export type ShuttleLayoutGeometryProfile = {
+  layoutKind: 'row-bank' | 'top-lift-column';
   calibrationProfile: LayoutCalibrationProfile;
   storageRowsPerBank: number;
   storageRowBanks: 2;
   storageColumnsPerBay: number;
   storageColumnBays: number;
+  storageRowsPerZone: number;
+  storageColumnsPerZone: number;
+  liftPairCount: number;
+  liftPortSpacingXM: number;
+  liftBufferCapacity: number;
   storageCellPitchXM: number;
   storageCellPitchZM: number;
   leftSpineXM: number;
@@ -26,6 +32,7 @@ export type ShuttleLayoutGeometryProfileOverride = Partial<Omit<ShuttleLayoutGeo
 };
 
 export const DEFAULT_SHUTTLE_LAYOUT_PROFILE: ShuttleLayoutGeometryProfile = {
+  layoutKind: 'row-bank',
   calibrationProfile: {
     id: 'phase0-cad-assumption-v1',
     label: 'Phase 0 real-layout assumption profile',
@@ -100,6 +107,11 @@ export const DEFAULT_SHUTTLE_LAYOUT_PROFILE: ShuttleLayoutGeometryProfile = {
   storageRowBanks: 2,
   storageColumnsPerBay: 6,
   storageColumnBays: 4,
+  storageRowsPerZone: 7,
+  storageColumnsPerZone: 7,
+  liftPairCount: 2,
+  liftPortSpacingXM: 0.7,
+  liftBufferCapacity: 3,
   storageCellPitchXM: 1.25,
   storageCellPitchZM: 1.2,
   leftSpineXM: 0,
@@ -160,7 +172,7 @@ export function createShuttleLayoutProfile(overrides: ShuttleLayoutGeometryProfi
     ...geometryProfile,
     calibrationProfile
   };
-  if (profile.storageRowBanks !== 2) {
+  if (profile.layoutKind === 'row-bank' && profile.storageRowBanks !== 2) {
     throw new Error('Phase 0 layout generation supports exactly two storage row banks.');
   }
   return profile;

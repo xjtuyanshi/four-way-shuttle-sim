@@ -371,6 +371,37 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.traffic.liftPorts.filter((port) => port.kind === 'outbound')).toHaveLength(0);
   });
 
+  it('can create the top-lift column-fill layout with fixed inbound/outbound ports', () => {
+    const scenario = createDefaultShuttleScenario({
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 1
+      },
+      vehicles: { count: 8 },
+      trafficPolicy: { controllerMode: 'agent-refresh' }
+    });
+    const parsed = ShuttleScenarioSchema.parse(scenario);
+    const contract = summarizeScenarioStaticSceneContract(parsed);
+
+    expect(parsed.layout.calibrationProfile?.id).toBe('top-lift-column-v1');
+    expect(contract.storageCellCount).toBe(196);
+    expect(contract.storageIslandCount).toBe(4);
+    expect(contract.storageRows).toBe(14);
+    expect(contract.storageColumns).toBe(14);
+    expect(contract.storagePolicy).toBe('columnContiguousBottomToTopFill');
+    expect(contract.inboundStorageFlow).toBe('bottomToTop');
+    expect(contract.diagonalTrackCount).toBe(0);
+    expect(parsed.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound').map((node) => node.id)).toEqual([
+      'lift-01-inbound',
+      'lift-02-inbound'
+    ]);
+    expect(parsed.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'outbound').map((node) => node.id)).toEqual([
+      'lift-01-outbound',
+      'lift-02-outbound'
+    ]);
+    expect(verticalStorageFootprintEdgeViolations(parsed)).toEqual([]);
+  });
+
   it('limits generated inbound source loads to one waiting pallet per lift', () => {
     const scenario = createDefaultShuttleScenario({
       liftMode: 'all-inbound',

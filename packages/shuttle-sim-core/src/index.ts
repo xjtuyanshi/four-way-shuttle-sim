@@ -44,6 +44,11 @@ export {
 type RuntimeStatus = ShuttleSimState['status'];
 
 const COLLISION_AVOIDANCE_PARAM = '/trafficPolicy/collisionAvoidanceEnabled';
+const TOP_LIFT_COLUMN_LAYOUT_PROFILE_ID = 'top-lift-column-v1';
+
+function isTopLiftColumnLayout(scenario: ShuttleScenario): boolean {
+  return scenario.layout.calibrationProfile?.id === TOP_LIFT_COLUMN_LAYOUT_PROFILE_ID;
+}
 
 export type MutableVehicle = VehicleState & {
   targetSpeedMps: number;
@@ -449,10 +454,248 @@ function mainLaneNodeId(lane: 'north' | 'south', index: number): string {
   return `main-${lane}-${String(index).padStart(2, '0')}`;
 }
 
+function columnAccessNodeId(level: 'top-a' | 'top-b' | 'middle' | 'bottom-a' | 'bottom-b', columnIndex: number): string {
+  return `column-${level}-c${String(columnIndex + 1).padStart(2, '0')}`;
+}
+
+function moduleSpineNodeId(moduleIndex: number, level: 'top-a' | 'top-b' | 'middle' | 'bottom-a' | 'bottom-b'): string {
+  return `module-${String(moduleIndex + 1).padStart(2, '0')}-spine-${level}`;
+}
+
+function isTopLiftColumnAccessNodeId(nodeId: string): boolean {
+  return /^(?:column-(?:top-a|top-b|middle|bottom-a|bottom-b)-c\d+|module-\d+-spine-(?:top-a|top-b|middle|bottom-a|bottom-b))$/.test(nodeId);
+}
+
+function createTopLiftColumnLayout(
+  profile: ShuttleLayoutGeometryProfile,
+  _liftMode: DefaultLiftMode = 'balanced'
+): ShuttleScenario['layout'] {
+  const rowsPerZone = profile.storageRowsPerZone;
+  const columnsPerZone = profile.storageColumnsPerZone;
+  const liftPairCount = profile.liftPairCount;
+  const rowsPerModule = rowsPerZone * 2;
+  const columnsPerModule = columnsPerZone * 2;
+  const totalRows = rowsPerModule;
+  const totalColumns = columnsPerModule * liftPairCount;
+  const topAisleZM = 0;
+  const topLaneSpacingZM = Math.abs(profile.mainLaneSouthZM - profile.mainLaneNorthZM);
+  const topLaneAZM = round(topAisleZM - topLaneSpacingZM / 2, 3);
+  const topLaneBZM = round(topAisleZM + topLaneSpacingZM / 2, 3);
+  const upperFirstRowZ = round(topLaneBZM + profile.storageCellPitchZM, 3);
+  const upperLastRowZ = round(upperFirstRowZ + (rowsPerZone - 1) * profile.storageCellPitchZM, 3);
+  const middleAisleZ = round(upperLastRowZ + profile.storageCellPitchZM, 3);
+  const lowerFirstRowZ = round(middleAisleZ + profile.storageCellPitchZM, 3);
+  const lowerLastRowZ = round(lowerFirstRowZ + (rowsPerZone - 1) * profile.storageCellPitchZM, 3);
+  const bottomLaneAZM = round(lowerLastRowZ + profile.storageCellPitchZM, 3);
+  const bottomLaneBZM = round(bottomLaneAZM + topLaneSpacingZM, 3);
+  const liftZ = round(topLaneAZM - profile.liftStandoffZM, 3);
+  const zoneGapXM = profile.storageBayGapXM;
+  const moduleGapXM = profile.storageBayGapXM * 1.5;
+
+  const columnXs = Array.from({ length: totalColumns }, (_, columnIndex) => {
+    const moduleIndex = Math.floor(columnIndex / columnsPerModule);
+    const withinModule = columnIndex % columnsPerModule;
+    const zoneOffset = withinModule >= columnsPerZone ? zoneGapXM : 0;
+    return round(
+      profile.firstStorageXM +
+        moduleIndex * (columnsPerModule * profile.storageCellPitchXM + zoneGapXM + moduleGapXM) +
+        withinModule * profile.storageCellPitchXM +
+        zoneOffset,
+      3
+    );
+  });
+  const rowZ = (rowIndex: number): number => rowIndex < rowsPerZone
+    ? round(upperFirstRowZ + rowIndex * profile.storageCellPitchZM, 3)
+    : round(lowerFirstRowZ + (rowIndex - rowsPerZone) * profile.storageCellPitchZM, 3);
+
+  const nodes: LayoutNode[] = [];
+  const addNode = (node: LayoutNode): void => {
+    nodes.push(node);
+  };
+
+  for (let columnIndex = 0; columnIndex < totalColumns; columnIndex += 1) {
+    const x = columnXs[columnIndex]!;
+    addNode({ id: columnAccessNodeId('top-a', columnIndex), type: 'intersection', x, y: 0, z: topLaneAZM, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
+    addNode({ id: columnAccessNodeId('top-b', columnIndex), type: 'intersection', x, y: 0, z: topLaneBZM, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
+    addNode({ id: columnAccessNodeId('middle', columnIndex), type: 'intersection', x, y: 0, z: middleAisleZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
+    addNode({ id: columnAccessNodeId('bottom-a', columnIndex), type: 'intersection', x, y: 0, z: bottomLaneAZM, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
+    addNode({ id: columnAccessNodeId('bottom-b', columnIndex), type: 'intersection', x, y: 0, z: bottomLaneBZM, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
+  }
+
+  for (let rowIndex = 0; rowIndex < totalRows; rowIndex += 1) {
+    const rowLabel = String(rowIndex + 1).padStart(2, '0');
+    const z = rowZ(rowIndex);
+    addNode({ id: `left-row-${rowLabel}`, type: 'intersection', x: round(columnXs[0]! - profile.sideClearanceXM, 3), y: 0, z, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
+    addNode({ id: `right-row-${rowLabel}`, type: 'intersection', x: round(columnXs[totalColumns - 1]! + profile.sideClearanceXM, 3), y: 0, z, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
+    for (let columnIndex = 0; columnIndex < totalColumns; columnIndex += 1) {
+      addNode({
+        id: storageNodeId(rowIndex, columnIndex),
+        type: 'storage',
+        x: columnXs[columnIndex]!,
+        y: 0,
+        z,
+        noStop: false,
+        noParking: false,
+        capacity: 1,
+        allowedDirections: []
+      });
+    }
+  }
+
+  const liftNodes: Array<{ id: string; x: number; z: number; kind: LiftKind; throatId: string }> = [];
+  const moduleSpineNodeIds: Record<'top-a' | 'top-b' | 'middle' | 'bottom-a' | 'bottom-b', string[]> = {
+    'top-a': [],
+    'top-b': [],
+    middle: [],
+    'bottom-a': [],
+    'bottom-b': []
+  };
+  for (let moduleIndex = 0; moduleIndex < liftPairCount; moduleIndex += 1) {
+    const moduleFirstColumn = moduleIndex * columnsPerModule;
+    const leftZoneStartX = columnXs[moduleFirstColumn]!;
+    const leftZoneEndX = columnXs[moduleFirstColumn + columnsPerZone - 1]!;
+    const rightZoneStartX = columnXs[moduleFirstColumn + columnsPerZone]!;
+    const rightZoneEndX = columnXs[moduleFirstColumn + columnsPerModule - 1]!;
+    const moduleSpineX = round((leftZoneEndX + rightZoneStartX) / 2, 3);
+    const spineLevels = [
+      { level: 'top-a' as const, z: topLaneAZM },
+      { level: 'top-b' as const, z: topLaneBZM },
+      { level: 'middle' as const, z: middleAisleZ },
+      { level: 'bottom-a' as const, z: bottomLaneAZM },
+      { level: 'bottom-b' as const, z: bottomLaneBZM }
+    ];
+    for (const spine of spineLevels) {
+      const id = moduleSpineNodeId(moduleIndex, spine.level);
+      addNode({ id, type: 'intersection', x: moduleSpineX, y: 0, z: spine.z, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
+      moduleSpineNodeIds[spine.level].push(id);
+    }
+    const physicalLiftXs = [
+      round((leftZoneStartX + leftZoneEndX) / 2, 3),
+      round((rightZoneStartX + rightZoneEndX) / 2, 3)
+    ];
+    for (let localLiftIndex = 0; localLiftIndex < physicalLiftXs.length; localLiftIndex += 1) {
+      const liftNumber = moduleIndex * 2 + localLiftIndex + 1;
+      const liftCenterX = physicalLiftXs[localLiftIndex]!;
+      const portDefinitions = [
+        { suffix: 'outbound', kind: 'outbound' as const, x: round(liftCenterX - profile.liftPortSpacingXM / 2, 3) },
+        { suffix: 'inbound', kind: 'inbound' as const, x: round(liftCenterX + profile.liftPortSpacingXM / 2, 3) }
+      ];
+      for (const port of portDefinitions) {
+        const id = `lift-${String(liftNumber).padStart(2, '0')}-${port.suffix}`;
+        const throatId = `${id}-throat`;
+        addNode({ id, type: 'lift-blackbox', liftKind: port.kind, x: port.x, y: 0, z: liftZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
+        addNode({ id: throatId, type: 'intersection', x: port.x, y: 0, z: topLaneAZM, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
+        liftNodes.push({ id, x: port.x, z: liftZ, kind: port.kind, throatId });
+      }
+    }
+  }
+
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  const edges: LayoutEdge[] = [];
+  const addEdge = (id: string, from: string, to: string, conflictGroup: string, directionMode: 'oneWay' | 'twoWay' = 'twoWay') => {
+    const fromNode = nodesById.get(from);
+    const toNode = nodesById.get(to);
+    if (!fromNode || !toNode) {
+      throw new Error(`Top-lift column layout edge ${id} references an unknown node.`);
+    }
+    const lengthM = round(Math.abs(toNode.x - fromNode.x) + Math.abs(toNode.z - fromNode.z), 3);
+    if (lengthM <= 0) {
+      return;
+    }
+    edges.push({
+      id,
+      from,
+      to,
+      lengthM,
+      directionMode,
+      reservationType: 'edge',
+      conflictGroup,
+      noParking: true
+    });
+  };
+
+  const connectHorizontal = (level: 'top-a' | 'top-b' | 'middle' | 'bottom-a' | 'bottom-b', extraNodeIds: string[], groupPrefix: string): void => {
+    const nodeIds = [
+      ...Array.from({ length: totalColumns }, (_, columnIndex) => columnAccessNodeId(level, columnIndex)),
+      ...extraNodeIds
+    ]
+      .filter((id, index, ids) => ids.indexOf(id) === index)
+      .sort((left, right) => nodesById.get(left)!.x - nodesById.get(right)!.x || left.localeCompare(right));
+    for (let index = 1; index < nodeIds.length; index += 1) {
+      addEdge(`${nodeIds[index - 1]}-${nodeIds[index]}`, nodeIds[index - 1]!, nodeIds[index]!, `${groupPrefix}-${String(index).padStart(2, '0')}`);
+    }
+  };
+
+  const throatIds = liftNodes.map((lift) => lift.throatId);
+  connectHorizontal('top-a', [...throatIds, ...moduleSpineNodeIds['top-a']], 'top-double-aisle-a');
+  connectHorizontal('top-b', moduleSpineNodeIds['top-b'], 'top-double-aisle-b');
+  connectHorizontal('middle', moduleSpineNodeIds.middle, 'middle-aisle');
+  connectHorizontal('bottom-a', moduleSpineNodeIds['bottom-a'], 'bottom-double-aisle-a');
+  connectHorizontal('bottom-b', moduleSpineNodeIds['bottom-b'], 'bottom-double-aisle-b');
+
+  for (let moduleIndex = 0; moduleIndex < liftPairCount; moduleIndex += 1) {
+    const topA = moduleSpineNodeId(moduleIndex, 'top-a');
+    const topB = moduleSpineNodeId(moduleIndex, 'top-b');
+    const middle = moduleSpineNodeId(moduleIndex, 'middle');
+    const bottomA = moduleSpineNodeId(moduleIndex, 'bottom-a');
+    const bottomB = moduleSpineNodeId(moduleIndex, 'bottom-b');
+    const spineLabel = `module-spine-${String(moduleIndex + 1).padStart(2, '0')}`;
+    addEdge(`${topA}-${topB}`, topA, topB, `${spineLabel}-top-transfer`);
+    addEdge(`${topB}-${middle}`, topB, middle, `${spineLabel}-upper-vertical`);
+    addEdge(`${middle}-${bottomA}`, middle, bottomA, `${spineLabel}-lower-vertical`);
+    addEdge(`${bottomA}-${bottomB}`, bottomA, bottomB, `${spineLabel}-bottom-transfer`);
+  }
+
+  for (let columnIndex = 0; columnIndex < totalColumns; columnIndex += 1) {
+    addEdge(`${columnAccessNodeId('top-a', columnIndex)}-${columnAccessNodeId('top-b', columnIndex)}`, columnAccessNodeId('top-a', columnIndex), columnAccessNodeId('top-b', columnIndex), `top-lane-transfer-c${String(columnIndex + 1).padStart(2, '0')}`);
+    addEdge(`${columnAccessNodeId('bottom-a', columnIndex)}-${columnAccessNodeId('bottom-b', columnIndex)}`, columnAccessNodeId('bottom-a', columnIndex), columnAccessNodeId('bottom-b', columnIndex), `bottom-lane-transfer-c${String(columnIndex + 1).padStart(2, '0')}`);
+    addEdge(`${columnAccessNodeId('top-b', columnIndex)}-${storageNodeId(0, columnIndex)}`, columnAccessNodeId('top-b', columnIndex), storageNodeId(0, columnIndex), `storage-column-upper-c${String(columnIndex + 1).padStart(2, '0')}`);
+    addEdge(`${columnAccessNodeId('middle', columnIndex)}-${storageNodeId(rowsPerZone - 1, columnIndex)}`, columnAccessNodeId('middle', columnIndex), storageNodeId(rowsPerZone - 1, columnIndex), `storage-column-upper-c${String(columnIndex + 1).padStart(2, '0')}`);
+    addEdge(`${columnAccessNodeId('middle', columnIndex)}-${storageNodeId(rowsPerZone, columnIndex)}`, columnAccessNodeId('middle', columnIndex), storageNodeId(rowsPerZone, columnIndex), `storage-column-lower-c${String(columnIndex + 1).padStart(2, '0')}`);
+    addEdge(`${columnAccessNodeId('bottom-a', columnIndex)}-${storageNodeId(totalRows - 1, columnIndex)}`, columnAccessNodeId('bottom-a', columnIndex), storageNodeId(totalRows - 1, columnIndex), `storage-column-lower-c${String(columnIndex + 1).padStart(2, '0')}`);
+    for (let rowIndex = 1; rowIndex < rowsPerZone; rowIndex += 1) {
+      addEdge(`${storageNodeId(rowIndex - 1, columnIndex)}-${storageNodeId(rowIndex, columnIndex)}`, storageNodeId(rowIndex - 1, columnIndex), storageNodeId(rowIndex, columnIndex), `storage-column-upper-c${String(columnIndex + 1).padStart(2, '0')}`);
+      addEdge(`${storageNodeId(rowsPerZone + rowIndex - 1, columnIndex)}-${storageNodeId(rowsPerZone + rowIndex, columnIndex)}`, storageNodeId(rowsPerZone + rowIndex - 1, columnIndex), storageNodeId(rowsPerZone + rowIndex, columnIndex), `storage-column-lower-c${String(columnIndex + 1).padStart(2, '0')}`);
+    }
+  }
+
+  for (const lift of liftNodes) {
+    addEdge(`${lift.id}-${lift.throatId}`, lift.id, lift.throatId, `${lift.id}-buffer-throat`);
+  }
+
+  const parkingZ = bottomLaneBZM;
+  for (let index = 0; index < 8; index += 1) {
+    const columnIndex = Math.min(totalColumns - 1, Math.floor(index * totalColumns / 8));
+    const id = `parking-${String(index + 1).padStart(2, '0')}`;
+    addNode({ id, type: 'parking', x: columnXs[columnIndex]!, y: 0, z: round(parkingZ + profile.parkingStandoffXM, 3), noStop: false, noParking: false, capacity: 1, allowedDirections: [] });
+    nodesById.set(id, nodes[nodes.length - 1]!);
+    addEdge(`${id}-${columnAccessNodeId('bottom-b', columnIndex)}`, id, columnAccessNodeId('bottom-b', columnIndex), `parking-bottom-c${String(columnIndex + 1).padStart(2, '0')}`);
+  }
+
+  const calibrationProfile = {
+    ...profile.calibrationProfile,
+    id: TOP_LIFT_COLUMN_LAYOUT_PROFILE_ID,
+    label: 'Top-lift column-fill layout assumption',
+    sourceDescription: `${profile.calibrationProfile.sourceDescription}; updated from user reference image with top-side lifts, fixed left outbound/right inbound ports, and column-fill 7x7 modules.`,
+    notes: [
+      ...profile.calibrationProfile.notes,
+      'Top-lift column layout: every physical lift has an outbound left port and an inbound right port.',
+      'Each pair of physical lifts owns four 7x7 storage zones; inbound target allocation fills each physical storage column bottom-to-top.',
+      'Lift throat buffer is modeled as port approach capacity, not as separate storage cells.'
+    ]
+  };
+
+  return { units: 'meter', calibrationProfile, nodes, edges, zones: [] };
+}
+
 function createDefaultLayout(
   profile: ShuttleLayoutGeometryProfile = DEFAULT_SHUTTLE_LAYOUT_PROFILE,
   liftMode: DefaultLiftMode = 'balanced'
 ): ShuttleScenario['layout'] {
+  if (profile.layoutKind === 'top-lift-column') {
+    return createTopLiftColumnLayout(profile, liftMode);
+  }
+
   const leftSpineX = profile.leftSpineXM;
   const rowZs = defaultStorageRowZs(profile);
   const columnXs = defaultStorageColumnXs(profile);
@@ -998,6 +1241,9 @@ export type VerticalStorageFootprintEdgeViolation = {
 };
 
 export function verticalStorageFootprintEdgeViolations(scenario: ShuttleScenario): VerticalStorageFootprintEdgeViolation[] {
+  if (isTopLiftColumnLayout(scenario)) {
+    return [];
+  }
   const staticScene = summarizeStaticSceneContract(scenario);
   const nodesById = new Map(scenario.layout.nodes.map((node) => [node.id, node]));
   const violations: VerticalStorageFootprintEdgeViolation[] = [];
@@ -2174,6 +2420,30 @@ export class ShuttleSimCore {
   }
 
   private storageLanes(): ShuttleScenario['layout']['nodes'][] {
+    if (this.topLiftColumnLayoutEnabled()) {
+      const laneByKey = new Map<string, ShuttleScenario['layout']['nodes']>();
+      for (const node of this.scenario.layout.nodes.filter((candidate) => candidate.type === 'storage')) {
+        const key = this.nodeStorageRowLabel(node.id);
+        if (!key) {
+          continue;
+        }
+        const lane = laneByKey.get(key) ?? [];
+        lane.push(node);
+        laneByKey.set(key, lane);
+      }
+
+      return [...laneByKey.entries()]
+        .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+        .map(([, lane]) => lane.sort((left, right) => {
+          const leftPosition = this.storageGridPosition(left.id);
+          const rightPosition = this.storageGridPosition(right.id);
+          return (
+            (rightPosition?.row ?? 0) - (leftPosition?.row ?? 0) ||
+            left.id.localeCompare(right.id)
+          );
+        }));
+    }
+
     const laneByZ = new Map<number, ShuttleScenario['layout']['nodes']>();
     for (const node of this.scenario.layout.nodes.filter((candidate) => candidate.type === 'storage')) {
       const lane = laneByZ.get(node.z) ?? [];
@@ -3139,13 +3409,30 @@ export class ShuttleSimCore {
   private nodeStorageRowLabel(nodeId: string): string | null {
     const storagePosition = this.storageGridPosition(nodeId);
     if (storagePosition) {
+      if (this.topLiftColumnLayoutEnabled()) {
+        const bank = storagePosition.row <= this.topLiftColumnRowsPerZone() ? 1 : 2;
+        return `b${String(bank).padStart(2, '0')}-c${String(storagePosition.column).padStart(2, '0')}`;
+      }
       return `r${String(storagePosition.row).padStart(2, '0')}`;
+    }
+    if (this.topLiftColumnLayoutEnabled()) {
+      const accessMatch = /^column-(?:top-a|top-b|middle|bottom-a|bottom-b)-c(\d+)$/.exec(nodeId);
+      if (accessMatch) {
+        return `c${accessMatch[1]}`;
+      }
     }
     const sideMatch = /^(?:left|right)-row-(\d+)$/.exec(nodeId);
     if (sideMatch) {
       return `r${sideMatch[1]}`;
     }
     return null;
+  }
+
+  private topLiftColumnRowsPerZone(): number {
+    const rows = this.scenario.layout.nodes
+      .filter((node) => node.type === 'storage')
+      .map((node) => this.storageGridPosition(node.id)?.row ?? 0);
+    return Math.max(1, Math.max(...rows) / 2);
   }
 
   private planRoute(currentNodeId: string, task: TaskStateRecord, parkingNodeId: string): string[] {
@@ -3342,6 +3629,10 @@ export class ShuttleSimCore {
     return this.scenario.taskGeneration.inboundRatePerHour > 0 && this.scenario.taskGeneration.outboundRatePerHour <= 0;
   }
 
+  private topLiftColumnLayoutEnabled(): boolean {
+    return isTopLiftColumnLayout(this.scenario);
+  }
+
   private vehicleOrdinal(vehicleId: string): number {
     return Math.max(1, Number(vehicleId.replace(/\D+/g, '')) || 1);
   }
@@ -3351,11 +3642,31 @@ export class ShuttleSimCore {
     if (!match) {
       return null;
     }
+    if (this.topLiftColumnLayoutEnabled()) {
+      const position = this.storageGridPosition(storageNodeId);
+      if (!position) {
+        return null;
+      }
+      const rowsPerZone = this.topLiftColumnRowsPerZone();
+      const upperBank = position.row <= rowsPerZone;
+      const columnIndex = position.column - 1;
+      const nodeId = upperBank
+        ? side === 'right'
+          ? columnAccessNodeId('top-b', columnIndex)
+          : columnAccessNodeId('middle', columnIndex)
+        : side === 'right'
+          ? columnAccessNodeId('middle', columnIndex)
+          : columnAccessNodeId('bottom-a', columnIndex);
+      return this.scenario.layout.nodes.some((node) => node.id === nodeId) ? nodeId : null;
+    }
     const sideNodeId = `${side}-row-${match[1]}`;
     return this.scenario.layout.nodes.some((node) => node.id === sideNodeId) ? sideNodeId : null;
   }
 
   private nearestStorageSideNodeId(storageNodeId: string): string | null {
+    if (this.topLiftColumnLayoutEnabled()) {
+      return this.storageSideNodeId(storageNodeId, 'right') ?? this.storageSideNodeId(storageNodeId, 'left');
+    }
     const position = this.storageGridPosition(storageNodeId);
     if (!position) {
       return null;
@@ -3434,7 +3745,7 @@ export class ShuttleSimCore {
         if (neighbor.nodeId !== toNodeId && this.layoutNode(neighbor.nodeId)?.type === 'lift-blackbox') {
           continue;
         }
-        const tentative = (gScore.get(current) ?? Infinity) + neighbor.lengthM;
+        const tentative = (gScore.get(current) ?? Infinity) + this.agentEdgeCostM(current, neighbor.nodeId, neighbor.lengthM, toNodeId);
         if (tentative < (gScore.get(neighbor.nodeId) ?? Infinity)) {
           cameFrom.set(neighbor.nodeId, current);
           gScore.set(neighbor.nodeId, tentative);
@@ -3473,7 +3784,7 @@ export class ShuttleSimCore {
         if (neighbor.nodeId !== toNodeId && this.layoutNode(neighbor.nodeId)?.type === 'lift-blackbox') {
           continue;
         }
-        const tentative = (gScore.get(current) ?? Infinity) + neighbor.lengthM;
+        const tentative = (gScore.get(current) ?? Infinity) + this.agentEdgeCostM(current, neighbor.nodeId, neighbor.lengthM, toNodeId);
         if (tentative < (gScore.get(neighbor.nodeId) ?? Infinity)) {
           cameFrom.set(neighbor.nodeId, current);
           gScore.set(neighbor.nodeId, tentative);
@@ -3517,6 +3828,23 @@ export class ShuttleSimCore {
   }
 
   private agentEdgeCostM(fromNodeId: string, toNodeId: string, lengthM: number, goalNodeId: string): number {
+    if (this.topLiftColumnLayoutEnabled()) {
+      const topAFrom = /^(?:column-top-a-c\d+|module-\d+-spine-top-a)$/.test(fromNodeId);
+      const topATo = /^(?:column-top-a-c\d+|module-\d+-spine-top-a)$/.test(toNodeId);
+      const topBFrom = /^(?:column-top-b-c\d+|module-\d+-spine-top-b)$/.test(fromNodeId);
+      const topBTo = /^(?:column-top-b-c\d+|module-\d+-spine-top-b)$/.test(toNodeId);
+      const horizontalTopA = topAFrom && topATo;
+      const horizontalTopB = topBFrom && topBTo;
+      const goalNode = this.layoutNode(goalNodeId);
+      const storageAccessGoal = goalNode?.type === 'storage' || /^(?:column-(?:top-b|middle|bottom-a)-c\d+|module-\d+-spine-(?:top-b|middle|bottom-a))$/.test(goalNodeId);
+      const liftAccessGoal = goalNode?.type === 'lift-blackbox' || /-throat$/.test(goalNodeId) || /^(?:column-top-a-c\d+|module-\d+-spine-top-a)$/.test(goalNodeId);
+      if (storageAccessGoal && horizontalTopA) {
+        return lengthM + 20;
+      }
+      if (liftAccessGoal && horizontalTopB) {
+        return lengthM + 20;
+      }
+    }
     const edgeKey = [fromNodeId, toNodeId].sort().join('>');
     if (
       (edgeKey === 'left-top>right-top' || edgeKey === 'left-bottom>right-bottom') &&
@@ -3529,6 +3857,9 @@ export class ShuttleSimCore {
   }
 
   private agentEdgeDirectionAllowed(fromNodeId: string, toNodeId: string, goalNodeId: string): boolean {
+    if (this.topLiftColumnLayoutEnabled()) {
+      return true;
+    }
     const fromMain = /^main-(north|south)-(\d+)$/.exec(fromNodeId);
     const toMain = /^main-(north|south)-(\d+)$/.exec(toNodeId);
     if (!fromMain || !toMain || fromMain[1] !== toMain[1]) {
@@ -3615,7 +3946,7 @@ export class ShuttleSimCore {
           left.id.localeCompare(right.id)
         );
       });
-    if (this.isInboundOnlyFlow()) {
+    if (this.isInboundOnlyFlow() && !this.topLiftColumnLayoutEnabled()) {
       const inboundStandbyStorage = this.inboundInitialParkingCandidates(temporaryStorageParking);
       const standbyIds = new Set(inboundStandbyStorage.map((node) => node.id));
       return [
@@ -4659,6 +4990,13 @@ export class ShuttleSimCore {
     }
     if (node.type === 'storage') {
       const task = this.taskForVehicle(vehicle);
+      if (
+        this.topLiftColumnLayoutEnabled() &&
+        vehicle.loaded &&
+        task?.dropoffNodeId !== nodeId
+      ) {
+        return false;
+      }
       const activeInboundDropoffs = this.activeInboundDropoffNodeIds();
       if (
         vehicle.loaded &&
@@ -4671,6 +5009,12 @@ export class ShuttleSimCore {
       if (vehicle.loaded && this.storedLoadIdAtNode(nodeId)) {
         return false;
       }
+      return true;
+    }
+    if (
+      this.topLiftColumnLayoutEnabled() &&
+      isTopLiftColumnAccessNodeId(node.id)
+    ) {
       return true;
     }
     return node.type === 'parking' || node.type === 'aisle' || /^left-row-|^right-row-/.test(node.id);
@@ -4703,6 +5047,12 @@ export class ShuttleSimCore {
     }
     if (node.type === 'storage') {
       return vehicle.loaded ? 1 : 0;
+    }
+    if (
+      this.topLiftColumnLayoutEnabled() &&
+      isTopLiftColumnAccessNodeId(node.id)
+    ) {
+      return vehicle.loaded ? 0 : 1;
     }
     if (/^left-row-|^right-row-/.test(node.id)) {
       return 2;
@@ -5109,7 +5459,7 @@ export class ShuttleSimCore {
         if (neighbor.nodeId !== toNodeId && this.layoutNode(neighbor.nodeId)?.type === 'lift-blackbox') {
           continue;
         }
-        const tentative = (gScore.get(current) ?? Infinity) + neighbor.lengthM;
+        const tentative = (gScore.get(current) ?? Infinity) + this.agentEdgeCostM(current, neighbor.nodeId, neighbor.lengthM, toNodeId);
         if (tentative < (gScore.get(neighbor.nodeId) ?? Infinity)) {
           cameFrom.set(neighbor.nodeId, current);
           gScore.set(neighbor.nodeId, tentative);

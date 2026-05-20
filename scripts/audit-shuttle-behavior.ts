@@ -41,7 +41,10 @@ const replanWarnCount = numberArg('--replan-warn', 8);
 const scenario = createDefaultShuttleScenario({
   id: 'audit-agent-refresh-8-inbound',
   name: 'Audit Agent Refresh 8 Shuttle Inbound',
-  liftMode: 'all-inbound',
+  layoutProfile: {
+    layoutKind: 'top-lift-column',
+    liftPairCount: 1
+  },
   durationSec: Math.max(durationSec, 1),
   vehicles: {
     count: 8,
@@ -67,7 +70,7 @@ const scenario = createDefaultShuttleScenario({
   },
   trafficPolicy: {
     controllerMode: 'agent-refresh',
-    liftApproachCapacity: 8,
+    liftApproachCapacity: 3,
     minimumClearanceSec: 0.4,
     dynamicAvoidanceClearanceM: 0.5,
     deadlockDetectSec: 2

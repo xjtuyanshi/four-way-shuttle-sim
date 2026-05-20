@@ -77,8 +77,8 @@ export type ShuttleStaticSceneContract = {
   dedicatedLiftPorts: boolean;
   inboundSide: 'left' | 'right' | 'mixed';
   outboundSide: 'left' | 'right' | 'mixed';
-  storagePolicy: 'rowContiguousLaneFill';
-  inboundStorageFlow: 'rightToLeft';
+  storagePolicy: 'rowContiguousLaneFill' | 'columnContiguousBottomToTopFill';
+  inboundStorageFlow: 'rightToLeft' | 'bottomToTop';
   outboundStorageFlow: 'leftPick';
 };
 
@@ -317,6 +317,7 @@ function summarizeCalibrationReadiness(
 }
 
 export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario): ShuttleStaticSceneContract {
+  const columnLayout = scenario.layout.calibrationProfile?.id === 'top-lift-column-v1';
   const storageNodes = scenario.layout.nodes.filter((node) => node.type === 'storage');
   const blockedCells = sortedById((scenario.layout.calibrationProfile?.blockedCells ?? []).map((cell) => ({
     ...cell,
@@ -515,8 +516,8 @@ export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario):
       outboundLiftNodes.length > 0,
     inboundSide,
     outboundSide,
-    storagePolicy: 'rowContiguousLaneFill',
-    inboundStorageFlow: 'rightToLeft',
+    storagePolicy: columnLayout ? 'columnContiguousBottomToTopFill' : 'rowContiguousLaneFill',
+    inboundStorageFlow: columnLayout ? 'bottomToTop' : 'rightToLeft',
     outboundStorageFlow: 'leftPick'
   };
 }

@@ -223,7 +223,10 @@ const speed = Number(process.argv[3] ?? $PlaybackSpeed);
 const scenario = createDefaultShuttleScenario({
   id: 'shuttle-all-inbound-8x-7200',
   name: 'All Inbound 8 Shuttle 7200 PPH Stress',
-  liftMode: 'all-inbound',
+  layoutProfile: {
+    layoutKind: 'top-lift-column',
+    liftPairCount: 1
+  },
   durationSec: 7200,
   vehicles: {
     count: 8,
@@ -249,7 +252,7 @@ const scenario = createDefaultShuttleScenario({
   },
   trafficPolicy: {
     controllerMode: 'agent-refresh',
-    liftApproachCapacity: 8,
+    liftApproachCapacity: 3,
     minimumClearanceSec: 0.4,
     deadlockDetectSec: 2,
     collisionAvoidanceEnabled: true

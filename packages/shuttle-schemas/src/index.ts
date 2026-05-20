@@ -344,7 +344,9 @@ export const ShuttleScenarioSchema = z.object({
       if (from.type === 'storage' && to.type === 'storage') {
         const fromRow = storageRowForNodeId(from.id);
         const toRow = storageRowForNodeId(to.id);
-        if (fromRow && toRow && fromRow !== toRow) {
+        const columnLayout = scenario.layout.calibrationProfile?.id === 'top-lift-column-v1';
+        const sameColumn = /^storage-r\d+-c(\d+)$/.exec(from.id)?.[1] === /^storage-r\d+-c(\d+)$/.exec(to.id)?.[1];
+        if (fromRow && toRow && fromRow !== toRow && !(columnLayout && sameColumn)) {
           context.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['layout', 'edges', edge.id],

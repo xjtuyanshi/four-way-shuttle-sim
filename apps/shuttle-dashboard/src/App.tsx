@@ -794,11 +794,14 @@ function formatStorageCellLabel(nodeId: string): string {
 }
 
 function formatStoragePolicy(policy: string): string {
-  return policy === 'rowContiguousLaneFill' ? 'row-contiguous lane-fill' : policy;
+  if (policy === 'rowContiguousLaneFill') return 'row-contiguous lane-fill';
+  if (policy === 'columnContiguousBottomToTopFill') return 'column bottom-to-top fill';
+  return policy;
 }
 
 function formatStorageFlow(flow: string): string {
   if (flow === 'rightToLeft') return 'right-to-left';
+  if (flow === 'bottomToTop') return 'bottom-to-top';
   if (flow === 'leftPick') return 'left pick';
   return flow;
 }
