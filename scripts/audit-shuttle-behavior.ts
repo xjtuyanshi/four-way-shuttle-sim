@@ -43,7 +43,7 @@ const scenario = createDefaultShuttleScenario({
   name: 'Audit Agent Refresh 8 Shuttle Inbound',
   layoutProfile: {
     layoutKind: 'top-lift-column',
-    liftPairCount: 1
+    liftPairCount: 2
   },
   durationSec: Math.max(durationSec, 1),
   vehicles: {
@@ -66,7 +66,7 @@ const scenario = createDefaultShuttleScenario({
     outboundRatePerHour: 0,
     inboundOutboundMix: 1,
     arrivalDistribution: 'deterministic',
-    maxTasks: 16
+    maxTasks: 32
   },
   trafficPolicy: {
     controllerMode: 'agent-refresh',
@@ -83,6 +83,9 @@ const inboundLiftNodeIds = scenario.layout.nodes
   .filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound')
   .map((node) => node.id)
   .sort();
+const inboundSourceCapacityPerLift = scenario.layout.calibrationProfile?.id === 'top-lift-column-v1'
+  ? scenario.trafficPolicy.liftApproachCapacity + 1
+  : 1;
 const storageNodeCount = scenario.layout.nodes.filter((node) => node.type === 'storage').length;
 const sim = new ShuttleSimCore(scenario);
 const traces = new Map<string, VehicleTrace>();
@@ -177,7 +180,7 @@ function auditInboundSourceBuffers(current: ShuttleSimState): void {
   }
 
   for (const [liftNodeId, loadIds] of waitingLoadsByLift) {
-    if (loadIds.length > 1) {
+    if (loadIds.length > inboundSourceCapacityPerLift) {
       addAnomaly(current.simTimeSec, null, 'lift-source-buffer-overfilled', 'critical', `${liftNodeId}: ${loadIds.join(',')}`);
     }
   }
@@ -185,14 +188,14 @@ function auditInboundSourceBuffers(current: ShuttleSimState): void {
   const storedCount = current.loads.filter((load) => load.state === 'stored' && load.nodeId?.startsWith('storage-')).length;
   const storageFull = storageNodeCount > 0 && storedCount >= storageNodeCount;
   if (!storageFull) {
-    const emptyLiftIds = inboundLiftNodeIds.filter((liftNodeId) => (waitingLoadsByLift.get(liftNodeId) ?? []).length === 0);
+    const emptyLiftIds = inboundLiftNodeIds.filter((liftNodeId) => (waitingLoadsByLift.get(liftNodeId) ?? []).length < inboundSourceCapacityPerLift);
     if (emptyLiftIds.length > 0) {
       addAnomaly(
         current.simTimeSec,
         null,
         'inbound-source-buffer-empty',
         'critical',
-        `empty=${emptyLiftIds.join(',')} stored=${storedCount}/${storageNodeCount}`
+        `underfilled=${emptyLiftIds.join(',')} capacity=${inboundSourceCapacityPerLift} stored=${storedCount}/${storageNodeCount}`
       );
     }
   }
@@ -338,8 +341,15 @@ function auditTaskCommonSense(current: ShuttleSimState): void {
   }
 
   for (const port of current.traffic.liftPorts) {
-    if (port.kind === 'inbound' && port.queueLength > 1) {
-      addAnomaly(current.simTimeSec, null, 'lift-port-overqueued', 'warn', `${port.nodeId} waitingTaskIds=${port.waitingTaskIds.join(',')}`);
+    const allowedWaitingTasks = Math.max(1, port.sourceBufferCapacity ?? 1);
+    if (port.kind === 'inbound' && port.queueLength > allowedWaitingTasks) {
+      addAnomaly(
+        current.simTimeSec,
+        null,
+        'lift-port-overqueued',
+        'warn',
+        `${port.nodeId} queueLength=${port.queueLength} capacity=${allowedWaitingTasks} waitingTaskIds=${port.waitingTaskIds.join(',')}`
+      );
     }
   }
 }

@@ -549,6 +549,8 @@ export const LiftPortDiagnosticsSchema = z.object({
   activeTaskId: z.string().nullable(),
   approachOccupancy: z.number().int().nonnegative().default(0),
   approachCapacity: z.number().int().positive().default(1),
+  sourceBufferOccupancy: z.number().int().nonnegative().default(0),
+  sourceBufferCapacity: z.number().int().positive().default(1),
   utilization: z.number().min(0).max(1)
 });
 

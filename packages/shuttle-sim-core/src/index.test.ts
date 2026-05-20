@@ -402,6 +402,51 @@ describe('shuttle phase 0 SimCore', () => {
     expect(verticalStorageFootprintEdgeViolations(parsed)).toEqual([]);
   });
 
+  it('primes the top-lift inbound source buffers and parks shuttles in empty storage', () => {
+    const scenario = createDefaultShuttleScenario({
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 32
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        liftApproachCapacity: 3
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    const state = sim.getState();
+    const inboundLiftIds = scenario.layout.nodes
+      .filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound')
+      .map((node) => node.id)
+      .sort();
+    const waitingSourceLoads = state.loads.filter((load) =>
+      load.state === 'waiting' &&
+      load.nodeId !== null &&
+      inboundLiftIds.includes(load.nodeId)
+    );
+    const waitingLoadsByLift = new Map<string, number>();
+    for (const load of waitingSourceLoads) {
+      waitingLoadsByLift.set(load.nodeId!, (waitingLoadsByLift.get(load.nodeId!) ?? 0) + 1);
+    }
+
+    expect(inboundLiftIds).toHaveLength(4);
+    expect(waitingSourceLoads).toHaveLength(16);
+    for (const liftId of inboundLiftIds) {
+      expect(waitingLoadsByLift.get(liftId)).toBe(4);
+    }
+    expect(state.tasks.filter((task) => task.kind === 'inbound')).toHaveLength(16);
+    expect(state.vehicles.every((vehicle) => scenario.layout.nodes.find((node) => node.id === vehicle.currentNodeId)?.type === 'storage')).toBe(true);
+    expect(state.traffic.liftPorts.filter((port) => port.kind === 'inbound').map((port) => port.sourceBufferOccupancy)).toEqual([4, 4, 4, 4]);
+  });
+
   it('limits generated inbound source loads to one waiting pallet per lift', () => {
     const scenario = createDefaultShuttleScenario({
       liftMode: 'all-inbound',
@@ -2659,12 +2704,12 @@ describe('shuttle phase 0 SimCore', () => {
       storageCellCount: 384,
       blockedCellCount: 0,
       structuralCellCount: 0,
-      trackBedCount: 830,
+      trackBedCount: 958,
       storageLaneTrackCount: 624,
-      sideAisleTrackCount: 42,
+      sideAisleTrackCount: 162,
       crossAisleTrackCount: 12,
-      inboundConnectorTrackCount: 72,
-      outboundConnectorTrackCount: 72,
+      inboundConnectorTrackCount: 76,
+      outboundConnectorTrackCount: 76,
       parkingConnectorTrackCount: 8,
       diagonalTrackCount: 0,
       inboundLiftPadCount: 4,
@@ -3580,26 +3625,21 @@ describe('shuttle phase 0 SimCore', () => {
 
     expect(inboundTasks).toHaveLength(8);
     expect(state.kpis.deadlockCount).toBe(0);
-    expect(inboundTasks.slice(0, 8).map((task) => [task.dropoffNodeId, task.loadId])).toEqual([
-      ['storage-r01-c01', 'load-0001'],
-      ['storage-r02-c01', 'load-0002'],
-      ['storage-r03-c01', 'load-0003'],
-      ['storage-r04-c01', 'load-0004'],
-      ['storage-r05-c01', 'load-0005'],
-      ['storage-r06-c01', 'load-0006'],
-      ['storage-r07-c01', 'load-0007'],
-      ['storage-r08-c01', 'load-0008']
+    expect(inboundTasks.slice(0, 8).map((task) => task.dropoffNodeId)).toEqual([
+      'storage-r01-c01',
+      'storage-r02-c01',
+      'storage-r03-c01',
+      'storage-r04-c01',
+      'storage-r05-c01',
+      'storage-r06-c01',
+      'storage-r07-c01',
+      'storage-r08-c01'
     ]);
-    expect(storageOccupancy).toEqual(expect.arrayContaining([
-      { nodeId: 'storage-r01-c01', loadId: 'load-0001' },
-      { nodeId: 'storage-r02-c01', loadId: 'load-0002' },
-      { nodeId: 'storage-r03-c01', loadId: 'load-0003' },
-      { nodeId: 'storage-r04-c01', loadId: 'load-0004' },
-      { nodeId: 'storage-r05-c01', loadId: 'load-0005' },
-      { nodeId: 'storage-r06-c01', loadId: 'load-0006' },
-      { nodeId: 'storage-r07-c01', loadId: 'load-0007' },
-      { nodeId: 'storage-r08-c01', loadId: 'load-0008' }
-    ]));
+    expect(new Set(inboundTasks.slice(0, 8).map((task) => task.loadId)).size).toBe(8);
+    const storedLoadByNode = new Map(storageOccupancy.map((occupancy) => [occupancy.nodeId, occupancy.loadId]));
+    for (const task of inboundTasks.slice(0, 8)) {
+      expect(storedLoadByNode.get(task.dropoffNodeId)).toBe(task.loadId);
+    }
   });
 
   it('routes through stored pallet cells on the same horizontal storage row', () => {
@@ -3866,7 +3906,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(standbyTarget).not.toBe('storage-r01-c01');
     expect(vehicle.routeNodeIds.at(-1)).toBe(standbyTarget);
     expect(crossRowStorageHops(vehicle.routeNodeIds)).toEqual([]);
-    expect(state.loads.find((load) => load.id === 'load-0001')).toMatchObject({
+    expect(state.loads.find((load) => load.state === 'stored' && load.nodeId === 'storage-r01-c01')).toMatchObject({
       state: 'stored',
       nodeId: 'storage-r01-c01',
       vehicleId: null

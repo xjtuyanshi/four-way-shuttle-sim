@@ -239,6 +239,8 @@ type ResourceUtilizationSummary = {
     active: number;
     approachOccupied: number;
     approachCapacity: number;
+    sourceBufferOccupied: number;
+    sourceBufferCapacity: number;
     inboundEnabled: number;
     outboundEnabled: number;
     queuedTasks: number;
@@ -589,6 +591,8 @@ export function summarizeResourceUtilization(
       active: liftPorts.filter((port) => port.activeTaskId).length,
       approachOccupied: liftPorts.reduce((sum, port) => sum + (port.approachOccupancy ?? 0), 0),
       approachCapacity: liftPorts.reduce((sum, port) => sum + (port.approachCapacity ?? 1), 0),
+      sourceBufferOccupied: liftPorts.reduce((sum, port) => sum + (port.sourceBufferOccupancy ?? 0), 0),
+      sourceBufferCapacity: liftPorts.reduce((sum, port) => sum + (port.sourceBufferCapacity ?? 1), 0),
       inboundEnabled: liftPorts.filter((port) => port.kind === 'inbound').length,
       outboundEnabled: liftPorts.filter((port) => port.kind === 'outbound').length,
       queuedTasks: liftPorts.reduce((sum, port) => sum + port.queueLength, 0),
@@ -1362,6 +1366,8 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
   const activeLiftPorts = liftPorts.filter((port) => port.activeTaskId).length;
   const approachOccupied = liftPorts.reduce((sum, port) => sum + (port.approachOccupancy ?? 0), 0);
   const approachCapacity = liftPorts.reduce((sum, port) => sum + (port.approachCapacity ?? 1), 0);
+  const sourceBufferOccupied = liftPorts.reduce((sum, port) => sum + (port.sourceBufferOccupancy ?? 0), 0);
+  const sourceBufferCapacity = liftPorts.reduce((sum, port) => sum + (port.sourceBufferCapacity ?? 1), 0);
   const blockedReasons = Object.entries(state?.kpis.blockedTimeByReasonSec ?? {});
   const laneWaitSec = blockedReasons
     .filter(([reason]) => reason.startsWith('fifo-'))
@@ -1429,6 +1435,11 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
         <small>{liftPorts.filter((port) => port.kind === 'inbound').length} in / {liftPorts.filter((port) => port.kind === 'outbound').length} out</small>
       </div>
       <div>
+        <span>Source buffers</span>
+        <strong>{sourceBufferOccupied}/{sourceBufferCapacity}</strong>
+        <small>waiting loads at inbound ports</small>
+      </div>
+      <div>
         <span>Lane holds</span>
         <strong>{formatNumber(laneWaitSec, 1)}s</strong>
       </div>
@@ -1465,7 +1476,7 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
         ) : (
           liftPorts.map((port) => (
             <small key={port.nodeId}>
-              {port.nodeId} / {port.kind} / approach {port.approachOccupancy ?? 0}/{port.approachCapacity ?? 1} / q{port.queueLength} / cycle {Math.round(port.utilization * 100)}%
+              {port.nodeId} / {port.kind} / source {port.sourceBufferOccupancy ?? 0}/{port.sourceBufferCapacity ?? 1} / approach {port.approachOccupancy ?? 0}/{port.approachCapacity ?? 1} / q{port.queueLength} / cycle {Math.round(port.utilization * 100)}%
             </small>
           ))
         )}

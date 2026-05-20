@@ -7,7 +7,7 @@ const scenario = createDefaultShuttleScenario({
   name: 'All Inbound 8 Shuttle 7200 PPH Stress',
   layoutProfile: {
     layoutKind: 'top-lift-column',
-    liftPairCount: 1,
+    liftPairCount: 2,
   },
   durationSec: 7200,
   vehicles: {
@@ -30,7 +30,7 @@ const scenario = createDefaultShuttleScenario({
     outboundRatePerHour: 0,
     inboundOutboundMix: 1,
     arrivalDistribution: 'deterministic',
-    maxTasks: 16,
+    maxTasks: 32,
   },
   trafficPolicy: {
     controllerMode: 'agent-refresh',

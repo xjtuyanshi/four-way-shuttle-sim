@@ -217,6 +217,8 @@ describe('dashboard resource utilization', () => {
             activeTaskId: 'task-001',
             approachOccupancy: 1,
             approachCapacity: 1,
+            sourceBufferOccupancy: 2,
+            sourceBufferCapacity: 4,
             utilization: 0.5
           },
           {
@@ -227,6 +229,8 @@ describe('dashboard resource utilization', () => {
             activeTaskId: null,
             approachOccupancy: 0,
             approachCapacity: 1,
+            sourceBufferOccupancy: 0,
+            sourceBufferCapacity: 1,
             utilization: 0.1
           }
         ],

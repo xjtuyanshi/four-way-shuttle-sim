@@ -46,6 +46,79 @@ type RuntimeStatus = ShuttleSimState['status'];
 const COLLISION_AVOIDANCE_PARAM = '/trafficPolicy/collisionAvoidanceEnabled';
 const TOP_LIFT_COLUMN_LAYOUT_PROFILE_ID = 'top-lift-column-v1';
 
+type PriorityQueueEntry = {
+  nodeId: string;
+  priority: number;
+};
+
+class MinPriorityQueue {
+  private readonly entries: PriorityQueueEntry[] = [];
+
+  get size(): number {
+    return this.entries.length;
+  }
+
+  push(entry: PriorityQueueEntry): void {
+    this.entries.push(entry);
+    this.bubbleUp(this.entries.length - 1);
+  }
+
+  pop(): PriorityQueueEntry | null {
+    if (this.entries.length === 0) {
+      return null;
+    }
+    const first = this.entries[0]!;
+    const last = this.entries.pop()!;
+    if (this.entries.length > 0) {
+      this.entries[0] = last;
+      this.bubbleDown(0);
+    }
+    return first;
+  }
+
+  private bubbleUp(index: number): void {
+    let cursor = index;
+    while (cursor > 0) {
+      const parent = Math.floor((cursor - 1) / 2);
+      if (this.compare(this.entries[cursor]!, this.entries[parent]!) >= 0) {
+        break;
+      }
+      this.swap(cursor, parent);
+      cursor = parent;
+    }
+  }
+
+  private bubbleDown(index: number): void {
+    let cursor = index;
+    while (true) {
+      const left = cursor * 2 + 1;
+      const right = left + 1;
+      let next = cursor;
+      if (left < this.entries.length && this.compare(this.entries[left]!, this.entries[next]!) < 0) {
+        next = left;
+      }
+      if (right < this.entries.length && this.compare(this.entries[right]!, this.entries[next]!) < 0) {
+        next = right;
+      }
+      if (next === cursor) {
+        break;
+      }
+      this.swap(cursor, next);
+      cursor = next;
+    }
+  }
+
+  private compare(left: PriorityQueueEntry, right: PriorityQueueEntry): number {
+    return left.priority - right.priority || left.nodeId.localeCompare(right.nodeId);
+  }
+
+  private swap(leftIndex: number, rightIndex: number): void {
+    const left = this.entries[leftIndex]!;
+    this.entries[leftIndex] = this.entries[rightIndex]!;
+    this.entries[rightIndex] = left;
+  }
+}
+
 function isTopLiftColumnLayout(scenario: ShuttleScenario): boolean {
   return scenario.layout.calibrationProfile?.id === TOP_LIFT_COLUMN_LAYOUT_PROFILE_ID;
 }
@@ -681,7 +754,7 @@ function createTopLiftColumnLayout(
       ...profile.calibrationProfile.notes,
       'Top-lift column layout: every physical lift has an outbound left port and an inbound right port.',
       'Each pair of physical lifts owns four 7x7 storage zones; inbound target allocation fills each physical storage column bottom-to-top.',
-      'Lift throat buffer is modeled as port approach capacity, not as separate storage cells.'
+      'Inbound source backlog models three port buffer positions plus one lift position per inbound port.'
     ]
   };
 
@@ -1427,11 +1500,13 @@ class TrafficControllerV2 {
 type TheoreticalCapacitySnapshot = NonNullable<KpiSnapshot['theoreticalCapacity']>;
 type TheoreticalCapacityBaseline = Omit<TheoreticalCapacitySnapshot, 'achievedInboundPct' | 'averageVehicleUtilizationPct'>;
 
+const theoreticalCapacityBaselineCache = new Map<string, TheoreticalCapacityBaseline>();
+
 export class ShuttleSimCore {
   private scenario: ShuttleScenario;
   private sessionId: string = randomUUID();
-  private traffic: TrafficControllerV2;
-  private rng: Rng;
+  private traffic!: TrafficControllerV2;
+  private rng!: Rng;
   private status: RuntimeStatus = 'idle';
   private simTimeSec = 0;
   private tickIndex = 0;
@@ -1462,15 +1537,13 @@ export class ShuttleSimCore {
   private liftPortBusyTimeSec = new Map<string, number>();
   private neighborByNodeId = new Map<string, Array<{ nodeId: string; lengthM: number }>>();
   private theoreticalCapacityBaseline: TheoreticalCapacityBaseline | null = null;
+  private topLiftColumnRowsPerZoneCache: number | null = null;
   private conflictSessions: ConflictSessionV1[] = [];
   private error: string | null = null;
 
   constructor(scenario: ShuttleScenario = createDefaultShuttleScenario()) {
     this.scenario = ShuttleScenarioSchema.parse(scenario);
     assertNoVerticalStorageFootprintEdges(this.scenario);
-    this.traffic = new TrafficControllerV2(this.scenario);
-    this.rng = makeRng(this.scenario.seed);
-    this.rebuildGraphNeighbors();
     this.reset(this.scenario.seed);
   }
 
@@ -1482,9 +1555,7 @@ export class ShuttleSimCore {
     this.scenario = ShuttleScenarioSchema.parse(scenario);
     assertNoVerticalStorageFootprintEdges(this.scenario);
     this.theoreticalCapacityBaseline = null;
-    this.traffic = new TrafficControllerV2(this.scenario);
-    this.rng = makeRng(this.scenario.seed);
-    this.rebuildGraphNeighbors();
+    this.topLiftColumnRowsPerZoneCache = null;
     this.reset(this.scenario.seed);
     this.logEvent('scenario-loaded', null, null, null, null, null, 'loadScenario', null, { scenarioId: this.scenario.id });
     return this.getState();
@@ -1639,6 +1710,7 @@ export class ShuttleSimCore {
 
     this.scenario = parsed.data;
     this.theoreticalCapacityBaseline = null;
+    this.topLiftColumnRowsPerZoneCache = null;
     if (path.startsWith('/layout')) {
       this.rebuildGraphNeighbors();
     }
@@ -2093,19 +2165,22 @@ export class ShuttleSimCore {
     }
 
     for (const liftNode of this.inboundLiftNodes()) {
-      if (this.inboundLiftWaitingSourceLoad(liftNode.id)) {
-        continue;
+      const capacity = this.inboundSourceBufferCapacity(liftNode.id);
+      while (this.inboundLiftWaitingSourceLoads(liftNode.id).length < capacity) {
+        this.sourceLoadSequence += 1;
+        const load: LoadStateRecord = {
+          id: `source-load-${String(this.sourceLoadSequence).padStart(5, '0')}`,
+          state: 'waiting',
+          nodeId: liftNode.id,
+          vehicleId: null,
+          weightKg: 450 + Math.round(this.rng.next() * 350)
+        };
+        this.loads.push(load);
+        this.logEvent('source-load-replenished', null, null, load.id, null, liftNode.id, 'inbound-source-buffer-refill', nodePosition(this.scenario, liftNode.id), {
+          sourceBufferOccupancy: this.inboundLiftWaitingSourceLoads(liftNode.id).length,
+          sourceBufferCapacity: capacity
+        });
       }
-      this.sourceLoadSequence += 1;
-      const load: LoadStateRecord = {
-        id: `source-load-${String(this.sourceLoadSequence).padStart(5, '0')}`,
-        state: 'waiting',
-        nodeId: liftNode.id,
-        vehicleId: null,
-        weightKg: 450 + Math.round(this.rng.next() * 350)
-      };
-      this.loads.push(load);
-      this.logEvent('source-load-replenished', null, null, load.id, null, liftNode.id, 'inbound-source-buffer-refill', nodePosition(this.scenario, liftNode.id), {});
     }
   }
 
@@ -2118,28 +2193,33 @@ export class ShuttleSimCore {
     const relatedNode = this.scenario.layout.nodes.find((node) => node.id === relatedNodeId);
     const candidates = this.inboundLiftNodes()
       .flatMap((liftNode) => {
-        const sourceLoad = this.inboundLiftWaitingSourceLoad(liftNode.id);
-        return sourceLoad && !assignedLoadIds.has(sourceLoad.id)
-          ? [{
+        const sourceLoads = this.inboundLiftWaitingSourceLoads(liftNode.id)
+          .filter((sourceLoad) => !assignedLoadIds.has(sourceLoad.id));
+        return sourceLoads.map((sourceLoad, sourceIndex) => ({
               liftNodeId: liftNode.id,
               loadId: sourceLoad.id,
               plannedLoad: this.liftPortPlannedLoad('inbound', liftNode.id),
+              sourceIndex,
               distanceM: relatedNode ? Math.abs(liftNode.z - relatedNode.z) + Math.abs(liftNode.x - relatedNode.x) : 0
-            }]
-          : [];
+            }));
       })
       .sort((left, right) =>
         left.plannedLoad - right.plannedLoad ||
+        left.sourceIndex - right.sourceIndex ||
         left.distanceM - right.distanceM ||
         left.liftNodeId.localeCompare(right.liftNodeId)
       );
     return candidates[0] ? { liftNodeId: candidates[0].liftNodeId, loadId: candidates[0].loadId } : null;
   }
 
-  private inboundLiftWaitingSourceLoad(liftNodeId: string): LoadStateRecord | null {
+  private inboundLiftWaitingSourceLoads(liftNodeId: string): LoadStateRecord[] {
     return this.loads
       .filter((load) => load.state === 'waiting' && load.nodeId === liftNodeId && load.vehicleId === null)
-      .sort((left, right) => left.id.localeCompare(right.id))[0] ?? null;
+      .sort((left, right) => left.id.localeCompare(right.id));
+  }
+
+  private inboundLiftWaitingSourceLoad(liftNodeId: string): LoadStateRecord | null {
+    return this.inboundLiftWaitingSourceLoads(liftNodeId)[0] ?? null;
   }
 
   private inboundSourceUnavailableReason(): string {
@@ -2156,7 +2236,11 @@ export class ShuttleSimCore {
 
     this.replenishInboundSourceBuffers();
     const inboundLiftCount = this.scenario.layout.nodes.filter((node) => liftKindForNode(node) === 'inbound').length;
-    const targetTaskCount = Math.min(inboundLiftCount, this.scenario.taskGeneration.maxTasks);
+    const sourceCapacity = this.inboundSourceBacklogCapacity();
+    const targetTaskCount = Math.min(
+      this.topLiftColumnLayoutEnabled() ? sourceCapacity : inboundLiftCount,
+      this.scenario.taskGeneration.maxTasks
+    );
     while (this.activeTaskCount() < targetTaskCount) {
       const result = this.createTask('inbound');
       if (!result.created) {
@@ -2172,7 +2256,7 @@ export class ShuttleSimCore {
     const outboundLiftCount = this.scenario.layout.nodes.filter((node) => liftKindForNode(node) === 'outbound').length;
     return (
       this.isInboundOnlyFlow() &&
-      outboundLiftCount === 0 &&
+      (outboundLiftCount === 0 || this.topLiftColumnLayoutEnabled()) &&
       inboundLiftCount > 1 &&
       this.scenario.taskGeneration.inboundRatePerHour >= 7200
     );
@@ -2180,6 +2264,17 @@ export class ShuttleSimCore {
 
   private inboundLiftHasWaitingSourceLoad(liftNodeId: string): boolean {
     return this.inboundLiftWaitingSourceLoad(liftNodeId) !== null;
+  }
+
+  private inboundSourceBacklogCapacity(): number {
+    return this.inboundLiftNodes().reduce((sum, liftNode) => sum + this.inboundSourceBufferCapacity(liftNode.id), 0);
+  }
+
+  private inboundSourceBufferCapacity(_liftNodeId: string): number {
+    if (!this.topLiftColumnLayoutEnabled()) {
+      return 1;
+    }
+    return Math.max(1, this.scenario.trafficPolicy.liftApproachCapacity + 1);
   }
 
   private liftPortPlannedLoad(kind: 'inbound' | 'outbound', liftNodeId: string): number {
@@ -2869,6 +2964,12 @@ export class ShuttleSimCore {
     if (this.theoreticalCapacityBaseline) {
       return this.theoreticalCapacityBaseline;
     }
+    const cacheKey = this.theoreticalCapacityBaselineCacheKey();
+    const cached = theoreticalCapacityBaselineCache.get(cacheKey);
+    if (cached) {
+      this.theoreticalCapacityBaseline = cached;
+      return cached;
+    }
 
     const samples = this.scenario.layout.nodes
       .filter((node) => node.type === 'storage')
@@ -2899,7 +3000,41 @@ export class ShuttleSimCore {
         'empty return is modeled from storage cell back to the nearest inbound lift through allowed horizontal storage rows and aisles'
       ]
     };
+    theoreticalCapacityBaselineCache.set(cacheKey, this.theoreticalCapacityBaseline);
     return this.theoreticalCapacityBaseline;
+  }
+
+  private theoreticalCapacityBaselineCacheKey(): string {
+    const layoutHash = createHash('sha256')
+      .update(stableJson({
+        calibrationProfile: this.scenario.layout.calibrationProfile ?? null,
+        nodes: this.scenario.layout.nodes.map((node) => ({
+          id: node.id,
+          type: node.type,
+          liftKind: node.liftKind ?? null,
+          x: node.x,
+          z: node.z,
+          noStop: node.noStop,
+          noParking: node.noParking
+        })),
+        edges: this.scenario.layout.edges.map((edge) => ({
+          id: edge.id,
+          from: edge.from,
+          to: edge.to,
+          lengthM: edge.lengthM,
+          directionMode: edge.directionMode
+        }))
+      }))
+      .digest('hex');
+    return stableJson({
+      layoutHash,
+      shuttleCount: this.scenario.vehicles.count,
+      emptySpeedMps: this.scenario.physicsParams.emptySpeedMps,
+      loadedSpeedMps: this.scenario.physicsParams.loadedSpeedMps,
+      accelerationMps2: this.scenario.physicsParams.accelerationMps2,
+      liftTimeSec: this.scenario.physicsParams.liftTimeSec,
+      lowerTimeSec: this.scenario.physicsParams.lowerTimeSec
+    });
   }
 
   private calculateTheoreticalCapacity(
@@ -3429,10 +3564,14 @@ export class ShuttleSimCore {
   }
 
   private topLiftColumnRowsPerZone(): number {
+    if (this.topLiftColumnRowsPerZoneCache !== null) {
+      return this.topLiftColumnRowsPerZoneCache;
+    }
     const rows = this.scenario.layout.nodes
       .filter((node) => node.type === 'storage')
       .map((node) => this.storageGridPosition(node.id)?.row ?? 0);
-    return Math.max(1, Math.max(...rows) / 2);
+    this.topLiftColumnRowsPerZoneCache = Math.max(1, Math.max(...rows) / 2);
+    return this.topLiftColumnRowsPerZoneCache;
   }
 
   private planRoute(currentNodeId: string, task: TaskStateRecord, parkingNodeId: string): string[] {
@@ -3723,12 +3862,20 @@ export class ShuttleSimCore {
       return [fromNodeId];
     }
 
-    const open = new Set<string>([fromNodeId]);
+    const open = new MinPriorityQueue();
     const cameFrom = new Map<string, string>();
     const gScore = new Map<string, number>([[fromNodeId, 0]]);
+    open.push({ nodeId: fromNodeId, priority: 0 });
 
     while (open.size > 0) {
-      const current = [...open].sort((left, right) => (gScore.get(left) ?? Infinity) - (gScore.get(right) ?? Infinity) || left.localeCompare(right))[0]!;
+      const next = open.pop();
+      if (!next) {
+        break;
+      }
+      const current = next.nodeId;
+      if (next.priority > (gScore.get(current) ?? Infinity) + 1e-9) {
+        continue;
+      }
       if (current === toNodeId) {
         const path = [current];
         while (cameFrom.has(path[0]!)) {
@@ -3737,7 +3884,6 @@ export class ShuttleSimCore {
         return path;
       }
 
-      open.delete(current);
       for (const neighbor of this.neighbors(current)) {
         if (blockedNodeIds.has(neighbor.nodeId)) {
           continue;
@@ -3749,7 +3895,7 @@ export class ShuttleSimCore {
         if (tentative < (gScore.get(neighbor.nodeId) ?? Infinity)) {
           cameFrom.set(neighbor.nodeId, current);
           gScore.set(neighbor.nodeId, tentative);
-          open.add(neighbor.nodeId);
+          open.push({ nodeId: neighbor.nodeId, priority: tentative });
         }
       }
     }
@@ -3762,12 +3908,20 @@ export class ShuttleSimCore {
       return [fromNodeId];
     }
 
-    const open = new Set<string>([fromNodeId]);
+    const open = new MinPriorityQueue();
     const cameFrom = new Map<string, string>();
     const gScore = new Map<string, number>([[fromNodeId, 0]]);
+    open.push({ nodeId: fromNodeId, priority: 0 });
 
     while (open.size > 0) {
-      const current = [...open].sort((left, right) => (gScore.get(left) ?? Infinity) - (gScore.get(right) ?? Infinity) || left.localeCompare(right))[0]!;
+      const next = open.pop();
+      if (!next) {
+        break;
+      }
+      const current = next.nodeId;
+      if (next.priority > (gScore.get(current) ?? Infinity) + 1e-9) {
+        continue;
+      }
       if (current === toNodeId) {
         const path = [current];
         while (cameFrom.has(path[0]!)) {
@@ -3776,7 +3930,6 @@ export class ShuttleSimCore {
         return path;
       }
 
-      open.delete(current);
       for (const neighbor of this.agentNeighbors(current, toNodeId)) {
         if (blockedNodeIds.has(neighbor.nodeId)) {
           continue;
@@ -3788,7 +3941,7 @@ export class ShuttleSimCore {
         if (tentative < (gScore.get(neighbor.nodeId) ?? Infinity)) {
           cameFrom.set(neighbor.nodeId, current);
           gScore.set(neighbor.nodeId, tentative);
-          open.add(neighbor.nodeId);
+          open.push({ nodeId: neighbor.nodeId, priority: tentative });
         }
       }
     }
@@ -3946,7 +4099,7 @@ export class ShuttleSimCore {
           left.id.localeCompare(right.id)
         );
       });
-    if (this.isInboundOnlyFlow() && !this.topLiftColumnLayoutEnabled()) {
+    if (this.isInboundOnlyFlow()) {
       const inboundStandbyStorage = this.inboundInitialParkingCandidates(temporaryStorageParking);
       const standbyIds = new Set(inboundStandbyStorage.map((node) => node.id));
       return [
@@ -5437,12 +5590,20 @@ export class ShuttleSimCore {
       return [fromNodeId];
     }
 
-    const open = new Set<string>([fromNodeId]);
+    const open = new MinPriorityQueue();
     const cameFrom = new Map<string, string>();
     const gScore = new Map<string, number>([[fromNodeId, 0]]);
+    open.push({ nodeId: fromNodeId, priority: 0 });
 
     while (open.size > 0) {
-      const current = [...open].sort((left, right) => (gScore.get(left) ?? Infinity) - (gScore.get(right) ?? Infinity) || left.localeCompare(right))[0]!;
+      const next = open.pop();
+      if (!next) {
+        break;
+      }
+      const current = next.nodeId;
+      if (next.priority > (gScore.get(current) ?? Infinity) + 1e-9) {
+        continue;
+      }
       if (current === toNodeId) {
         const path = [current];
         while (cameFrom.has(path[0]!)) {
@@ -5451,7 +5612,6 @@ export class ShuttleSimCore {
         return path;
       }
 
-      open.delete(current);
       for (const neighbor of this.neighbors(current)) {
         if (blockedNodeIds.has(neighbor.nodeId)) {
           continue;
@@ -5463,7 +5623,7 @@ export class ShuttleSimCore {
         if (tentative < (gScore.get(neighbor.nodeId) ?? Infinity)) {
           cameFrom.set(neighbor.nodeId, current);
           gScore.set(neighbor.nodeId, tentative);
-          open.add(neighbor.nodeId);
+          open.push({ nodeId: neighbor.nodeId, priority: tentative });
         }
       }
     }
@@ -8111,6 +8271,8 @@ export class ShuttleSimCore {
         activeTaskId: activeVehicle?.taskId ?? null,
         approachOccupancy: this.liftPortApproachCount(port.kind, port.nodeId),
         approachCapacity: this.liftPortApproachCapacity(),
+        sourceBufferOccupancy: port.kind === 'inbound' ? this.inboundLiftWaitingSourceLoads(port.nodeId).length : 0,
+        sourceBufferCapacity: port.kind === 'inbound' ? this.inboundSourceBufferCapacity(port.nodeId) : 1,
         utilization: round((this.liftPortBusyTimeSec.get(port.nodeId) ?? 0) / Math.max(this.simTimeSec, 1), 4)
       };
     });
