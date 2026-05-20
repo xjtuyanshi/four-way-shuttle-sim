@@ -703,6 +703,47 @@ function auditRouteShape(
     }
   }
 
+  if (label === 'local') {
+    for (const nodeId of route.slice(1)) {
+      const occupant = current.vehicles.find((candidate) =>
+        candidate.id !== vehicle.id &&
+        candidate.currentEdgeId === null &&
+        candidate.currentNodeId === nodeId
+      );
+      if (occupant) {
+        trace?.routeIssueKeys.add(routeKey);
+        addAnomaly(
+          current.simTimeSec,
+          vehicle.id,
+          'local-route-node-occupied',
+          'critical',
+          `${nodeId} occupiedBy=${occupant.id} route=${route.join('>')}`
+        );
+        return;
+      }
+
+      const claimant = current.vehicles.find((candidate) =>
+        candidate.id !== vehicle.id &&
+        candidate.targetNodeId === nodeId &&
+        candidate.currentNodeId !== nodeId &&
+        candidate.state !== 'idle' &&
+        candidate.state !== 'parking' &&
+        !(candidate.state === 'waiting-blocked' && candidate.blockingVehicleId === vehicle.id)
+      );
+      if (claimant) {
+        trace?.routeIssueKeys.add(routeKey);
+        addAnomaly(
+          current.simTimeSec,
+          vehicle.id,
+          'local-route-node-claimed',
+          'critical',
+          `${nodeId} claimedBy=${claimant.id} route=${route.join('>')}`
+        );
+        return;
+      }
+    }
+  }
+
   const task = taskForVehicle(current, vehicle);
   const allowedBounceNodeIds = new Set([task?.pickupNodeId, task?.dropoffNodeId].filter((nodeId): nodeId is string => Boolean(nodeId)));
   for (let index = 2; index < route.length; index += 1) {

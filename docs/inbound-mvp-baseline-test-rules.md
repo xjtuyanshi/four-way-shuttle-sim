@@ -39,6 +39,7 @@ Run these before calling a version stable:
 corepack pnpm run typecheck
 corepack pnpm test -- --runInBand
 corepack pnpm shuttle:audit:behavior -- --duration 1800 --dt 0.25 --sample 5
+corepack pnpm shuttle:audit:replay -- --duration 1800 --split 600 --dt 0.25
 ```
 
 Expected for the inbound MVP baseline:
@@ -69,11 +70,12 @@ Do not treat the 600s audit as a final pass. It is only a fast smoke.
 - Dashboard playback speed must not change SimCore truth.
 - A live abnormality must be reproducible from a saved snapshot plus command/event log.
 
-P1 to add:
+Implemented hardening:
 
 - Run A: `0 -> 1800s`.
 - Run B: `0 -> 600s`, snapshot/restore, then `600 -> 1800s`.
 - Assert equal `eventLogHash`, `stateHash`, completed inbound count, deadlocks, livelocks, and physical violations.
+- Command: `corepack pnpm shuttle:audit:replay -- --duration 1800 --split 600 --dt 0.25`.
 
 ### Source / Lift Buffer
 
@@ -106,7 +108,7 @@ For every generated path:
 - no planned route should repeatedly update unless the task changes;
 - local routes should only appear during avoidance or explicit clearance.
 
-P1 to add:
+Implemented hardening:
 
 - A permanent route-internal invariant that every `localRouteNodeIds.slice(1)` node is not occupied or claimed by another vehicle, including top-lift `column-*` access nodes.
 
@@ -122,7 +124,7 @@ P1 to add:
   - stored loads;
   - another active inbound dropoff.
 
-Current P1 refinement:
+Implemented hardening:
 
 - Only a loaded vehicle should be allowed to enter its own active inbound dropoff cell. Empty vehicles should not use their future dropoff as a temporary pocket.
 
@@ -254,4 +256,3 @@ Current P1 hardening to keep in mind:
 Next phase:
 Start outbound planning against the new top-lift layout. First explain assumptions, then implement in small commits with tests and Pro review after logic changes.
 ```
-

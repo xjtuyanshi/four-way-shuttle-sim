@@ -1713,6 +1713,94 @@ describe('shuttle phase 0 SimCore', () => {
     expect(shuttle?.routeNodeIds.slice(0, 2)).not.toEqual(['outbound-lift-top-01-row-03-transfer', 'storage-r03-c13']);
   });
 
+  it('agent-refresh only lets a loaded shuttle use its own active inbound dropoff as storage', () => {
+    const scenario = createDefaultShuttleScenario({
+      liftMode: 'all-inbound',
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addTaskForTest({
+      id: 'own-drop-c12',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'inbound-lift-top-01',
+      dropoffNodeId: 'storage-r03-c12',
+      loadId: 'own-load-c12',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+
+    const internals = sim as unknown as {
+      vehicles: Array<{ id: string }>;
+      agentRefreshTemporaryStorageNodeAllowed: (vehicle: unknown, nodeId: string) => boolean;
+    };
+    const vehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-01');
+
+    sim.setVehicleTaskForTest('SH-01', 'own-drop-c12', false);
+    expect(internals.agentRefreshTemporaryStorageNodeAllowed(vehicle, 'storage-r03-c12')).toBe(false);
+
+    sim.setVehicleTaskForTest('SH-01', 'own-drop-c12', true);
+    expect(internals.agentRefreshTemporaryStorageNodeAllowed(vehicle, 'storage-r03-c12')).toBe(true);
+  });
+
+  it('agent-refresh treats active local-yield nodes as short local claims', () => {
+    const scenario = createInboundMvpBaselineScenario({
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['column-top-a-c25', 'column-top-b-c25']);
+    sim.setVehicleRouteForTest('SH-02', ['column-top-b-c24', 'column-top-b-c25', 'column-top-b-c26']);
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        localRouteNodeIds: string[];
+        localRouteReason: string | null;
+      }>;
+      localRouteNodeClaimBlocker: (nodeId: string, vehicleId: string) => string | null;
+      agentMinimalMoveBlocker: (vehicle: unknown, toNodeId: string) => { reason: string; blockingVehicleId: string | null } | null;
+      agentRefreshYieldPocketAllowed: (vehicle: unknown, nodeId: string) => boolean;
+    };
+    const yielder = internals.vehicles.find((vehicle) => vehicle.id === 'SH-01')!;
+    const other = internals.vehicles.find((vehicle) => vehicle.id === 'SH-02')!;
+    yielder.localRouteNodeIds = ['column-top-a-c25', 'column-top-b-c25'];
+    yielder.localRouteReason = 'temporary-yield';
+
+    expect(internals.localRouteNodeClaimBlocker('column-top-b-c25', 'SH-02')).toBe('SH-01');
+    expect(internals.agentMinimalMoveBlocker(other, 'column-top-b-c25')).toEqual({
+      reason: 'node-local-yield',
+      blockingVehicleId: 'SH-01'
+    });
+    expect(internals.agentRefreshYieldPocketAllowed(yielder, 'column-top-b-c25')).toBe(false);
+  });
+
   it('agent-refresh makes an empty lift-column faceoff use the current row pocket before crossing the blocker', () => {
     const scenario = createDefaultShuttleScenario({
       liftMode: 'all-inbound',
@@ -1968,6 +2056,8 @@ describe('shuttle phase 0 SimCore', () => {
       }
     });
     const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({ id: 'column-swap-side-block-01', state: 'stored', nodeId: 'storage-r07-c04', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'column-swap-side-block-02', state: 'stored', nodeId: 'storage-r07-c06', vehicleId: null, weightKg: 100 });
     sim.addLoadForTest({ id: 'column-swap-load-01', state: 'carried', nodeId: null, vehicleId: 'SH-01', weightKg: 100 });
     sim.addLoadForTest({ id: 'column-swap-load-02', state: 'carried', nodeId: null, vehicleId: 'SH-02', weightKg: 100 });
     sim.addTaskForTest({
@@ -2039,6 +2129,8 @@ describe('shuttle phase 0 SimCore', () => {
       }
     });
     const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({ id: 'same-column-side-block-01', state: 'stored', nodeId: 'storage-r12-c12', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'same-column-side-block-02', state: 'stored', nodeId: 'storage-r12-c14', vehicleId: null, weightKg: 100 });
     sim.addLoadForTest({ id: 'same-column-load-01', state: 'carried', nodeId: null, vehicleId: 'SH-01', weightKg: 100 });
     sim.addLoadForTest({ id: 'same-column-load-03', state: 'carried', nodeId: null, vehicleId: 'SH-02', weightKg: 100 });
     sim.addTaskForTest({
