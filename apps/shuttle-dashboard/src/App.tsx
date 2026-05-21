@@ -1027,7 +1027,7 @@ function AuthoritativeMap({
           );
         })}
       {geometry.nodes
-        .filter((node) => node.type !== 'storage' && node.type !== 'intersection' && node.type !== 'aisle')
+        .filter((node) => node.type !== 'storage' && node.type !== 'intersection' && node.type !== 'aisle' && node.type !== 'inbound' && node.type !== 'outbound' && node.type !== 'lift-blackbox')
         .map((node) => (
           <span className={`map-node ${node.type}`} key={node.id} style={geometry.project(node)}>
             {node.id.replace('inbound-lift-', 'in-').replace('outbound-lift-', 'out-')}
@@ -1041,6 +1041,9 @@ function AuthoritativeMap({
         const vehicle = task.vehicleId ? vehicleById.get(task.vehicleId) : null;
         const pickupNode = geometry.nodeMap.get(task.pickupNodeId);
         if (!vehicle || !pickupNode || vehicle.loaded) {
+          return null;
+        }
+        if (pickupNode.type === 'inbound' || pickupNode.type === 'outbound' || pickupNode.type === 'lift-blackbox') {
           return null;
         }
         return (
@@ -1252,18 +1255,10 @@ function CanvasLiteMap({
           if (node.type === 'storage' || node.type === 'intersection' || node.type === 'aisle') {
             continue;
           }
-          const point = project(node);
           if (node.type === 'inbound' || node.type === 'outbound') {
-            context.fillStyle = node.type === 'inbound' ? FLOW_VISUAL_COLORS.inbound.hex : FLOW_VISUAL_COLORS.outbound.hex;
-            context.fillRect(point.x - 2.7, point.y - 2.7, 5.4, 5.4);
+            continue;
           } else if (node.type === 'lift-blackbox') {
-            context.fillStyle = node.liftKind === 'inbound' ? FLOW_VISUAL_COLORS.inbound.hex : FLOW_VISUAL_COLORS.outbound.hex;
-            context.strokeStyle = '#f7fbff';
-            context.lineWidth = 1.2;
-            context.beginPath();
-            context.roundRect(point.x - 5.2, point.y - 4.4, 10.4, 8.8, 2);
-            context.fill();
-            context.stroke();
+            continue;
           }
         }
         context.globalAlpha = 1;
@@ -1276,11 +1271,13 @@ function CanvasLiteMap({
           if (!node) continue;
           const point = project(node);
           const loadRole = resolveLoadFlowRole(state, load);
+          const conveyorLoad = node.type === 'inbound' || node.type === 'outbound' || node.type === 'lift-blackbox';
+          const sizePx = conveyorLoad ? 5.8 : 8.4;
           context.fillStyle = flowRgba(loadRole, 0.88);
-          context.strokeStyle = '#ffffff';
-          context.lineWidth = 1.2;
+          context.strokeStyle = conveyorLoad ? flowRgba(loadRole, 0.5) : 'rgba(255,255,255,0.72)';
+          context.lineWidth = conveyorLoad ? 0.8 : 1.1;
           context.beginPath();
-          context.roundRect(point.x - 4.2, point.y - 4.2, 8.4, 8.4, 1.2);
+          context.roundRect(point.x - sizePx / 2, point.y - sizePx / 2, sizePx, sizePx, 1.2);
           context.fill();
           context.stroke();
         }
@@ -1303,6 +1300,7 @@ function CanvasLiteMap({
         const vehicle = task.vehicleId ? vehicleById.get(task.vehicleId) : null;
         const pickupNode = geometry.nodeMap.get(task.pickupNodeId);
         if (!vehicle || !pickupNode || vehicle.loaded) continue;
+        if (pickupNode.type === 'inbound' || pickupNode.type === 'outbound' || pickupNode.type === 'lift-blackbox') continue;
         const point = project(pickupNode);
         context.fillStyle = flowRgba(task.kind, 0.92);
         context.strokeStyle = '#ffffff';

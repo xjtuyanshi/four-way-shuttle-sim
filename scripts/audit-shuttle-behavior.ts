@@ -378,7 +378,7 @@ function auditTaskCommonSense(current: ShuttleSimState): void {
     if (vehicle.taskId !== task.id) {
       addAnomaly(current.simTimeSec, vehicle.id, 'task-vehicle-link-mismatch', 'critical', `task=${task.id} vehicle.taskId=${vehicle.taskId ?? 'none'}`);
     }
-    const expectedGoal = expectedTaskGoalNodeId(vehicle, task);
+    const expectedGoal = expectedTaskGoalNodeId(current, vehicle, task);
     if (
       vehicle.currentNodeId !== expectedGoal &&
       vehicle.state !== 'lifting' &&
@@ -549,7 +549,7 @@ function auditVehicleTrace(current: ShuttleSimState, vehicle: VehicleState): voi
     vehicle.state !== 'waiting-blocked' &&
     vehicle.state !== 'lifting' &&
     vehicle.state !== 'lowering' &&
-    vehicle.currentNodeId !== expectedTaskGoalNodeId(vehicle, task)
+    vehicle.currentNodeId !== expectedTaskGoalNodeId(current, vehicle, task)
   ) {
     addAnomaly(
       current.simTimeSec,
@@ -587,7 +587,7 @@ function auditVehicleTrace(current: ShuttleSimState, vehicle: VehicleState): voi
     }
   }
 
-  const goalNodeId = task ? expectedTaskGoalNodeId(vehicle, task) : null;
+  const goalNodeId = task ? expectedTaskGoalNodeId(current, vehicle, task) : null;
   const goalDistance = goalNodeId ? nominalShortestDistance(current, vehicle, goalNodeId) : null;
   if (goalNodeId !== trace.lastGoalNodeId) {
     trace.lastGoalNodeId = goalNodeId;
@@ -879,8 +879,73 @@ function taskForVehicle(current: ShuttleSimState, vehicle: VehicleState): TaskSt
   return task;
 }
 
-function expectedTaskGoalNodeId(vehicle: VehicleState, task: TaskStateRecord): string {
-  return vehicle.loaded || vehicle.state === 'lowering' ? task.dropoffNodeId : task.pickupNodeId;
+function expectedTaskGoalNodeId(current: ShuttleSimState, vehicle: VehicleState, task: TaskStateRecord): string {
+  if (vehicle.loaded || vehicle.state === 'lowering') {
+    return task.dropoffNodeId;
+  }
+  return inboundTaskHasEarlierPickupTask(current, task) ? inboundQueueNodeIdForTask(task) ?? task.pickupNodeId : task.pickupNodeId;
+}
+
+function inboundQueueNodeIdForTask(task: TaskStateRecord): string | null {
+  if (task.kind !== 'inbound') {
+    return null;
+  }
+  const liftNodeId = inboundLiftNodeIdForTask(task);
+  if (!liftNodeId) {
+    return null;
+  }
+  const queueNodeId = `parking-${liftNodeId}-queue`;
+  return scenarioNodeIds.has(queueNodeId) ? queueNodeId : null;
+}
+
+function inboundLiftNodeIdForTask(task: TaskStateRecord): string | null {
+  if (task.kind !== 'inbound') {
+    return null;
+  }
+  const bufferMatch = /^(lift-\d{2}-inbound)-buffer-\d{2}$/.exec(task.pickupNodeId);
+  if (bufferMatch) {
+    return bufferMatch[1]!;
+  }
+  return inboundLiftNodeIds.includes(task.pickupNodeId) ? task.pickupNodeId : null;
+}
+
+function inboundTaskHasEarlierPickupTask(current: ShuttleSimState, task: TaskStateRecord): boolean {
+  if (task.kind !== 'inbound' || task.startedAtSec !== null) {
+    return false;
+  }
+  const liftNodeId = inboundLiftNodeIdForTask(task);
+  if (!liftNodeId) {
+    return false;
+  }
+  return current.tasks.some((candidate) =>
+    candidate.id !== task.id &&
+    candidate.kind === 'inbound' &&
+    candidate.state !== 'completed' &&
+    candidate.state !== 'failed' &&
+    inboundLiftNodeIdForTask(candidate) === liftNodeId &&
+    inboundTaskPrecedes(candidate, task) &&
+    !inboundTaskPickupReleased(current, candidate)
+  );
+}
+
+function inboundTaskPrecedes(left: TaskStateRecord, right: TaskStateRecord): boolean {
+  return left.createdAtSec < right.createdAtSec ||
+    (left.createdAtSec === right.createdAtSec && left.id.localeCompare(right.id) < 0);
+}
+
+function inboundTaskPickupReleased(current: ShuttleSimState, task: TaskStateRecord): boolean {
+  if (task.kind !== 'inbound' || task.state === 'completed' || task.state === 'failed') {
+    return true;
+  }
+  if (task.startedAtSec !== null || task.state === 'in-progress') {
+    return true;
+  }
+  const vehicle = task.vehicleId ? current.vehicles.find((candidate) => candidate.id === task.vehicleId) : null;
+  if (vehicle?.loaded) {
+    return true;
+  }
+  const load = current.loads.find((candidate) => candidate.id === task.loadId);
+  return Boolean(load && load.state !== 'waiting');
 }
 
 function nominalShortestDistance(current: ShuttleSimState, vehicle: VehicleState, toNodeId: string): number | null {

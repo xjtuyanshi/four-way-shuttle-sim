@@ -162,8 +162,8 @@ export function createStorageColumnRects(staticScene: ShuttleStaticSceneContract
 
 export function createStorageCellRects(staticScene: ShuttleStaticSceneContract): MeterRect[] {
   return staticScene.storageCells.map((cell) => {
-    const widthM = Math.max(cell.lengthXM * 0.72, 0.12);
-    const depthM = Math.max(cell.lengthZM * 0.72, 0.12);
+    const widthM = Math.max(cell.lengthXM * 0.9, 0.12);
+    const depthM = Math.max(cell.lengthZM * 0.88, 0.12);
     return {
       id: `storage-cell-${cell.id}`,
       category: 'storageCell',

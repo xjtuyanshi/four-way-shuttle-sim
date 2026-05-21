@@ -1451,6 +1451,9 @@ function updateDynamicScene(
       if (!vehicle || !pickupNode || vehicle.loaded || task.state === 'completed' || task.state === 'failed') {
         continue;
       }
+      if (pickupNode.type === 'inbound' || pickupNode.type === 'outbound' || pickupNode.type === 'lift-blackbox') {
+        continue;
+      }
       runtime.routeGroup.add(createTaskAssignmentMarker(pickupNode, vehicleDisplayNumber(vehicle.id), task.kind));
     }
 
