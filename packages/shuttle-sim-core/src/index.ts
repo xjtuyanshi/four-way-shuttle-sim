@@ -845,11 +845,18 @@ function createTopLiftColumnLayout(
     id: TOP_LIFT_COLUMN_LAYOUT_PROFILE_ID,
     label: 'Top-lift column-fill layout assumption',
     sourceDescription: `${profile.calibrationProfile.sourceDescription}; updated from user reference image with top-side lifts, fixed left outbound/right inbound ports, and column-fill 7x7 modules.`,
+    dimensions: profile.calibrationProfile.dimensions.map((dimension) => dimension.key === 'storageBayGapX'
+      ? {
+          ...dimension,
+          note: 'Top-lift column layouts use one storage pitch as the pass-through gap between adjacent 7x7 storage zones.'
+        }
+      : dimension),
     notes: [
       ...profile.calibrationProfile.notes,
       'Top-lift column layout: every physical lift has an outbound left port and an inbound right port.',
       'Each inbound and outbound lift port has three explicit compact conveyor buffer positions stacked along the lift side; inbound buffers sit to the right of the port and outbound buffers sit to the left.',
       'Each pair of physical lifts owns four 7x7 storage zones; inbound target allocation fills each physical storage column bottom-to-top.',
+      'Adjacent 7x7 storage zones leave a one-lane pass-through gap; empty shuttles may use storage cells as conditional aisle space while loaded routes avoid stored-load crossings.',
       'Inbound source backlog models three port buffer positions plus one lift position per inbound port.'
     ]
   };

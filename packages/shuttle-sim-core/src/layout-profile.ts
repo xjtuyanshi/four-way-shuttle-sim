@@ -154,11 +154,15 @@ function syncedCalibrationDimensions(
 
 export function createShuttleLayoutProfile(overrides: ShuttleLayoutGeometryProfileOverride = {}): ShuttleLayoutGeometryProfile {
   const { calibrationProfile: calibrationProfileOverrides, ...geometryOverrides } = overrides;
+  const hasExplicitStorageBayGap = Object.prototype.hasOwnProperty.call(geometryOverrides, 'storageBayGapXM');
   const geometryProfile: ShuttleLayoutGeometryProfile = {
     ...DEFAULT_SHUTTLE_LAYOUT_PROFILE,
     ...geometryOverrides,
     calibrationProfile: DEFAULT_SHUTTLE_LAYOUT_PROFILE.calibrationProfile
   };
+  if (geometryProfile.layoutKind === 'top-lift-column' && !hasExplicitStorageBayGap) {
+    geometryProfile.storageBayGapXM = geometryProfile.storageCellPitchXM;
+  }
   const calibrationProfile = {
     ...DEFAULT_SHUTTLE_LAYOUT_PROFILE.calibrationProfile,
     ...calibrationProfileOverrides,

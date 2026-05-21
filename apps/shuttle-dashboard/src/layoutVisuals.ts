@@ -2,7 +2,7 @@ import type { ShuttleStaticSceneContract, ShuttleStaticSceneTrackCategory } from
 
 export type MeterRect = {
   id: string;
-  category: ShuttleStaticSceneTrackCategory | 'storageColumn';
+  category: ShuttleStaticSceneTrackCategory | 'storageCell' | 'storageColumn';
   minX: number;
   maxX: number;
   minZ: number;
@@ -158,4 +158,19 @@ export function createStorageColumnRects(staticScene: ShuttleStaticSceneContract
     });
   });
   return rects;
+}
+
+export function createStorageCellRects(staticScene: ShuttleStaticSceneContract): MeterRect[] {
+  return staticScene.storageCells.map((cell) => {
+    const widthM = Math.max(cell.lengthXM * 0.72, 0.12);
+    const depthM = Math.max(cell.lengthZM * 0.72, 0.12);
+    return {
+      id: `storage-cell-${cell.id}`,
+      category: 'storageCell',
+      minX: cell.xM - widthM / 2,
+      maxX: cell.xM + widthM / 2,
+      minZ: cell.zM - depthM / 2,
+      maxZ: cell.zM + depthM / 2
+    };
+  });
 }

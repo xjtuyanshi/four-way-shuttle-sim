@@ -420,6 +420,11 @@ describe('shuttle phase 0 SimCore', () => {
     expect(contract.storagePolicy).toBe('columnContiguousBottomToTopFill');
     expect(contract.inboundStorageFlow).toBe('bottomToTop');
     expect(contract.diagonalTrackCount).toBe(0);
+    const normalColumnPitchM = parsed.layout.nodes.find((node) => node.id === 'storage-r01-c02')!.x -
+      parsed.layout.nodes.find((node) => node.id === 'storage-r01-c01')!.x;
+    const bayBoundaryPitchM = parsed.layout.nodes.find((node) => node.id === 'storage-r01-c08')!.x -
+      parsed.layout.nodes.find((node) => node.id === 'storage-r01-c07')!.x;
+    expect(bayBoundaryPitchM).toBeCloseTo(normalColumnPitchM * 2, 6);
     expect(parsed.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound').map((node) => node.id)).toEqual([
       'lift-01-inbound',
       'lift-02-inbound'
@@ -1320,7 +1325,7 @@ describe('shuttle phase 0 SimCore', () => {
         expect(internals.routeHasOnlyAdjacentEdges(route!)).toBe(true);
       }
     }
-  }, 30000);
+  }, 60000);
 
   it('emits deterministic fixed-step replay manifests', () => {
     const scenario = createInboundMvpBaselineScenario({

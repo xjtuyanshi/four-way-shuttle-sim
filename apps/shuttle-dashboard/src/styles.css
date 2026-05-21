@@ -885,7 +885,7 @@ input[type="range"] {
 }
 
 .map-area,
-.map-storage-column {
+.map-storage-cell {
   position: absolute;
   display: block;
   pointer-events: none;
@@ -910,10 +910,11 @@ input[type="range"] {
   background: rgba(var(--flow-outbound-rgb), 0.16);
 }
 
-.map-storage-column {
+.map-storage-cell {
   z-index: 1;
-  border-radius: 999px;
-  background: rgba(141, 120, 255, 0.48);
+  border: 1px solid rgba(181, 154, 255, 0.62);
+  border-radius: 2px;
+  background: rgba(141, 120, 255, 0.22);
 }
 
 .map-node {

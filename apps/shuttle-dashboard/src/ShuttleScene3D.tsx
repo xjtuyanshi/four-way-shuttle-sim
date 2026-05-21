@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import type { LoadStateRecord, ShuttleScenario, ShuttleSimState, VehicleState } from '@four-way-shuttle/schemas';
 import { summarizeScenarioStaticSceneContract, type ShuttleStaticSceneContract } from '@four-way-shuttle/sim-core/static-scene';
 import { flowRgba, FLOW_VISUAL_COLORS, resolveLoadFlowRole, resolveVehicleLoadFlowRole, resolveVehicleTaskFlowRole, type LoadFlowRole } from './flowColors.js';
-import { createStorageColumnRects, createTrackAreaRects, getStorageFields, type MeterRect, type StorageField } from './layoutVisuals.js';
+import { createStorageCellRects, createTrackAreaRects, getStorageFields, type MeterRect, type StorageField } from './layoutVisuals.js';
 
 type ShuttleNode = ShuttleScenario['layout']['nodes'][number];
 type ShuttleEdge = ShuttleScenario['layout']['edges'][number];
@@ -399,6 +399,14 @@ function createCadFloorTexture(
     ctx.fillStyle = fillStyle;
     ctx.fillRect(rect.left, rect.top, rect.width, rect.height);
   };
+  const drawMeterRect = (meterRect: MeterRect, fillStyle: string, strokeStyle: string) => {
+    const rect = rectForMeterRect(meterRect);
+    ctx.fillStyle = fillStyle;
+    ctx.strokeStyle = strokeStyle;
+    ctx.lineWidth = 2;
+    ctx.fillRect(rect.left, rect.top, rect.width, rect.height);
+    ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
+  };
 
   ctx.fillStyle = '#0f151c';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -428,8 +436,8 @@ function createCadFloorTexture(
     ctx.strokeRect(left, top, width, height);
   }
 
-  for (const rect of createStorageColumnRects(staticScene)) {
-    fillMeterRect(rect, 'rgba(157, 108, 255, 0.62)');
+  for (const rect of createStorageCellRects(staticScene)) {
+    drawMeterRect(rect, 'rgba(157, 108, 255, 0.22)', 'rgba(184, 142, 255, 0.72)');
   }
 
   for (const cell of staticScene.blockedCells) {
@@ -692,24 +700,27 @@ function setPalletLoadColor(loadMesh: THREE.Group, crateColor: number): void {
 function createStorageRackField(field: StorageField): THREE.Group {
   const group = new THREE.Group();
   const deckMaterial = material(0x171323, 0.9, 0.04);
-  const columnMaterial = material(0x8d78ff, 0.48, 0.18);
+  const cellMaterial = material(0x8d78ff, 0.24, 0.08);
   const boundaryMaterial = material(0xb177ff, 0.52, 0.18);
   const averageCellLengthM = field.cells.reduce((sum, cell) => sum + cell.lengthXM, 0) / field.cells.length;
+  const averageCellDepthM = field.cells.reduce((sum, cell) => sum + cell.lengthZM, 0) / field.cells.length;
 
   const deck = new THREE.Mesh(new THREE.BoxGeometry(field.width, 0.035, field.depth), deckMaterial);
   deck.position.set((field.minX + field.maxX) / 2, 0.022, (field.minZ + field.maxZ) / 2);
   deck.receiveShadow = true;
   group.add(deck);
 
-  const columnWidthM = Math.max(averageCellLengthM * 0.14, 0.07);
-  for (const columnX of field.columns) {
-    const column = new THREE.Mesh(new THREE.BoxGeometry(columnWidthM, 0.075, field.depth), columnMaterial);
-    column.position.set(columnX, 0.105, (field.minZ + field.maxZ) / 2);
-    column.castShadow = true;
-    column.receiveShadow = true;
-    group.add(column);
+  const cellWidthM = Math.max(averageCellLengthM * 0.68, 0.12);
+  const cellDepthM = Math.max(averageCellDepthM * 0.68, 0.12);
+  for (const cell of field.cells) {
+    const cellDeck = new THREE.Mesh(new THREE.BoxGeometry(cellWidthM, 0.045, cellDepthM), cellMaterial);
+    cellDeck.position.set(cell.xM, 0.085, cell.zM);
+    cellDeck.castShadow = true;
+    cellDeck.receiveShadow = true;
+    group.add(cellDeck);
   }
 
+  const columnWidthM = Math.max(averageCellLengthM * 0.08, 0.045);
   for (const x of [field.minX, field.maxX]) {
     const boundary = new THREE.Mesh(new THREE.BoxGeometry(columnWidthM * 0.8, 0.055, field.depth), boundaryMaterial);
     boundary.position.set(x, 0.095, (field.minZ + field.maxZ) / 2);

@@ -14,7 +14,7 @@ import {
 } from '@four-way-shuttle/sim-core/static-scene';
 import type { ShuttleSceneCameraView, ShuttleSceneRendererInfo } from './ShuttleScene3D.js';
 import { flowRgba, resolveLoadFlowRole, resolveVehicleTaskFlowRole, FLOW_VISUAL_COLORS } from './flowColors.js';
-import { createStorageColumnRects, createTrackAreaRects } from './layoutVisuals.js';
+import { createStorageCellRects, createTrackAreaRects } from './layoutVisuals.js';
 
 const ShuttleScene3D = lazy(() =>
   import('./ShuttleScene3D.js').then((module) => ({ default: module.ShuttleScene3D }))
@@ -956,7 +956,7 @@ function AuthoritativeMap({
       edges: scenario?.layout.edges ?? [],
       aisleRects: staticScene ? createTrackAreaRects(staticScene, ['sideAisle', 'crossAisle', 'parkingConnector']) : [],
       connectorRects: staticScene ? createTrackAreaRects(staticScene, ['inboundConnector', 'outboundConnector']) : [],
-      storageColumnRects: staticScene ? createStorageColumnRects(staticScene) : [],
+      storageCellRects: staticScene ? createStorageCellRects(staticScene) : [],
       project,
       projectRect,
       routeSegmentStyle
@@ -994,8 +994,8 @@ function AuthoritativeMap({
       {geometry.connectorRects.map((rect) => (
         <span className={`map-area ${rect.category}`} key={rect.id} style={geometry.projectRect(rect)} />
       ))}
-      {geometry.storageColumnRects.map((rect) => (
-        <span className="map-storage-column" key={rect.id} style={geometry.projectRect(rect)} />
+      {geometry.storageCellRects.map((rect) => (
+        <span className="map-storage-cell" key={rect.id} style={geometry.projectRect(rect)} />
       ))}
       {geometry.edges.map((edge) => {
         const from = geometry.nodeMap.get(edge.from);
@@ -1097,7 +1097,7 @@ function CanvasLiteMap({
       nodeMap: new Map(nodes.map((node) => [node.id, node])),
       aisleRects: staticScene ? createTrackAreaRects(staticScene, ['sideAisle', 'crossAisle', 'parkingConnector']) : [],
       connectorRects: staticScene ? createTrackAreaRects(staticScene, ['inboundConnector', 'outboundConnector']) : [],
-      storageColumnRects: staticScene ? createStorageColumnRects(staticScene) : [],
+      storageCellRects: staticScene ? createStorageCellRects(staticScene) : [],
       minX,
       maxX,
       minZ,
@@ -1146,6 +1146,26 @@ function CanvasLiteMap({
         context.beginPath();
         context.roundRect(rect.left, rect.top, rect.width, rect.height, 3);
         context.fill();
+        context.globalAlpha = 1;
+      };
+
+      const drawMeterRect = (
+        meterRect: { minX: number; maxX: number; minZ: number; maxZ: number },
+        fillColor: string,
+        strokeColor: string,
+        fillAlpha: number,
+        strokeAlpha: number
+      ) => {
+        const rect = projectRect(meterRect);
+        context.globalAlpha = fillAlpha;
+        context.fillStyle = fillColor;
+        context.beginPath();
+        context.roundRect(rect.left, rect.top, rect.width, rect.height, 2);
+        context.fill();
+        context.globalAlpha = strokeAlpha;
+        context.strokeStyle = strokeColor;
+        context.lineWidth = 1;
+        context.stroke();
         context.globalAlpha = 1;
       };
 
@@ -1206,8 +1226,8 @@ function CanvasLiteMap({
         fillMeterRect(rect, color, 0.16);
       }
 
-      for (const rect of geometry.storageColumnRects) {
-        fillMeterRect(rect, '#8d78ff', 0.52);
+      for (const rect of geometry.storageCellRects) {
+        drawMeterRect(rect, '#8d78ff', '#b59aff', 0.22, 0.62);
       }
 
       for (const edge of geometry.edges) {
