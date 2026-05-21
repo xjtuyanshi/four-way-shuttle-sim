@@ -501,12 +501,18 @@ describe('shuttle phase 0 SimCore', () => {
         .sort();
       expect(occupiedSlotIds).toEqual(sourceSlotIdsByLift.get(liftId)!.sort());
     }
-    expect(state.tasks.filter((task) => task.kind === 'inbound')).toHaveLength(1);
+    expect(state.tasks.filter((task) => task.kind === 'inbound')).toHaveLength(4);
     expect(state.tasks.filter((task) => task.kind === 'inbound').map((task) => task.pickupNodeId)).toEqual([
-      'lift-01-inbound-buffer-03'
+      'lift-01-inbound-buffer-03',
+      'lift-02-inbound-buffer-03',
+      'lift-03-inbound-buffer-03',
+      'lift-04-inbound-buffer-03'
     ]);
     expect(state.tasks.filter((task) => task.kind === 'inbound').map((task) => task.dropoffNodeId)).toEqual([
-      'storage-r14-c01'
+      'storage-r14-c01',
+      'storage-r14-c08',
+      'storage-r14-c15',
+      'storage-r14-c22'
     ]);
     expect(state.vehicles.map((vehicle) => vehicle.currentNodeId)).toEqual([
       'parking-01',
@@ -536,7 +542,28 @@ describe('shuttle phase 0 SimCore', () => {
     expect(vehicle?.routeNodeIds).not.toContain('lift-01-inbound');
   });
 
-  it('holds top-lift inbound allocation on one active SKU-column slot at a time', () => {
+  it('dispatches parallel top-lift inbound work across the available inbound conveyors at startup', () => {
+    const scenario = createInboundMvpBaselineScenario();
+    const sim = new ShuttleSimCore(scenario);
+
+    expect(sim.getState().tasks.filter((task) => task.kind === 'inbound')).toHaveLength(4);
+
+    sim.start();
+    const state = sim.step(0.25);
+    const assignedInboundTasks = state.tasks.filter((task) => task.kind === 'inbound' && task.state === 'assigned');
+    const movingVehicles = state.vehicles.filter((vehicle) => vehicle.currentEdgeId !== null);
+
+    expect(assignedInboundTasks).toHaveLength(4);
+    expect(new Set(assignedInboundTasks.map((task) => task.pickupNodeId))).toEqual(new Set([
+      'lift-01-inbound-buffer-03',
+      'lift-02-inbound-buffer-03',
+      'lift-03-inbound-buffer-03',
+      'lift-04-inbound-buffer-03'
+    ]));
+    expect(movingVehicles).toHaveLength(4);
+  });
+
+  it('keeps top-lift inbound allocation in the active SKU column up to conveyor WIP capacity', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       layoutProfile: {
         layoutKind: 'top-lift-column',
@@ -578,6 +605,12 @@ describe('shuttle phase 0 SimCore', () => {
 
     expect(internals.selectTopLiftInboundStorageNode()?.nodeId).toBe('storage-r14-c01');
     addInboundTask(14);
+    expect(internals.selectTopLiftInboundStorageNode()?.nodeId).toBe('storage-r13-c01');
+    addInboundTask(13);
+    expect(internals.selectTopLiftInboundStorageNode()?.nodeId).toBe('storage-r12-c01');
+    addInboundTask(12);
+    expect(internals.selectTopLiftInboundStorageNode()?.nodeId).toBe('storage-r11-c01');
+    addInboundTask(11);
     expect(internals.selectTopLiftInboundStorageNode()).toBeNull();
   });
 

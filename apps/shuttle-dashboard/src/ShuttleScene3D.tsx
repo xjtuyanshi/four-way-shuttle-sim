@@ -455,12 +455,12 @@ function createCadFloorTexture(
   }
 
   for (const node of scenario.layout.nodes) {
-    if (node.type !== 'storage' && node.type !== 'lift-blackbox' && node.type !== 'parking') {
+    if (node.type === 'inbound' || node.type === 'outbound') {
       const x = xToPx(node.x);
       const z = zToPx(node.z);
-      ctx.fillStyle = node.type === 'inbound' ? '#9fd9ff' : node.type === 'outbound' ? '#f6d63e' : '#f6d63e';
+      ctx.fillStyle = node.type === 'inbound' ? '#9fd9ff' : '#f6d63e';
       ctx.beginPath();
-      ctx.arc(x, z, node.type === 'intersection' ? 14 : 18, 0, Math.PI * 2);
+      ctx.arc(x, z, 18, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -941,32 +941,14 @@ function createTaskAssignmentMarker(node: ShuttleNode, label: string, role: Load
 
 function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   const group = new THREE.Group();
-  const bodyMaterial = texturedMaterial(TEXTURE_ASSETS.metalPlate, {
-    color: 0xd9e4e7,
-    repeat: { x: 1.2, y: 0.8 },
-    roughness: 0.42,
-    metalness: 0.28,
-    normalScale: 0.1
-  });
-  const chassisMaterial = texturedMaterial(TEXTURE_ASSETS.metalPlate, {
-    color: 0x43505a,
-    repeat: { x: 1.3, y: 0.9 },
-    roughness: 0.54,
-    metalness: 0.34,
-    normalScale: 0.1
-  });
-  const deckMaterial = texturedMaterial(TEXTURE_ASSETS.metalPlate, {
-    color: 0x74838c,
-    repeat: { x: 1, y: 0.7 },
-    roughness: 0.52,
-    metalness: 0.22,
-    normalScale: 0.08
-  });
+  const bodyMaterial = material(0xe5eef2, 0.44, 0.16);
+  const chassisMaterial = material(0x72818a, 0.56, 0.18);
+  const deckMaterial = material(0xa7b5bd, 0.5, 0.12);
   const accentMaterial = new THREE.MeshStandardMaterial({
     color: FLOW_VISUAL_COLORS.inbound.three,
     emissive: 0x0b2230,
-    roughness: 0.38,
-    metalness: 0.22
+    roughness: 0.36,
+    metalness: 0.16
   });
   const beaconMaterial = new THREE.MeshBasicMaterial({
     color: FLOW_VISUAL_COLORS.inbound.three,

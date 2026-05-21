@@ -2241,12 +2241,22 @@ export class ShuttleSimCore {
   }
 
   private createTask(kind: 'inbound' | 'outbound'): { created: true } | { created: false; reason: string } {
-    const storageSelection = kind === 'inbound' ? this.selectInboundStorageNode() : this.selectOutboundLoad();
+    const topLiftInboundSelection = kind === 'inbound' && this.topLiftColumnLayoutEnabled()
+      ? this.selectTopLiftInboundTaskSelection()
+      : null;
+    if (topLiftInboundSelection && 'reason' in topLiftInboundSelection) {
+      return { created: false, reason: topLiftInboundSelection.reason };
+    }
+    const storageSelection = topLiftInboundSelection ?? (kind === 'inbound' ? this.selectInboundStorageNode() : this.selectOutboundLoad());
     if (!storageSelection) {
       return { created: false, reason: kind === 'inbound' ? 'storage-full' : 'storage-empty' };
     }
 
-    const inboundSourceSelection = kind === 'inbound' ? this.selectInboundSourceLoadForTask(storageSelection.nodeId) : null;
+    const inboundSourceSelection = kind === 'inbound'
+      ? topLiftInboundSelection
+        ? { liftNodeId: topLiftInboundSelection.liftNodeId, loadId: topLiftInboundSelection.loadId }
+        : this.selectInboundSourceLoadForTask(storageSelection.nodeId)
+      : null;
     const liftNodeId = kind === 'inbound'
       ? inboundSourceSelection?.liftNodeId ?? null
       : this.selectLiftPortNodeId(kind, storageSelection.nodeId);
@@ -2280,6 +2290,44 @@ export class ShuttleSimCore {
       fifoNodeId: storageSelection.nodeId
     });
     return { created: true };
+  }
+
+  private selectTopLiftInboundTaskSelection(): { nodeId: string; liftNodeId: string; loadId: string } | { reason: string } {
+    for (const liftNode of this.inboundLiftNodes()) {
+      this.compactInboundSourceBuffer(liftNode.id);
+    }
+
+    const assignedLoadIds = this.activeInboundSourceLoadIds();
+    const sourceCandidates = this.inboundLiftNodes()
+      .flatMap((liftNode) => {
+        const pickupNodeId = this.inboundSourcePickupNodeId(liftNode.id);
+        return this.inboundLiftWaitingSourceLoads(liftNode.id)
+          .filter((sourceLoad) => sourceLoad.nodeId === pickupNodeId && !assignedLoadIds.has(sourceLoad.id))
+          .map((sourceLoad, sourceIndex) => ({
+            liftNodeId: liftNode.id,
+            loadId: sourceLoad.id,
+            plannedLoad: this.liftPortPlannedLoad('inbound', liftNode.id),
+            sourceIndex
+          }));
+      })
+      .sort((left, right) =>
+        left.plannedLoad - right.plannedLoad ||
+        left.sourceIndex - right.sourceIndex ||
+        left.liftNodeId.localeCompare(right.liftNodeId)
+      );
+
+    if (sourceCandidates.length === 0) {
+      return { reason: this.inboundSourceUnavailableReason() };
+    }
+
+    for (const source of sourceCandidates) {
+      const nodeId = this.selectTopLiftInboundStorageNodeForLift(source.liftNodeId);
+      if (nodeId) {
+        return { nodeId, liftNodeId: source.liftNodeId, loadId: source.loadId };
+      }
+    }
+
+    return { reason: 'storage-full' };
   }
 
   private selectLiftPortNodeId(kind: 'inbound' | 'outbound', relatedNodeId: string): string | null {
@@ -2955,6 +3003,25 @@ export class ShuttleSimCore {
       const nodeId = this.firstAvailableTopLiftInboundNodeInColumn(column, occupancy);
       if (nodeId) {
         return { nodeId, loadId: '' };
+      }
+    }
+    return null;
+  }
+
+  private selectTopLiftInboundStorageNodeForLift(liftNodeId: string): string | null {
+    const occupancy = this.storageNodeLoadOccupancy(true);
+    const activeColumn = this.activeTopLiftTaskColumnForLift('inbound', liftNodeId);
+    if (activeColumn !== null) {
+      if (this.activeTopLiftTaskCountInColumnForLift('inbound', activeColumn, liftNodeId) >= this.topLiftSkuColumnActiveTaskLimit('inbound')) {
+        return null;
+      }
+      return this.firstAvailableTopLiftInboundNodeInColumn(activeColumn, occupancy);
+    }
+
+    for (const column of this.topLiftStorageColumnNumbersForLift(liftNodeId)) {
+      const nodeId = this.firstAvailableTopLiftInboundNodeInColumn(column, occupancy);
+      if (nodeId) {
+        return nodeId;
       }
     }
     return null;
@@ -3974,7 +4041,43 @@ export class ShuttleSimCore {
     ).length;
   }
 
-  private topLiftSkuColumnActiveTaskLimit(_kind: 'inbound' | 'outbound'): number {
+  private activeTopLiftTaskColumnForLift(kind: 'inbound' | 'outbound', liftNodeId: string): number | null {
+    if (!this.topLiftColumnLayoutEnabled()) {
+      return null;
+    }
+    const activeTasks = this.tasks
+      .filter((task) =>
+        task.kind === kind &&
+        task.state !== 'completed' &&
+        task.state !== 'failed' &&
+        this.taskLiftPortNodeId(task) === liftNodeId
+      )
+      .map((task) => ({
+        task,
+        column: this.taskStorageColumn(task)
+      }))
+      .filter((entry): entry is { task: TaskStateRecord; column: number } => entry.column !== null)
+      .sort((left, right) =>
+        left.task.createdAtSec - right.task.createdAtSec ||
+        left.task.id.localeCompare(right.task.id)
+      );
+    return activeTasks[0]?.column ?? null;
+  }
+
+  private activeTopLiftTaskCountInColumnForLift(kind: 'inbound' | 'outbound', column: number, liftNodeId: string): number {
+    return this.tasks.filter((task) =>
+      task.kind === kind &&
+      task.state !== 'completed' &&
+      task.state !== 'failed' &&
+      this.taskStorageColumn(task) === column &&
+      this.taskLiftPortNodeId(task) === liftNodeId
+    ).length;
+  }
+
+  private topLiftSkuColumnActiveTaskLimit(kind: 'inbound' | 'outbound'): number {
+    if (kind === 'inbound') {
+      return Math.max(1, this.scenario.trafficPolicy.sourceBufferCapacity);
+    }
     return 1;
   }
 
@@ -3990,6 +4093,19 @@ export class ShuttleSimCore {
       }
     }
     return [...columns].sort((left, right) => left - right);
+  }
+
+  private topLiftStorageColumnNumbersForLift(liftNodeId: string): number[] {
+    const columns = this.topLiftStorageColumnNumbers();
+    const liftNodes = this.inboundLiftNodes()
+      .sort((left, right) => left.x - right.x || left.id.localeCompare(right.id));
+    const liftIndex = liftNodes.findIndex((liftNode) => liftNode.id === liftNodeId);
+    if (liftIndex < 0 || liftNodes.length === 0) {
+      return columns;
+    }
+    const startIndex = Math.floor((liftIndex * columns.length) / liftNodes.length);
+    const endIndex = Math.floor(((liftIndex + 1) * columns.length) / liftNodes.length);
+    return columns.slice(startIndex, endIndex);
   }
 
   private topLiftStorageColumnNodeIds(column: number): string[] {
