@@ -1038,7 +1038,7 @@ function CanvasLiteMap({
 
       const project = (point: { x: number; z: number }) => ({
         x: padding + ((point.x - geometry.minX) / geometry.width) * (width - padding * 2),
-        y: height - padding - ((point.z - geometry.minZ) / geometry.depth) * (height - padding * 2)
+        y: padding + ((point.z - geometry.minZ) / geometry.depth) * (height - padding * 2)
       });
 
       const drawLine = (from: { x: number; z: number }, to: { x: number; z: number }, color: string, lineWidth: number, alpha = 1) => {
@@ -1106,6 +1106,17 @@ function CanvasLiteMap({
           } else if (node.type === 'intersection') {
             context.fillStyle = '#c8a53a';
             context.fillRect(point.x - 2.5, point.y - 2.5, 5, 5);
+          } else if (node.type === 'inbound' || node.type === 'outbound') {
+            context.fillStyle = node.type === 'inbound' ? '#4f8fcb' : '#6da8d6';
+            context.fillRect(point.x - 2.7, point.y - 2.7, 5.4, 5.4);
+          } else if (node.type === 'lift-blackbox') {
+            context.fillStyle = node.liftKind === 'inbound' ? '#1f7f6b' : '#346da3';
+            context.strokeStyle = '#f7fbff';
+            context.lineWidth = 1.2;
+            context.beginPath();
+            context.roundRect(point.x - 5.2, point.y - 4.4, 10.4, 8.8, 2);
+            context.fill();
+            context.stroke();
           }
         }
         context.globalAlpha = 1;

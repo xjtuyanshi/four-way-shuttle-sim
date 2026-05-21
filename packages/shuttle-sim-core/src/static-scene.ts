@@ -264,6 +264,12 @@ function trackCategoryForEdge(
   if (liftNode && liftKindForNode(liftNode) === 'outbound') {
     return 'outboundConnector';
   }
+  if (from.type === 'inbound' || to.type === 'inbound') {
+    return 'inboundConnector';
+  }
+  if (from.type === 'outbound' || to.type === 'outbound') {
+    return 'outboundConnector';
+  }
   if (edge.conflictGroup?.startsWith('fifo-lane')) {
     return 'storageLane';
   }

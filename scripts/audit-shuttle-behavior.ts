@@ -61,8 +61,26 @@ const inboundLiftNodeIds = scenario.layout.nodes
   .filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound')
   .map((node) => node.id)
   .sort();
+const scenarioNodeIds = new Set(scenario.layout.nodes.map((node) => node.id));
+const inboundSourceSlotNodeIdsByLift = new Map(inboundLiftNodeIds.map((liftNodeId) => [
+  liftNodeId,
+  [
+    liftNodeId,
+    ...Array.from({ length: Math.max(0, scenario.trafficPolicy.sourceBufferCapacity - 1) }, (_, index) =>
+      `${liftNodeId}-buffer-${String(index + 1).padStart(2, '0')}`
+    ).filter((nodeId) => scenarioNodeIds.has(nodeId))
+  ]
+]));
+const inboundSourceLiftBySlotNodeId = new Map(
+  [...inboundSourceSlotNodeIdsByLift.entries()].flatMap(([liftNodeId, slotNodeIds]) =>
+    slotNodeIds.map((slotNodeId) => [slotNodeId, liftNodeId] as const)
+  )
+);
 const inboundSourceCapacityPerLift = scenario.layout.calibrationProfile?.id === 'top-lift-column-v1'
-  ? scenario.trafficPolicy.sourceBufferCapacity
+  ? Math.max(1, Math.min(
+      scenario.trafficPolicy.sourceBufferCapacity,
+      Math.min(...[...inboundSourceSlotNodeIdsByLift.values()].map((slotNodeIds) => slotNodeIds.length))
+    ))
   : 1;
 const storageNodeCount = scenario.layout.nodes.filter((node) => node.type === 'storage').length;
 const sim = new ShuttleSimCore(scenario);
@@ -238,13 +256,16 @@ function auditInboundSourceBuffers(current: ShuttleSimState): void {
     return;
   }
 
-  const inboundLiftIdSet = new Set(inboundLiftNodeIds);
   const waitingLoadsByLift = new Map<string, string[]>();
   for (const load of current.loads) {
-    if (load.state !== 'waiting' || !load.nodeId || !inboundLiftIdSet.has(load.nodeId)) {
+    if (load.state !== 'waiting' || !load.nodeId) {
       continue;
     }
-    waitingLoadsByLift.set(load.nodeId, [...(waitingLoadsByLift.get(load.nodeId) ?? []), load.id]);
+    const liftNodeId = inboundSourceLiftBySlotNodeId.get(load.nodeId);
+    if (!liftNodeId) {
+      continue;
+    }
+    waitingLoadsByLift.set(liftNodeId, [...(waitingLoadsByLift.get(liftNodeId) ?? []), load.id]);
   }
 
   for (const [liftNodeId, loadIds] of waitingLoadsByLift) {
@@ -728,6 +749,7 @@ function auditRouteShape(
         candidate.currentNodeId !== nodeId &&
         candidate.state !== 'idle' &&
         candidate.state !== 'parking' &&
+        !(candidate.state === 'waiting-blocked' && candidate.blockingVehicleId !== null) &&
         !(candidate.state === 'waiting-blocked' && candidate.blockingVehicleId === vehicle.id)
       );
       if (claimant) {

@@ -82,11 +82,11 @@ const CAD_BLOCKED_STROKE = 'rgba(151, 183, 167, 0.88)';
 const CAD_DIMENSION_STROKE = 'rgba(222, 231, 236, 0.76)';
 
 function toVisualX(x: number): number {
-  return -x;
+  return x;
 }
 
 function toVisualYaw(yaw: number): number {
-  return normalizeAngle(Math.PI - yaw);
+  return yaw;
 }
 
 function toVisualNode(node: ShuttleNode): ShuttleNode {
@@ -115,8 +115,8 @@ export function resolveScene3DVisualStaticScene(staticScene: ShuttleStaticSceneC
     trackBeds: staticScene.trackBeds.map(toVisualMeterRecord),
     liftPads: staticScene.liftPads.map(toVisualMeterRecord),
     parkingPads: staticScene.parkingPads.map(toVisualMeterRecord),
-    storageBlockMinXM: toVisualX(staticScene.storageBlockMaxXM),
-    storageBlockMaxXM: toVisualX(staticScene.storageBlockMinXM),
+    storageBlockMinXM: toVisualX(staticScene.storageBlockMinXM),
+    storageBlockMaxXM: toVisualX(staticScene.storageBlockMaxXM),
     inboundLiftXM: toVisualX(staticScene.inboundLiftXM),
     outboundLiftXM: toVisualX(staticScene.outboundLiftXM)
   };
@@ -860,24 +860,24 @@ function createConveyor(node: ShuttleNode, color: number): THREE.Group {
   const group = new THREE.Group();
   group.position.set(node.x, 0, node.z);
 
-  const frame = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.12, 0.95), material(0x29333c, 0.68, 0.18));
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.11, 0.82), material(0x29333c, 0.68, 0.18));
   frame.position.y = 0.08;
   frame.castShadow = true;
   frame.receiveShadow = true;
   group.add(frame);
 
   const rollerMaterial = material(0x96a3ad, 0.42, 0.3);
-  for (let index = 0; index < 7; index += 1) {
-    const x = -0.78 + index * 0.26;
-    const roller = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.82, 14), rollerMaterial);
-    roller.rotation.x = Math.PI / 2;
-    roller.position.set(x, 0.18, 0);
+  for (let index = 0; index < 4; index += 1) {
+    const z = -0.27 + index * 0.18;
+    const roller = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.58, 14), rollerMaterial);
+    roller.rotation.z = Math.PI / 2;
+    roller.position.set(0, 0.18, z);
     roller.castShadow = true;
     group.add(roller);
   }
 
-  const dockPlate = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.035, 1.05), material(color, 0.58, 0.12));
-  dockPlate.position.set(node.type === 'inbound' ? -1.12 : 1.12, 0.19, 0);
+  const dockPlate = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.035, 0.88), material(color, 0.58, 0.12));
+  dockPlate.position.set(node.type === 'inbound' ? 0.47 : -0.47, 0.19, 0);
   group.add(dockPlate);
 
   return group;
@@ -946,7 +946,7 @@ function createLiftBlackboxPort(node: ShuttleNode, pad?: ShuttleStaticScenePad):
   }
 
   const portPlate = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.22, padLengthZ * 0.68), material(roleAccent, 0.54, 0.16));
-  portPlate.position.set(isInbound ? -padLengthX * 0.58 : padLengthX * 0.58, 0.22, 0);
+  portPlate.position.set(isInbound ? padLengthX * 0.58 : -padLengthX * 0.58, 0.22, 0);
   portPlate.castShadow = true;
   group.add(portPlate);
 
@@ -1518,7 +1518,7 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
   runtime.root.scale.set(1, 1, 1);
   runtime.root.position.set(0, 0, 0);
   runtime.cameraTarget.set(bounds.centerX, 0, bounds.centerZ);
-  const defaultCameraOffset = new THREE.Vector3(0, Math.max(13, bounds.size * 0.86), -bounds.size * 0.34);
+  const defaultCameraOffset = new THREE.Vector3(0, Math.max(13, bounds.size * 0.86), bounds.size * 0.34);
   runtime.baseCameraDistance = defaultCameraOffset.length();
   runtime.baseCameraYaw = Math.atan2(defaultCameraOffset.x, defaultCameraOffset.z);
   runtime.baseCameraPitch = Math.asin(defaultCameraOffset.y / Math.max(0.001, runtime.baseCameraDistance));
