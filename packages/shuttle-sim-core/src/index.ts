@@ -3463,12 +3463,15 @@ export class ShuttleSimCore {
   private selectTopLiftOutboundLoad(): { nodeId: string; loadId: string } | null {
     const assignedOutboundLoadIds = this.assignedOutboundLoadIds();
     const outboundLockedColumns = this.topLiftOutboundLockedColumns();
+    if (this.mixedTopLiftFlowEnabled() && this.mixedTopLiftActiveOutboundTaskCount() >= this.mixedTopLiftActiveOutboundTaskLimit()) {
+      return null;
+    }
     const activeColumn = this.activeTopLiftTaskColumn('outbound');
-    if (activeColumn !== null) {
-      if (this.activeTopLiftTaskCountInColumn('outbound', activeColumn) >= this.topLiftSkuColumnActiveTaskLimit('outbound')) {
-        return null;
+    if (activeColumn !== null && !this.mixedTopLiftFlowEnabled()) {
+      if (this.topLiftOutboundColumnCanAcceptTask(activeColumn)) {
+        return this.firstAvailableTopLiftOutboundLoadInColumn(activeColumn, assignedOutboundLoadIds);
       }
-      return this.firstAvailableTopLiftOutboundLoadInColumn(activeColumn, assignedOutboundLoadIds);
+      return null;
     }
 
     if (this.mixedTopLiftFlowEnabled() && outboundLockedColumns.size === 0) {
@@ -3479,12 +3482,33 @@ export class ShuttleSimCore {
       if (this.mixedTopLiftFlowEnabled() && !outboundLockedColumns.has(column)) {
         continue;
       }
+      if (!this.topLiftOutboundColumnCanAcceptTask(column)) {
+        continue;
+      }
       const selection = this.firstAvailableTopLiftOutboundLoadInColumn(column, assignedOutboundLoadIds);
       if (selection) {
         return selection;
       }
     }
     return null;
+  }
+
+  private topLiftOutboundColumnCanAcceptTask(column: number): boolean {
+    return this.activeTopLiftTaskCountInColumn('outbound', column) < this.topLiftSkuColumnActiveTaskLimit('outbound');
+  }
+
+  private mixedTopLiftActiveOutboundTaskCount(): number {
+    return this.tasks.filter((task) =>
+      task.kind === 'outbound' &&
+      (task.state === 'assigned' || task.state === 'in-progress')
+    ).length;
+  }
+
+  private mixedTopLiftActiveOutboundTaskLimit(): number {
+    const outboundLiftCount = this.scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'outbound').length;
+    const fleetBound = Math.max(1, Math.floor(this.scenario.vehicles.count / 4));
+    const liftBound = Math.max(1, Math.floor(outboundLiftCount / 2));
+    return Math.max(1, Math.min(fleetBound, liftBound));
   }
 
   private firstAvailableTopLiftOutboundLoadInColumn(column: number, assignedOutboundLoadIds: Set<string>): { nodeId: string; loadId: string } | null {
@@ -4404,6 +4428,22 @@ export class ShuttleSimCore {
   private fifoNetworkBlockReason(task: TaskStateRecord): string | null {
     if (task.kind !== 'outbound') {
       return null;
+    }
+    if (this.mixedTopLiftFlowEnabled()) {
+      const liftNodeId = this.taskLiftPortNodeId(task);
+      if (!liftNodeId) {
+        return null;
+      }
+      if (this.mixedTopLiftActiveOutboundTaskCount() >= this.mixedTopLiftActiveOutboundTaskLimit()) {
+        return 'outbound-network-wip-full';
+      }
+      const hasActiveSameLiftOutboundTask = this.tasks.some((candidate) =>
+        candidate.id !== task.id &&
+        candidate.kind === 'outbound' &&
+        (candidate.state === 'assigned' || candidate.state === 'in-progress') &&
+        this.taskLiftPortNodeId(candidate) === liftNodeId
+      );
+      return hasActiveSameLiftOutboundTask ? `outbound-lift-network-busy:${liftNodeId}` : null;
     }
     const hasActiveOutboundFifoTask = this.tasks.some((candidate) =>
       candidate.id !== task.id &&

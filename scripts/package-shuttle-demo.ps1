@@ -299,6 +299,7 @@ console.log(JSON.stringify({
   status: state.status,
   simTimeSec: state.simTimeSec,
   inboundPph: state.kpis?.inboundPph,
+  outboundPph: state.kpis?.outboundPph,
   deadlocks: state.kpis?.deadlockCount,
   vehicles: state.vehicles?.length
 }, null, 2));

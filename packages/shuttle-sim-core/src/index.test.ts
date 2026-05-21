@@ -1125,6 +1125,53 @@ describe('shuttle phase 0 SimCore', () => {
     expect(internals.selectTopLiftInboundStorageNode()?.nodeId).toBe('storage-r14-c01');
   });
 
+  it('parallelizes mixed top-lift outbound picks across seeded SKU columns', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 1
+      },
+      vehicles: { count: 4 },
+      taskGeneration: {
+        inboundRatePerHour: 3600,
+        outboundRatePerHour: 3600,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 8,
+        initialOutboundFullColumns: 2
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    const internals = sim as unknown as {
+      selectTopLiftOutboundLoad: () => { nodeId: string; loadId: string } | null;
+    };
+
+    expect(internals.selectTopLiftOutboundLoad()).toEqual({
+      nodeId: 'storage-r14-c01',
+      loadId: 'outbound-seed-c01-r14-0001'
+    });
+    sim.addTaskForTest({
+      id: 'outbound-c01-r14',
+      kind: 'outbound',
+      state: 'queued',
+      createdAtSec: 0,
+      assignedAtSec: null,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r14-c01',
+      dropoffNodeId: 'lift-01-outbound',
+      loadId: 'outbound-seed-c01-r14-0001',
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: null
+    });
+
+    expect(internals.selectTopLiftOutboundLoad()).toEqual({
+      nodeId: 'storage-r14-c02',
+      loadId: 'outbound-seed-c02-r14-0015'
+    });
+  });
+
   it('routes empty top-lift inbound return trips out of the filled column before pickup', () => {
     const scenario = createInboundMvpBaselineScenario({
       vehicles: { count: 1 },
