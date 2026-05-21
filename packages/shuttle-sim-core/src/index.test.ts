@@ -596,6 +596,130 @@ describe('shuttle phase 0 SimCore', () => {
     expect(vehicle?.routeNodeIds.slice(1, 3)).not.toContain('storage-r03-c04');
   });
 
+  it('lets an empty post-dropoff shuttle exit directly through stored pallet positions', () => {
+    const scenario = createInboundMvpBaselineScenario();
+    const sim = new ShuttleSimCore(scenario);
+    for (const row of [4, 5, 6, 7]) {
+      sim.addLoadForTest({
+        id: `blocked-exit-load-r${row}`,
+        state: 'stored',
+        nodeId: `storage-r${String(row).padStart(2, '0')}-c13`,
+        vehicleId: null,
+        weightKg: 100
+      });
+    }
+    sim.addLoadForTest({ id: 'near-full-exit-load-01', state: 'carried', nodeId: null, vehicleId: 'SH-01', weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'near-full-exit-task-01',
+      kind: 'inbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'lift-01-inbound-buffer-03',
+      dropoffNodeId: 'storage-r03-c13',
+      loadId: 'near-full-exit-load-01',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    const snapshot = sim.createSnapshot();
+    const snapshotVehicle = snapshot.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    const storageNode = scenario.layout.nodes.find((node) => node.id === 'storage-r03-c13')!;
+    snapshotVehicle.state = 'lowering';
+    snapshotVehicle.loaded = true;
+    snapshotVehicle.taskId = 'near-full-exit-task-01';
+    snapshotVehicle.currentNodeId = 'storage-r03-c13';
+    snapshotVehicle.x = storageNode.x;
+    snapshotVehicle.z = storageNode.z;
+    snapshotVehicle.routeNodeIds = ['storage-r03-c13'];
+    snapshotVehicle.plannedRouteNodeIds = ['storage-r03-c13'];
+    snapshotVehicle.targetNodeId = null;
+    snapshotVehicle.currentEdgeId = null;
+    snapshotVehicle.routeIndex = 0;
+    snapshotVehicle.phaseRemainingSec = 0;
+    snapshot.currentNodeOccupancy = snapshot.currentNodeOccupancy.filter((entry) => entry.vehicleId !== 'SH-01');
+    snapshot.currentNodeOccupancy.push({ nodeId: 'storage-r03-c13', vehicleId: 'SH-01' });
+    snapshot.stateHash = hashEngineSnapshot(snapshot);
+    sim.restoreSnapshot(snapshot);
+    sim.step(0.25);
+    const vehicle = sim.getState().vehicles.find((candidate) => candidate.id === 'SH-01');
+
+    expect(vehicle?.routeNodeIds[0]).toBe('storage-r03-c13');
+    expect(vehicle?.routeNodeIds.slice(1, 5)).toEqual([
+      'storage-r04-c13',
+      'storage-r05-c13',
+      'storage-r06-c13',
+      'storage-r07-c13'
+    ]);
+    expect(vehicle?.routeNodeIds).toContain('column-middle-c13');
+    const exitIndex = vehicle?.routeNodeIds.indexOf('column-middle-c13') ?? -1;
+    expect(vehicle?.routeNodeIds.slice(0, exitIndex + 1).some((nodeId) => nodeId.startsWith('module-'))).toBe(false);
+  });
+
+  it('keeps top-lift post-dropoff exits in the same storage column', () => {
+    const scenario = createInboundMvpBaselineScenario();
+    const sim = new ShuttleSimCore(scenario);
+    for (const row of [6, 7]) {
+      sim.addLoadForTest({
+        id: `blocked-far-exit-r${row}`,
+        state: 'stored',
+        nodeId: `storage-r${String(row).padStart(2, '0')}-c01`,
+        vehicleId: null,
+        weightKg: 100
+      });
+    }
+    sim.addLoadForTest({ id: 'same-column-exit-load-01', state: 'carried', nodeId: null, vehicleId: 'SH-01', weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'same-column-exit-task-01',
+      kind: 'inbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'lift-01-inbound-buffer-03',
+      dropoffNodeId: 'storage-r05-c01',
+      loadId: 'same-column-exit-load-01',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    const snapshot = sim.createSnapshot();
+    const snapshotVehicle = snapshot.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    const storageNode = scenario.layout.nodes.find((node) => node.id === 'storage-r05-c01')!;
+    snapshotVehicle.state = 'lowering';
+    snapshotVehicle.loaded = true;
+    snapshotVehicle.taskId = 'same-column-exit-task-01';
+    snapshotVehicle.currentNodeId = 'storage-r05-c01';
+    snapshotVehicle.x = storageNode.x;
+    snapshotVehicle.z = storageNode.z;
+    snapshotVehicle.routeNodeIds = ['storage-r05-c01'];
+    snapshotVehicle.plannedRouteNodeIds = ['storage-r05-c01'];
+    snapshotVehicle.targetNodeId = null;
+    snapshotVehicle.currentEdgeId = null;
+    snapshotVehicle.routeIndex = 0;
+    snapshotVehicle.phaseRemainingSec = 0;
+    snapshot.currentNodeOccupancy = snapshot.currentNodeOccupancy.filter((entry) => entry.vehicleId !== 'SH-01');
+    snapshot.currentNodeOccupancy.push({ nodeId: 'storage-r05-c01', vehicleId: 'SH-01' });
+    snapshot.stateHash = hashEngineSnapshot(snapshot);
+    sim.restoreSnapshot(snapshot);
+    sim.step(0.25);
+    const vehicle = sim.getState().vehicles.find((candidate) => candidate.id === 'SH-01');
+
+    expect(vehicle?.routeNodeIds.slice(0, 4)).toEqual([
+      'storage-r05-c01',
+      'storage-r06-c01',
+      'storage-r07-c01',
+      'column-middle-c01'
+    ]);
+    expect(vehicle?.routeNodeIds.at(-1)).not.toBe('column-middle-c01');
+    expect(vehicle?.localRouteNodeIds.length).toBeLessThanOrEqual(4);
+    const exitIndex = vehicle?.routeNodeIds.indexOf('column-middle-c01') ?? -1;
+    expect(vehicle?.routeNodeIds.slice(0, exitIndex + 1).some((nodeId) => nodeId.startsWith('module-'))).toBe(false);
+  });
+
   it('keeps top-lift inbound source capacity independent of lift approach capacity', () => {
     const scenario = createDefaultShuttleScenario({
       layoutProfile: {
