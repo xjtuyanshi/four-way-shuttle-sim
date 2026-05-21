@@ -2864,6 +2864,10 @@ export class ShuttleSimCore {
   }
 
   private selectInboundStorageNode(): { nodeId: string; loadId: string } | null {
+    if (this.topLiftColumnLayoutEnabled()) {
+      return this.selectTopLiftInboundStorageNode();
+    }
+
     if (this.agentRefreshEnabled()) {
       return this.selectRefreshInboundStorageNode();
     }
@@ -2936,6 +2940,35 @@ export class ShuttleSimCore {
     return null;
   }
 
+  private selectTopLiftInboundStorageNode(): { nodeId: string; loadId: string } | null {
+    const occupancy = this.storageNodeLoadOccupancy(true);
+    const activeColumn = this.activeTopLiftTaskColumn('inbound');
+    if (activeColumn !== null) {
+      if (this.activeTopLiftTaskCountInColumn('inbound', activeColumn) >= this.topLiftSkuColumnActiveTaskLimit('inbound')) {
+        return null;
+      }
+      const nodeId = this.firstAvailableTopLiftInboundNodeInColumn(activeColumn, occupancy);
+      return nodeId ? { nodeId, loadId: '' } : null;
+    }
+
+    for (const column of this.topLiftStorageColumnNumbers()) {
+      const nodeId = this.firstAvailableTopLiftInboundNodeInColumn(column, occupancy);
+      if (nodeId) {
+        return { nodeId, loadId: '' };
+      }
+    }
+    return null;
+  }
+
+  private firstAvailableTopLiftInboundNodeInColumn(column: number, occupancy: Map<string, string>): string | null {
+    for (const nodeId of this.topLiftStorageColumnNodeIds(column)) {
+      if (!occupancy.has(nodeId) && !this.currentNodeOccupancy.has(nodeId)) {
+        return nodeId;
+      }
+    }
+    return null;
+  }
+
   private activeStorageRowTaskCount(rowLabel: string): number {
     return this.tasks.filter((task) =>
       task.state !== 'completed' &&
@@ -2954,6 +2987,10 @@ export class ShuttleSimCore {
   }
 
   private selectOutboundLoad(): { nodeId: string; loadId: string } | null {
+    if (this.topLiftColumnLayoutEnabled()) {
+      return this.selectTopLiftOutboundLoad();
+    }
+
     const lanes = this.storageLanes();
     const assignedOutboundLoadIds = new Set(
       this.tasks
@@ -2973,6 +3010,45 @@ export class ShuttleSimCore {
       }
     }
     return null;
+  }
+
+  private selectTopLiftOutboundLoad(): { nodeId: string; loadId: string } | null {
+    const assignedOutboundLoadIds = this.assignedOutboundLoadIds();
+    const activeColumn = this.activeTopLiftTaskColumn('outbound');
+    if (activeColumn !== null) {
+      if (this.activeTopLiftTaskCountInColumn('outbound', activeColumn) >= this.topLiftSkuColumnActiveTaskLimit('outbound')) {
+        return null;
+      }
+      return this.firstAvailableTopLiftOutboundLoadInColumn(activeColumn, assignedOutboundLoadIds);
+    }
+
+    for (const column of this.topLiftStorageColumnNumbers()) {
+      const selection = this.firstAvailableTopLiftOutboundLoadInColumn(column, assignedOutboundLoadIds);
+      if (selection) {
+        return selection;
+      }
+    }
+    return null;
+  }
+
+  private firstAvailableTopLiftOutboundLoadInColumn(column: number, assignedOutboundLoadIds: Set<string>): { nodeId: string; loadId: string } | null {
+    for (const nodeId of this.topLiftStorageColumnNodeIds(column)) {
+      const load = this.loads.find(
+        (candidate) => candidate.state === 'stored' && candidate.nodeId === nodeId && !assignedOutboundLoadIds.has(candidate.id)
+      );
+      if (load) {
+        return { nodeId, loadId: load.id };
+      }
+    }
+    return null;
+  }
+
+  private assignedOutboundLoadIds(): Set<string> {
+    return new Set(
+      this.tasks
+        .filter((task) => task.kind === 'outbound' && task.state !== 'completed' && task.state !== 'failed')
+        .map((task) => task.loadId)
+    );
   }
 
   private assignQueuedTasks(dtSec: number): void {
@@ -3828,6 +3904,77 @@ export class ShuttleSimCore {
     return this.storageGridPosition(storageNodeId)?.column ?? null;
   }
 
+  private activeTopLiftTaskColumn(kind: 'inbound' | 'outbound'): number | null {
+    if (!this.topLiftColumnLayoutEnabled()) {
+      return null;
+    }
+    const activeTasks = this.tasks
+      .filter((task) => task.kind === kind && task.state !== 'completed' && task.state !== 'failed')
+      .map((task) => ({
+        task,
+        column: this.taskStorageColumn(task)
+      }))
+      .filter((entry): entry is { task: TaskStateRecord; column: number } => entry.column !== null)
+      .sort((left, right) =>
+        left.task.createdAtSec - right.task.createdAtSec ||
+        left.task.id.localeCompare(right.task.id)
+      );
+    return activeTasks[0]?.column ?? null;
+  }
+
+  private activeTopLiftTaskCountInColumn(kind: 'inbound' | 'outbound', column: number): number {
+    return this.tasks.filter((task) =>
+      task.kind === kind &&
+      task.state !== 'completed' &&
+      task.state !== 'failed' &&
+      this.taskStorageColumn(task) === column
+    ).length;
+  }
+
+  private topLiftSkuColumnActiveTaskLimit(_kind: 'inbound' | 'outbound'): number {
+    return 1;
+  }
+
+  private topLiftStorageColumnNumbers(): number[] {
+    const columns = new Set<number>();
+    for (const node of this.scenario.layout.nodes) {
+      if (node.type !== 'storage') {
+        continue;
+      }
+      const position = this.storageGridPosition(node.id);
+      if (position) {
+        columns.add(position.column);
+      }
+    }
+    return [...columns].sort((left, right) => left - right);
+  }
+
+  private topLiftStorageColumnNodeIds(column: number): string[] {
+    return this.scenario.layout.nodes
+      .filter((node) => node.type === 'storage')
+      .map((node) => ({ nodeId: node.id, position: this.storageGridPosition(node.id) }))
+      .filter((entry): entry is { nodeId: string; position: { row: number; column: number } } =>
+        entry.position !== null && entry.position.column === column
+      )
+      .sort((left, right) =>
+        right.position.row - left.position.row ||
+        left.nodeId.localeCompare(right.nodeId)
+      )
+      .map((entry) => entry.nodeId);
+  }
+
+  private topLiftInitialSkuParkingBlockedColumns(): Set<number> {
+    if (!this.topLiftColumnLayoutEnabled()) {
+      return new Set();
+    }
+    const columns = this.topLiftStorageColumnNumbers();
+    const firstColumn = columns[0];
+    if (firstColumn === undefined) {
+      return new Set();
+    }
+    return new Set(columns.filter((column) => column === firstColumn || column === firstColumn + 1));
+  }
+
   private storageGridPosition(nodeId: string): { row: number; column: number } | null {
     const match = /^storage-r(\d+)-c(\d+)$/.exec(nodeId);
     return match ? { row: Number(match[1]), column: Number(match[2]) } : null;
@@ -4156,17 +4303,25 @@ export class ShuttleSimCore {
     const storageNodes = this.scenario.layout.nodes.filter((node): node is LayoutNode =>
       node.type === 'storage' && !node.noStop && !node.noParking
     );
+    const dedicatedParkingNodes = this.topLiftColumnLayoutEnabled()
+      ? this.scenario.layout.nodes.filter((node): node is LayoutNode =>
+          node.type === 'parking' && !node.noStop && !node.noParking
+        )
+      : [];
+    const standbyNodes = dedicatedParkingNodes.length > 0
+      ? [...dedicatedParkingNodes, ...storageNodes]
+      : storageNodes;
     const blockedDropoffNodeIds = this.activeInboundDropoffNodeIds();
     const blockedDropoffColumnKeys = this.activeTopLiftInboundColumnKeys();
     const storedLoadNodeIds = new Set(this.storageNodeLoadOccupancy(false).keys());
-    const claimedStandbyNodeIds = this.claimedTasklessStorageNodeIds(vehicleId);
+    const claimedStandbyNodeIds = this.claimedTasklessParkableNodeIds(vehicleId);
     const vehicleOffset = (this.vehicleOrdinal(vehicleId) - 1) % inboundLifts.length;
     const liftOrder = inboundLifts.map((_, index) => inboundLifts[(index + vehicleOffset) % inboundLifts.length]!);
     const candidates: LayoutNode[] = [];
     const seenNodeIds = new Set<string>();
 
     for (const lift of liftOrder) {
-      const rankedNodes = storageNodes
+      const rankedNodes = standbyNodes
         .filter((node) => node.id !== vehicle?.currentNodeId)
         .filter((node) => !storedLoadNodeIds.has(node.id))
         .filter((node) => !blockedDropoffNodeIds.has(node.id))
@@ -4181,9 +4336,11 @@ export class ShuttleSimCore {
         })
         .map((node) => ({
           node,
+          parkingRank: node.type === 'parking' ? 0 : 1,
           distanceM: Math.hypot(node.x - lift.x, node.z - lift.z)
         }))
         .sort((left, right) =>
+          left.parkingRank - right.parkingRank ||
           left.distanceM - right.distanceM ||
           left.node.id.localeCompare(right.node.id)
         );
@@ -4263,7 +4420,7 @@ export class ShuttleSimCore {
     return clearingColumnKeys;
   }
 
-  private claimedTasklessStorageNodeIds(vehicleId: string): Set<string> {
+  private claimedTasklessParkableNodeIds(vehicleId: string): Set<string> {
     const claimed = new Set<string>();
     for (const vehicle of this.vehicles) {
       if (vehicle.id === vehicleId || vehicle.taskId || vehicle.loaded) {
@@ -4271,8 +4428,9 @@ export class ShuttleSimCore {
       }
       const routeTargetNodeId = vehicle.routeNodeIds.at(-1) ?? null;
       for (const nodeId of [vehicle.currentNodeId, vehicle.targetNodeId, routeTargetNodeId]) {
-        if (nodeId && this.isStorageNode(nodeId)) {
-          claimed.add(nodeId);
+        const node = nodeId ? this.layoutNode(nodeId) : null;
+        if (node && (node.type === 'storage' || node.type === 'parking')) {
+          claimed.add(node.id);
         }
       }
     }
@@ -4625,13 +4783,22 @@ export class ShuttleSimCore {
           left.id.localeCompare(right.id)
         );
       });
+    if (this.isInboundOnlyFlow() && this.topLiftColumnLayoutEnabled() && dedicatedParking.length > 0) {
+      return [...dedicatedParking, ...temporaryStorageParking];
+    }
     if (this.isInboundOnlyFlow()) {
       const inboundStandbyStorage = this.inboundInitialParkingCandidates(temporaryStorageParking);
       const standbyIds = new Set(inboundStandbyStorage.map((node) => node.id));
+      const initialSkuParkingBlockedColumns = this.topLiftInitialSkuParkingBlockedColumns();
+      const blocksInitialSkuColumn = (node: ShuttleScenario['layout']['nodes'][number]): boolean =>
+        initialSkuParkingBlockedColumns.has(this.storageGridPosition(node.id)?.column ?? 0);
+      const overflowStorage = temporaryStorageParking.filter((node) => !standbyIds.has(node.id) && !blocksInitialSkuColumn(node));
+      const lastResortInitialSkuStorage = temporaryStorageParking.filter((node) => !standbyIds.has(node.id) && blocksInitialSkuColumn(node));
       return [
         ...inboundStandbyStorage,
-        ...temporaryStorageParking.filter((node) => !standbyIds.has(node.id)),
-        ...dedicatedParking
+        ...overflowStorage,
+        ...dedicatedParking,
+        ...lastResortInitialSkuStorage
       ];
     }
     return [...dedicatedParking, ...temporaryStorageParking];
@@ -4643,10 +4810,14 @@ export class ShuttleSimCore {
       return [];
     }
 
+    const initialSkuParkingBlockedColumns = this.topLiftInitialSkuParkingBlockedColumns();
+    const candidateStorageNodes = initialSkuParkingBlockedColumns.size === 0
+      ? storageNodes
+      : storageNodes.filter((node) => !initialSkuParkingBlockedColumns.has(this.storageGridPosition(node.id)?.column ?? 0));
     const candidates: ShuttleScenario['layout']['nodes'] = [];
     const seenNodeIds = new Set<string>();
     for (const lift of inboundLifts) {
-      const ranked = storageNodes
+      const ranked = candidateStorageNodes
         .filter((node) => !seenNodeIds.has(node.id))
         .map((node) => ({
           node,
