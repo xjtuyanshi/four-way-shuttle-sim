@@ -63,6 +63,25 @@ type RunToTimeResponse = {
   state: ShuttleSimState;
 };
 
+export type ScenarioSetup = {
+  regionCount: number;
+  minRegionCount: number;
+  maxRegionCount: number;
+  storageColumns: number;
+  storageRows: number;
+  storageCapacity: number;
+  physicalLiftCount: number;
+  inboundLiftCount: number;
+  outboundLiftCount: number;
+};
+
+type ScenarioSetupResponse = {
+  ok: boolean;
+  setup: ScenarioSetup;
+  scenario: ShuttleScenario;
+  state: ShuttleSimState;
+};
+
 type LiveStreamSnapshot = {
   simTimeSec: number;
   vehicles: VehicleState[] | null;
@@ -70,6 +89,7 @@ type LiveStreamSnapshot = {
 };
 
 type MapViewMode = '3d' | 'lite' | '2d';
+type WorkspaceTab = 'view' | 'statistics' | 'diagnostics';
 
 type BottleneckBreakdown = Record<string, number>;
 
@@ -328,6 +348,11 @@ const CONTROLLED_PARAMS = [
 ] as const;
 
 const PLAYBACK_SPEEDS = [1, 2, 4, 10] as const;
+const WORKSPACE_TABS: Array<{ id: WorkspaceTab; label: string }> = [
+  { id: 'view', label: '2D / 3D View' },
+  { id: 'statistics', label: 'Statistics' },
+  { id: 'diagnostics', label: 'Diagnostics' }
+];
 const API_BASE_URL = import.meta.env.VITE_SHUTTLE_API_TARGET?.replace(/\/$/, '') ?? '';
 const DEFAULT_SCENE_CAMERA_VIEW: ShuttleSceneCameraView = {
   zoom: 1,
@@ -435,6 +460,31 @@ function getPointerValue(source: unknown, pointer: string): unknown {
     cursor = (cursor as Record<string, unknown>)[part];
   }
   return cursor;
+}
+
+export function inferTopLiftRegionCount(scenario: ShuttleScenario | null | undefined): number {
+  if (!scenario) return 2;
+  const inboundLiftCount = scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound').length;
+  return Math.max(1, Math.round(inboundLiftCount / 2));
+}
+
+export function summarizeScenarioSetup(scenario: ShuttleScenario | null | undefined): ScenarioSetup | null {
+  if (!scenario) return null;
+  const contract = summarizeScenarioStaticSceneContract(scenario);
+  const inboundLiftCount = scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound').length;
+  const outboundLiftCount = scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'outbound').length;
+
+  return {
+    regionCount: inferTopLiftRegionCount(scenario),
+    minRegionCount: 1,
+    maxRegionCount: 8,
+    storageColumns: contract.storageColumns,
+    storageRows: contract.storageRows,
+    storageCapacity: contract.storageCellCount,
+    physicalLiftCount: Math.max(inboundLiftCount, outboundLiftCount),
+    inboundLiftCount,
+    outboundLiftCount
+  };
 }
 
 function websocketUrl(): string {
@@ -1933,6 +1983,8 @@ export function App() {
     routes: true
   });
   const [mapViewMode, setMapViewMode] = useState<MapViewMode>('lite');
+  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>('view');
+  const [regionDraftCount, setRegionDraftCount] = useState(2);
   const [sceneCameraView, setSceneCameraView] = useState<ShuttleSceneCameraView>(DEFAULT_SCENE_CAMERA_VIEW);
   const [isPending, startTransition] = useTransition();
   const reconnectAttemptRef = useRef(0);
@@ -1997,6 +2049,12 @@ export function App() {
       setSelectedVehicleId(vehicles[0]!.id);
     }
   }, [selectedVehicleId, vehicles]);
+
+  useEffect(() => {
+    if (scenario) {
+      setRegionDraftCount(inferTopLiftRegionCount(scenario));
+    }
+  }, [scenario]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2098,6 +2156,7 @@ export function App() {
   }, [paramDraftValues, scenarioParamValues]);
   const collisionAvoidanceEnabled = scenario?.trafficPolicy.collisionAvoidanceEnabled ?? true;
   const controllerMode = scenario?.trafficPolicy.controllerMode ?? 'reservation-v2';
+  const setupSummary = useMemo(() => summarizeScenarioSetup(scenario), [scenario]);
   const validationMode = validation?.acceptance.ieValidationPass
     ? { label: 'IE pass', tone: 'ok' }
     : validation?.acceptance.segmentSafeValidationPass
@@ -2124,6 +2183,30 @@ export function App() {
     } catch (error) {
       setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' });
       return false;
+    }
+  }
+
+  async function applyRegionSetup(): Promise<void> {
+    const minRegionCount = setupSummary?.minRegionCount ?? 1;
+    const maxRegionCount = setupSummary?.maxRegionCount ?? 8;
+    const regionCount = Math.min(maxRegionCount, Math.max(minRegionCount, Math.round(regionDraftCount)));
+    const startedAt = performance.now();
+    setCommandStatus({ label: `building ${regionCount} region layout...`, tone: 'idle' });
+    try {
+      const response = await requestJson<ScenarioSetupResponse>('/api/shuttle/setup', {
+        method: 'POST',
+        body: JSON.stringify({ regionCount })
+      });
+      setScenario(response.scenario);
+      setState(response.state);
+      commitLiveStreamFromState(response.state);
+      setEvents(response.state.recentEvents);
+      setValidation(null);
+      setRegionDraftCount(response.setup.regionCount);
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      setCommandStatus({ label: `${response.setup.regionCount} regions loaded in ${elapsedMs} ms`, tone: 'ok' });
+    } catch (error) {
+      setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' });
     }
   }
 
@@ -2272,6 +2355,9 @@ export function App() {
     }));
   }
 
+  const appliedRegionCount = setupSummary?.regionCount ?? 2;
+  const regionSetupDirty = regionDraftCount !== appliedRegionCount;
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -2323,6 +2409,52 @@ export function App() {
 
         <section className="control-block param-block">
           <h2>Scenario</h2>
+          <div className="setup-panel">
+            <div className="setup-panel-head">
+              <span>Top-lift regions</span>
+              <strong>{appliedRegionCount} active</strong>
+            </div>
+            <div className="stepper-row" aria-label="Region count setup">
+              <button
+                type="button"
+                onClick={() => setRegionDraftCount((value) => Math.max(setupSummary?.minRegionCount ?? 1, value - 1))}
+                disabled={regionDraftCount <= (setupSummary?.minRegionCount ?? 1)}
+                aria-label="Decrease region count"
+              >
+                -
+              </button>
+              <input
+                min={setupSummary?.minRegionCount ?? 1}
+                max={setupSummary?.maxRegionCount ?? 8}
+                step="1"
+                type="number"
+                value={regionDraftCount}
+                onChange={(event) => setRegionDraftCount(Number(event.currentTarget.value))}
+              />
+              <button
+                type="button"
+                onClick={() => setRegionDraftCount((value) => Math.min(setupSummary?.maxRegionCount ?? 8, value + 1))}
+                disabled={regionDraftCount >= (setupSummary?.maxRegionCount ?? 8)}
+                aria-label="Increase region count"
+              >
+                +
+              </button>
+              <button
+                className={regionSetupDirty ? 'primary-action' : ''}
+                type="button"
+                onClick={() => void applyRegionSetup()}
+                disabled={!scenario || !regionSetupDirty}
+              >
+                Apply
+              </button>
+            </div>
+            <div className="setup-metrics">
+              <span><strong>{setupSummary?.storageCapacity ?? '--'}</strong> cells</span>
+              <span><strong>{setupSummary ? setupSummary.regionCount * 4 : '--'}</strong> zones</span>
+              <span><strong>{setupSummary?.physicalLiftCount ?? '--'}</strong> lifts</span>
+              <span><strong>{setupSummary?.inboundLiftCount ?? '--'}/{setupSummary?.outboundLiftCount ?? '--'}</strong> in/out</span>
+            </div>
+          </div>
           <div className="mode-toggle">
             <span>
               Collision avoidance
@@ -2403,39 +2535,67 @@ export function App() {
           </div>
         </header>
 
-        <StreamingPane
-          scenario={scenario}
-          state={sceneState}
-          layers={sceneLayers}
-          selectedVehicleId={selectedVehicleId}
-          viewMode={mapViewMode}
-          cameraView={sceneCameraView}
-          rendererInfo={rendererInfo}
-          onCameraViewChange={(view) => setSceneCameraView(clampSceneCameraView(view))}
-          onToggleLayer={toggleSceneLayer}
-          onSelectVehicle={setSelectedVehicleId}
-          onViewModeChange={setMapViewMode}
-          onRendererInfo={setRendererInfo}
-        />
-        <KpiStrip scenario={scenario} kpis={kpis} />
-        <CapacityTheoryPanel kpis={kpis} />
-        <ResourceUtilizationPanel scenario={scenario} state={state} />
-        <TrafficDiagnosticsPanel state={state} />
-        <div className="main-grid">
-          <VehicleTable
-            vehicles={vehicles}
-            selectedVehicleId={selectedVehicleId}
-            onSelectVehicle={setSelectedVehicleId}
-          />
-          <details className="diagnostics-details">
-            <summary>Event log</summary>
-            <EventLog events={events} />
-          </details>
-        </div>
-        <details className="workspace-details">
-          <summary>Inventory / FIFO details</summary>
-          <FifoInventoryPanel scenario={scenario} state={state} />
-        </details>
+        <nav className="workspace-tabs" aria-label="Workspace sections">
+          {WORKSPACE_TABS.map((tab) => (
+            <button
+              className={workspaceTab === tab.id ? 'active' : ''}
+              key={tab.id}
+              type="button"
+              onClick={() => setWorkspaceTab(tab.id)}
+              aria-pressed={workspaceTab === tab.id}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+
+        {workspaceTab === 'view' && (
+          <section className="tab-panel view-panel" aria-label="2D and 3D simulation view">
+            <StreamingPane
+              scenario={scenario}
+              state={sceneState}
+              layers={sceneLayers}
+              selectedVehicleId={selectedVehicleId}
+              viewMode={mapViewMode}
+              cameraView={sceneCameraView}
+              rendererInfo={rendererInfo}
+              onCameraViewChange={(view) => setSceneCameraView(clampSceneCameraView(view))}
+              onToggleLayer={toggleSceneLayer}
+              onSelectVehicle={setSelectedVehicleId}
+              onViewModeChange={setMapViewMode}
+              onRendererInfo={setRendererInfo}
+            />
+          </section>
+        )}
+
+        {workspaceTab === 'statistics' && (
+          <section className="tab-panel statistics-panel" aria-label="Simulation statistics">
+            <KpiStrip scenario={scenario} kpis={kpis} />
+            <CapacityTheoryPanel kpis={kpis} />
+            <ResourceUtilizationPanel scenario={scenario} state={state} />
+          </section>
+        )}
+
+        {workspaceTab === 'diagnostics' && (
+          <section className="tab-panel diagnostics-panel" aria-label="Traffic and inventory diagnostics">
+            <TrafficDiagnosticsPanel state={state} />
+            <div className="main-grid">
+              <VehicleTable
+                vehicles={vehicles}
+                selectedVehicleId={selectedVehicleId}
+                onSelectVehicle={setSelectedVehicleId}
+              />
+              <details className="diagnostics-details" open>
+                <summary>Event log</summary>
+                <EventLog events={events} />
+              </details>
+            </div>
+            <details className="workspace-details">
+              <summary>Inventory / FIFO details</summary>
+              <FifoInventoryPanel scenario={scenario} state={state} />
+            </details>
+          </section>
+        )}
       </section>
     </main>
   );

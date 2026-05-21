@@ -762,6 +762,25 @@ describe('shuttle phase 0 SimCore', () => {
     expect(scenario.trafficPolicy.sourceBufferCapacity).toBe(4);
   });
 
+  it('expands the inbound MVP layout by whole top-lift regions', () => {
+    const scenario = createInboundMvpBaselineScenario({
+      layoutProfile: {
+        liftPairCount: 3
+      }
+    });
+    const contract = summarizeScenarioStaticSceneContract(scenario);
+
+    expect(scenario.layout.calibrationProfile?.id).toBe('top-lift-column-v1');
+    expect(contract.storageRows).toBe(14);
+    expect(contract.storageColumns).toBe(42);
+    expect(contract.storageCellCount).toBe(588);
+    expect(contract.storageIslandCount).toBe(12);
+    expect(scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound')).toHaveLength(6);
+    expect(scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'outbound')).toHaveLength(6);
+    expect(scenario.layout.nodes.some((node) => node.id === 'module-03-spine-top-a')).toBe(true);
+    expect(scenario.layout.nodes.some((node) => node.id === 'lift-06-inbound-buffer-03')).toBe(true);
+  });
+
   it('emits deterministic fixed-step replay manifests', () => {
     const scenario = createInboundMvpBaselineScenario({
       id: 'fixed-step-test',

@@ -63,6 +63,18 @@ type RunTraceV1 = {
   anomalyMarkers: ReplaySnapshotRecordV1[];
 };
 
+type ScenarioSetup = {
+  regionCount: number;
+  minRegionCount: number;
+  maxRegionCount: number;
+  storageColumns: number;
+  storageRows: number;
+  storageCapacity: number;
+  physicalLiftCount: number;
+  inboundLiftCount: number;
+  outboundLiftCount: number;
+};
+
 function parsePlaybackSpeed(value: unknown): number | null {
   if (typeof value !== 'number' && typeof value !== 'string') {
     return null;
@@ -87,6 +99,17 @@ function parseFiniteNonNegativeNumber(value: unknown): number | null {
   return Number.isFinite(number) && number >= 0 ? number : null;
 }
 
+function parseRegionCount(value: unknown): number | null {
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    return null;
+  }
+  if (typeof value === 'string' && value.trim() === '') {
+    return null;
+  }
+  const regionCount = Number(value);
+  return Number.isInteger(regionCount) && regionCount >= 1 && regionCount <= 8 ? regionCount : null;
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '4mb' }));
@@ -106,6 +129,49 @@ let traceSnapshots: ReplaySnapshotRecordV1[] = [];
 let anomalyMarkers: ReplaySnapshotRecordV1[] = [];
 let lastTraceSnapshotSimTimeSec = -Infinity;
 let traceInitialSnapshot: ShuttleEngineSnapshotV1 | null = null;
+
+function inferTopLiftRegionCount(scenario: ReturnType<ShuttleSimCore['getScenario']>): number {
+  const inboundLiftCount = scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound').length;
+  return Math.max(1, Math.round(inboundLiftCount / 2));
+}
+
+function setupFromScenario(scenario: ReturnType<ShuttleSimCore['getScenario']>): ScenarioSetup {
+  const storageNodes = scenario.layout.nodes.filter((node) => node.type === 'storage');
+  const storageRows = new Set(storageNodes.map((node) => node.z)).size;
+  const storageColumns = storageRows > 0 ? Math.round(storageNodes.length / storageRows) : 0;
+  const inboundLiftCount = scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound').length;
+  const outboundLiftCount = scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'outbound').length;
+
+  return {
+    regionCount: inferTopLiftRegionCount(scenario),
+    minRegionCount: 1,
+    maxRegionCount: 8,
+    storageColumns,
+    storageRows,
+    storageCapacity: storageNodes.length,
+    physicalLiftCount: Math.max(inboundLiftCount, outboundLiftCount),
+    inboundLiftCount,
+    outboundLiftCount
+  };
+}
+
+function createInboundSetupScenario(regionCount: number): ReturnType<ShuttleSimCore['getScenario']> {
+  const current = sim.getScenario();
+  return createInboundMvpBaselineScenario({
+    seed: current.seed,
+    durationSec: current.durationSec,
+    timeStepSec: current.timeStepSec,
+    vehicles: current.vehicles,
+    taskGeneration: current.taskGeneration,
+    physicsParams: current.physicsParams,
+    routingPolicy: current.routingPolicy,
+    trafficPolicy: current.trafficPolicy,
+    layoutProfile: {
+      layoutKind: 'top-lift-column',
+      liftPairCount: regionCount
+    }
+  });
+}
 
 function resetTrace(reason: 'initial' | 'command' = 'initial'): void {
   runId = randomUUID();
@@ -285,6 +351,12 @@ app.get('/api/shuttle/scenario', (_request: Request, response: Response) => {
   response.json(sim.getScenario());
 });
 
+app.get('/api/shuttle/setup', (_request: Request, response: Response) => {
+  const scenario = sim.getScenario();
+  const state = sim.getState();
+  response.json({ ok: true, setup: setupFromScenario(scenario), scenario, state });
+});
+
 app.get('/api/shuttle/state', (_request: Request, response: Response) => {
   response.json(sim.getState());
 });
@@ -418,6 +490,29 @@ app.post('/api/shuttle/loadScenario', (request: Request, response: Response, nex
     recordTraceCommand('loadScenario', command.scenario, { ok: true }, receivedAtSimTimeSec);
     lastEventSequence = -1;
     commandResponse(response);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/shuttle/setup', (request: Request, response: Response, next: NextFunction) => {
+  try {
+    const receivedAtSimTimeSec = sim.getClock().simTimeSec;
+    const regionCount = parseRegionCount(request.body?.regionCount);
+    if (regionCount === null) {
+      response.status(422).json({ ok: false, error: 'regionCount must be an integer from 1 to 8.' });
+      return;
+    }
+
+    const scenario = createInboundSetupScenario(regionCount);
+    sim.loadScenario(scenario);
+    liveTickCreditSec = 0;
+    resetTrace('command');
+    recordTraceCommand('loadScenario', scenario, { ok: true, setup: { regionCount } }, receivedAtSimTimeSec);
+    lastEventSequence = -1;
+    const state = sim.getState();
+    broadcastState({ full: true });
+    response.json({ ok: true, setup: setupFromScenario(scenario), scenario, state });
   } catch (error) {
     next(error);
   }

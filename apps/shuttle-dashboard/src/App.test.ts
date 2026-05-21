@@ -1,13 +1,15 @@
 import type { KpiSnapshot, ShuttleSimState, VehicleState } from '@four-way-shuttle/schemas';
-import { createDefaultShuttleScenario, summarizeScenarioStaticSceneContract } from '@four-way-shuttle/sim-core';
+import { createDefaultShuttleScenario, createInboundMvpBaselineScenario, summarizeScenarioStaticSceneContract } from '@four-way-shuttle/sim-core';
 import { describe, expect, it } from 'vitest';
 
 import goldenStaticSceneContract from '../../../config/shuttle/static-scene-contract.golden.json';
 import {
   mergeKpiUpdate,
   mergeVehicleStateUpdate,
+  inferTopLiftRegionCount,
   shouldResetAfterParamUpdate,
   shouldResumeAfterParamUpdate,
+  summarizeScenarioSetup,
   summarizeResourceUtilization
 } from './App.js';
 import {
@@ -164,6 +166,28 @@ describe('dashboard parameter controls', () => {
   });
 });
 
+describe('dashboard scenario setup', () => {
+  it('summarizes top-lift region count from the generated layout', () => {
+    const scenario = createInboundMvpBaselineScenario({
+      layoutProfile: {
+        liftPairCount: 3
+      }
+    });
+    const setup = summarizeScenarioSetup(scenario);
+
+    expect(inferTopLiftRegionCount(scenario)).toBe(3);
+    expect(setup).toMatchObject({
+      regionCount: 3,
+      storageRows: 14,
+      storageColumns: 42,
+      storageCapacity: 588,
+      physicalLiftCount: 6,
+      inboundLiftCount: 6,
+      outboundLiftCount: 6
+    });
+  });
+});
+
 describe('dashboard resource utilization', () => {
   it('summarizes storage, shuttle, and lift utilization from the live state', () => {
     const scenario = createDefaultShuttleScenario();
@@ -287,31 +311,31 @@ describe('dashboard resource utilization', () => {
 });
 
 describe('dashboard static scene contract', () => {
-  it('mirrors the 3D visual X axis while preserving authoritative SimCore coordinates', () => {
+  it('keeps the 3D visual coordinates aligned with the authoritative 2D map', () => {
     const scenario = createDefaultShuttleScenario();
     const visualScenario = resolveScene3DVisualScenario(scenario);
     const sourceNode = scenario.layout.nodes.find((node) => Math.abs(node.x) > 0.1);
     expect(sourceNode).toBeDefined();
 
     const visualNode = visualScenario.layout.nodes.find((node) => node.id === sourceNode?.id);
-    expect(visualNode?.x).toBeCloseTo(-(sourceNode?.x ?? 0), 6);
+    expect(visualNode?.x).toBeCloseTo(sourceNode?.x ?? 0, 6);
     expect(visualNode?.z).toBeCloseTo(sourceNode?.z ?? 0, 6);
 
     const contract = resolveDashboardStaticSceneContract(scenario);
     const visualContract = resolveScene3DVisualStaticScene(contract);
-    expect(visualContract.storageCells[0]?.xM).toBeCloseTo(-(contract.storageCells[0]?.xM ?? 0), 6);
+    expect(visualContract.storageCells[0]?.xM).toBeCloseTo(contract.storageCells[0]?.xM ?? 0, 6);
     expect(visualContract.storageCells[0]?.zM).toBeCloseTo(contract.storageCells[0]?.zM ?? 0, 6);
-    expect(visualContract.storageBlockMinXM).toBeCloseTo(-contract.storageBlockMaxXM, 6);
-    expect(visualContract.storageBlockMaxXM).toBeCloseTo(-contract.storageBlockMinXM, 6);
+    expect(visualContract.storageBlockMinXM).toBeCloseTo(contract.storageBlockMinXM, 6);
+    expect(visualContract.storageBlockMaxXM).toBeCloseTo(contract.storageBlockMaxXM, 6);
 
     const visualState = resolveScene3DVisualState(state({
       vehicles: [
         vehicle({ id: 'SH-03', x: 4.25, z: -2.5, yaw: 0 })
       ]
     }));
-    expect(visualState?.vehicles[0]?.x).toBeCloseTo(-4.25, 6);
+    expect(visualState?.vehicles[0]?.x).toBeCloseTo(4.25, 6);
     expect(visualState?.vehicles[0]?.z).toBeCloseTo(-2.5, 6);
-    expect(Math.abs((visualState?.vehicles[0]?.yaw ?? 0) - Math.PI)).toBeLessThan(1e-6);
+    expect(visualState?.vehicles[0]?.yaw).toBeCloseTo(0, 6);
   });
 
   it('uses the SimCore item-level layout contract for the browser visual twin', () => {
