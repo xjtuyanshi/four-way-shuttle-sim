@@ -178,6 +178,7 @@ describe('dashboard scenario setup', () => {
     expect(inferTopLiftRegionCount(scenario)).toBe(3);
     expect(setup).toMatchObject({
       regionCount: 3,
+      shuttleCount: 8,
       storageRows: 14,
       storageColumns: 42,
       storageCapacity: 588,

@@ -962,6 +962,8 @@ describe('shuttle phase 0 SimCore', () => {
     expect(scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound')).toHaveLength(6);
     expect(scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'outbound')).toHaveLength(6);
     expect(scenario.layout.nodes.some((node) => node.id === 'module-03-spine-top-a')).toBe(true);
+    expect(scenario.layout.nodes.some((node) => node.id === 'module-boundary-01-spine-middle')).toBe(true);
+    expect(scenario.layout.nodes.some((node) => node.id === 'module-boundary-02-spine-middle')).toBe(true);
     expect(scenario.layout.nodes.some((node) => node.id === 'lift-06-inbound-buffer-03')).toBe(true);
   });
 
@@ -984,11 +986,28 @@ describe('shuttle phase 0 SimCore', () => {
       expect(contract.storageIslandCount).toBe(4 * liftPairCount);
       expect(liftNodes.filter((node) => node.liftKind === 'inbound')).toHaveLength(2 * liftPairCount);
       expect(liftNodes.filter((node) => node.liftKind === 'outbound')).toHaveLength(2 * liftPairCount);
+      expect(scenario.layout.nodes.filter((node) => node.id.startsWith('module-boundary-'))).toHaveLength(Math.max(0, liftPairCount - 1) * 5);
 
       for (const lift of liftNodes) {
         expect(scenario.layout.nodes.some((node) => node.id === `${lift.id}-buffer-01`)).toBe(true);
         expect(scenario.layout.nodes.some((node) => node.id === `${lift.id}-buffer-02`)).toBe(true);
         expect(scenario.layout.nodes.some((node) => node.id === `${lift.id}-buffer-03`)).toBe(true);
+      }
+      for (let boundaryIndex = 1; boundaryIndex < liftPairCount; boundaryIndex += 1) {
+        const boundaryLabel = String(boundaryIndex).padStart(2, '0');
+        for (const [fromLevel, toLevel] of [
+          ['top-a', 'top-b'],
+          ['top-b', 'middle'],
+          ['middle', 'bottom-a'],
+          ['bottom-a', 'bottom-b']
+        ] as const) {
+          const from = `module-boundary-${boundaryLabel}-spine-${fromLevel}`;
+          const to = `module-boundary-${boundaryLabel}-spine-${toLevel}`;
+          expect(scenario.layout.edges.some((edge) =>
+            (edge.from === from && edge.to === to) ||
+            (edge.from === to && edge.to === from)
+          )).toBe(true);
+        }
       }
 
       if (![1, 2, 3, 8].includes(liftPairCount)) {

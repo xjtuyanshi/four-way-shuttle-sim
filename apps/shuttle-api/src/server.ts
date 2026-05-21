@@ -67,6 +67,9 @@ type ScenarioSetup = {
   regionCount: number;
   minRegionCount: number;
   maxRegionCount: number;
+  shuttleCount: number;
+  minShuttleCount: number;
+  maxShuttleCount: number;
   storageColumns: number;
   storageRows: number;
   storageCapacity: number;
@@ -110,6 +113,17 @@ function parseRegionCount(value: unknown): number | null {
   return Number.isInteger(regionCount) && regionCount >= 1 && regionCount <= 8 ? regionCount : null;
 }
 
+function parseShuttleCount(value: unknown): number | null {
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    return null;
+  }
+  if (typeof value === 'string' && value.trim() === '') {
+    return null;
+  }
+  const shuttleCount = Number(value);
+  return Number.isInteger(shuttleCount) && shuttleCount >= 1 && shuttleCount <= 64 ? shuttleCount : null;
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '4mb' }));
@@ -146,6 +160,9 @@ function setupFromScenario(scenario: ReturnType<ShuttleSimCore['getScenario']>):
     regionCount: inferTopLiftRegionCount(scenario),
     minRegionCount: 1,
     maxRegionCount: 8,
+    shuttleCount: scenario.vehicles.count,
+    minShuttleCount: 1,
+    maxShuttleCount: 64,
     storageColumns,
     storageRows,
     storageCapacity: storageNodes.length,
@@ -155,13 +172,16 @@ function setupFromScenario(scenario: ReturnType<ShuttleSimCore['getScenario']>):
   };
 }
 
-function createInboundSetupScenario(regionCount: number): ReturnType<ShuttleSimCore['getScenario']> {
+function createInboundSetupScenario(regionCount: number, shuttleCount: number): ReturnType<ShuttleSimCore['getScenario']> {
   const current = sim.getScenario();
   return createInboundMvpBaselineScenario({
     seed: current.seed,
     durationSec: current.durationSec,
     timeStepSec: current.timeStepSec,
-    vehicles: current.vehicles,
+    vehicles: {
+      ...current.vehicles,
+      count: shuttleCount
+    },
     taskGeneration: current.taskGeneration,
     physicsParams: current.physicsParams,
     routingPolicy: current.routingPolicy,
@@ -499,16 +519,24 @@ app.post('/api/shuttle/setup', (request: Request, response: Response, next: Next
   try {
     const receivedAtSimTimeSec = sim.getClock().simTimeSec;
     const regionCount = parseRegionCount(request.body?.regionCount);
+    const currentScenario = sim.getScenario();
+    const shuttleCount = request.body?.shuttleCount === undefined
+      ? currentScenario.vehicles.count
+      : parseShuttleCount(request.body?.shuttleCount);
     if (regionCount === null) {
       response.status(422).json({ ok: false, error: 'regionCount must be an integer from 1 to 8.' });
       return;
     }
+    if (shuttleCount === null) {
+      response.status(422).json({ ok: false, error: 'shuttleCount must be an integer from 1 to 64.' });
+      return;
+    }
 
-    const scenario = createInboundSetupScenario(regionCount);
+    const scenario = createInboundSetupScenario(regionCount, shuttleCount);
     sim.loadScenario(scenario);
     liveTickCreditSec = 0;
     resetTrace('command');
-    recordTraceCommand('loadScenario', scenario, { ok: true, setup: { regionCount } }, receivedAtSimTimeSec);
+    recordTraceCommand('loadScenario', scenario, { ok: true, setup: { regionCount, shuttleCount } }, receivedAtSimTimeSec);
     lastEventSequence = -1;
     const state = sim.getState();
     broadcastState({ full: true });

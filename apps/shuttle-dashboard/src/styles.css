@@ -263,6 +263,11 @@ input:focus-visible {
   gap: 9px;
 }
 
+.setup-control {
+  display: grid;
+  gap: 7px;
+}
+
 .setup-panel-head {
   display: flex;
   justify-content: space-between;
@@ -277,7 +282,7 @@ input:focus-visible {
 
 .stepper-row {
   display: grid;
-  grid-template-columns: 34px minmax(54px, 1fr) 34px minmax(64px, auto);
+  grid-template-columns: 34px minmax(54px, 1fr) 34px;
   gap: 7px;
 }
 
@@ -300,6 +305,11 @@ input:focus-visible {
 .primary-action {
   border-color: rgba(95, 194, 141, 0.78);
   background: rgba(95, 194, 141, 0.16);
+}
+
+.run-control-panel {
+  border-top: 1px solid rgba(74, 77, 70, 0.72);
+  padding-top: 10px;
 }
 
 .setup-metrics {
@@ -862,6 +872,12 @@ input[type="range"] {
 .map-edge.reserved {
   background: rgba(226, 184, 75, 0.8);
   box-shadow: 0 0 14px rgba(226, 184, 75, 0.22);
+}
+
+.map-edge.module-boundary {
+  height: 4px;
+  background: rgba(79, 143, 203, 0.78);
+  box-shadow: 0 0 12px rgba(79, 143, 203, 0.18);
 }
 
 .map-node {

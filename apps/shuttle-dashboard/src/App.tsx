@@ -67,6 +67,9 @@ export type ScenarioSetup = {
   regionCount: number;
   minRegionCount: number;
   maxRegionCount: number;
+  shuttleCount: number;
+  minShuttleCount: number;
+  maxShuttleCount: number;
   storageColumns: number;
   storageRows: number;
   storageCapacity: number;
@@ -478,6 +481,9 @@ export function summarizeScenarioSetup(scenario: ShuttleScenario | null | undefi
     regionCount: inferTopLiftRegionCount(scenario),
     minRegionCount: 1,
     maxRegionCount: 8,
+    shuttleCount: scenario.vehicles.count,
+    minShuttleCount: 1,
+    maxShuttleCount: 64,
     storageColumns: contract.storageColumns,
     storageRows: contract.storageRows,
     storageCapacity: contract.storageCellCount,
@@ -573,6 +579,10 @@ function average(values: number[]): number {
 function isAxisAlignedSegment(from: { x: number; z: number }, to: { x: number; z: number }): boolean {
   const tolerance = 1e-6;
   return Math.abs(from.x - to.x) <= tolerance || Math.abs(from.z - to.z) <= tolerance;
+}
+
+function isModuleBoundaryEdge(edge: ShuttleScenario['layout']['edges'][number]): boolean {
+  return edge.from.startsWith('module-boundary-') || edge.to.startsWith('module-boundary-');
 }
 
 function remainingRouteNodeIds(vehicle: VehicleState, preferredNodeIds: string[]): string[] {
@@ -959,7 +969,7 @@ function AuthoritativeMap({
         const reserved = layers.traffic && activeReservations.some((reservation) => reservation.resourceId === edge.id);
         return (
           <span
-            className={`map-edge ${reserved ? 'reserved' : ''}`}
+            className={`map-edge ${reserved ? 'reserved' : ''} ${isModuleBoundaryEdge(edge) ? 'module-boundary' : ''}`}
             key={edge.id}
             style={geometry.routeSegmentStyle(from, to)}
           />
@@ -1143,7 +1153,15 @@ function CanvasLiteMap({
         const from = geometry.nodeMap.get(edge.from);
         const to = geometry.nodeMap.get(edge.to);
         if (!from || !to) continue;
-        drawLine(from, to, reservedEdgeIds.has(edge.id) ? '#c28a12' : '#9da8b2', reservedEdgeIds.has(edge.id) ? 2.6 : 1.4, reservedEdgeIds.has(edge.id) ? 0.9 : 0.68);
+        const reserved = reservedEdgeIds.has(edge.id);
+        const moduleBoundary = isModuleBoundaryEdge(edge);
+        drawLine(
+          from,
+          to,
+          reserved ? '#c28a12' : moduleBoundary ? '#4f8fcb' : '#9da8b2',
+          reserved ? 2.6 : moduleBoundary ? 2.4 : 1.4,
+          reserved ? 0.9 : moduleBoundary ? 0.88 : 0.68
+        );
       }
 
       if (geometry.nodes.length <= 2500) {
@@ -1985,6 +2003,7 @@ export function App() {
   const [mapViewMode, setMapViewMode] = useState<MapViewMode>('lite');
   const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>('view');
   const [regionDraftCount, setRegionDraftCount] = useState(2);
+  const [shuttleDraftCount, setShuttleDraftCount] = useState(8);
   const [sceneCameraView, setSceneCameraView] = useState<ShuttleSceneCameraView>(DEFAULT_SCENE_CAMERA_VIEW);
   const [isPending, startTransition] = useTransition();
   const reconnectAttemptRef = useRef(0);
@@ -2053,6 +2072,7 @@ export function App() {
   useEffect(() => {
     if (scenario) {
       setRegionDraftCount(inferTopLiftRegionCount(scenario));
+      setShuttleDraftCount(scenario.vehicles.count);
     }
   }, [scenario]);
 
@@ -2186,16 +2206,19 @@ export function App() {
     }
   }
 
-  async function applyRegionSetup(): Promise<void> {
+  async function applyScenarioSetup(): Promise<void> {
     const minRegionCount = setupSummary?.minRegionCount ?? 1;
     const maxRegionCount = setupSummary?.maxRegionCount ?? 8;
+    const minShuttleCount = setupSummary?.minShuttleCount ?? 1;
+    const maxShuttleCount = setupSummary?.maxShuttleCount ?? 64;
     const regionCount = Math.min(maxRegionCount, Math.max(minRegionCount, Math.round(regionDraftCount)));
+    const shuttleCount = Math.min(maxShuttleCount, Math.max(minShuttleCount, Math.round(shuttleDraftCount)));
     const startedAt = performance.now();
-    setCommandStatus({ label: `building ${regionCount} region layout...`, tone: 'idle' });
+    setCommandStatus({ label: `building ${regionCount} region / ${shuttleCount} shuttle layout...`, tone: 'idle' });
     try {
       const response = await requestJson<ScenarioSetupResponse>('/api/shuttle/setup', {
         method: 'POST',
-        body: JSON.stringify({ regionCount })
+        body: JSON.stringify({ regionCount, shuttleCount })
       });
       setScenario(response.scenario);
       setState(response.state);
@@ -2203,8 +2226,9 @@ export function App() {
       setEvents(response.state.recentEvents);
       setValidation(null);
       setRegionDraftCount(response.setup.regionCount);
+      setShuttleDraftCount(response.setup.shuttleCount);
       const elapsedMs = Math.round(performance.now() - startedAt);
-      setCommandStatus({ label: `${response.setup.regionCount} regions loaded in ${elapsedMs} ms`, tone: 'ok' });
+      setCommandStatus({ label: `${response.setup.regionCount} regions / ${response.setup.shuttleCount} shuttles loaded in ${elapsedMs} ms`, tone: 'ok' });
     } catch (error) {
       setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' });
     }
@@ -2356,7 +2380,10 @@ export function App() {
   }
 
   const appliedRegionCount = setupSummary?.regionCount ?? 2;
+  const appliedShuttleCount = setupSummary?.shuttleCount ?? 8;
   const regionSetupDirty = regionDraftCount !== appliedRegionCount;
+  const shuttleSetupDirty = shuttleDraftCount !== appliedShuttleCount;
+  const setupDirty = regionSetupDirty || shuttleSetupDirty;
 
   return (
     <main className="app-shell">
@@ -2369,89 +2396,123 @@ export function App() {
           </div>
         </div>
 
-        <section className="control-block">
-          <div className="run-row">
-            <button type="button" onClick={() => postCommand('/api/shuttle/resume')}>Resume</button>
-            <button type="button" onClick={() => postCommand('/api/shuttle/pause')}>Pause</button>
-            <button type="button" onClick={() => postCommand('/api/shuttle/reset', { seed: state?.seed })}>Reset</button>
-          </div>
-          <div className="speed-row" aria-label="Playback speed">
-            {PLAYBACK_SPEEDS.map((speed) => (
-              <button
-                className={playbackSpeed === speed ? 'active' : ''}
-                key={speed}
-                type="button"
-                onClick={() => setPlaybackSpeed(speed)}
-                aria-pressed={playbackSpeed === speed}
-              >
-                {speed}x
-              </button>
-            ))}
-          </div>
-          <div className="jump-row" aria-label="Run to simulation time">
-            <label>
-              <span>Run to sec</span>
-              <input
-                min="0"
-                step="1"
-                type="number"
-                value={runToTargetSec}
-                onChange={(event) => setRunToTargetSec(event.target.value)}
-              />
-            </label>
-            <button type="button" onClick={() => void runToTime()}>Jump & Pause</button>
-          </div>
-          <div className={`status-line ${commandStatus.tone}`}>
-            <span>{state?.status ?? 'loading'}</span>
-            <strong>{commandStatus.label} / {playbackSpeed}x / {controllerMode}{isPending ? ' / rendering' : ''}</strong>
-          </div>
-        </section>
-
         <section className="control-block param-block">
           <h2>Scenario</h2>
           <div className="setup-panel">
-            <div className="setup-panel-head">
-              <span>Top-lift regions</span>
-              <strong>{appliedRegionCount} active</strong>
+            <div className="setup-control">
+              <div className="setup-panel-head">
+                <span>Top-lift regions</span>
+                <strong>{appliedRegionCount} active</strong>
+              </div>
+              <div className="stepper-row" aria-label="Region count setup">
+                <button
+                  type="button"
+                  onClick={() => setRegionDraftCount((value) => Math.max(setupSummary?.minRegionCount ?? 1, value - 1))}
+                  disabled={regionDraftCount <= (setupSummary?.minRegionCount ?? 1)}
+                  aria-label="Decrease region count"
+                >
+                  -
+                </button>
+                <input
+                  min={setupSummary?.minRegionCount ?? 1}
+                  max={setupSummary?.maxRegionCount ?? 8}
+                  step="1"
+                  type="number"
+                  value={regionDraftCount}
+                  onChange={(event) => setRegionDraftCount(Number(event.currentTarget.value))}
+                />
+                <button
+                  type="button"
+                  onClick={() => setRegionDraftCount((value) => Math.min(setupSummary?.maxRegionCount ?? 8, value + 1))}
+                  disabled={regionDraftCount >= (setupSummary?.maxRegionCount ?? 8)}
+                  aria-label="Increase region count"
+                >
+                  +
+                </button>
+              </div>
             </div>
-            <div className="stepper-row" aria-label="Region count setup">
-              <button
-                type="button"
-                onClick={() => setRegionDraftCount((value) => Math.max(setupSummary?.minRegionCount ?? 1, value - 1))}
-                disabled={regionDraftCount <= (setupSummary?.minRegionCount ?? 1)}
-                aria-label="Decrease region count"
-              >
-                -
-              </button>
-              <input
-                min={setupSummary?.minRegionCount ?? 1}
-                max={setupSummary?.maxRegionCount ?? 8}
-                step="1"
-                type="number"
-                value={regionDraftCount}
-                onChange={(event) => setRegionDraftCount(Number(event.currentTarget.value))}
-              />
-              <button
-                type="button"
-                onClick={() => setRegionDraftCount((value) => Math.min(setupSummary?.maxRegionCount ?? 8, value + 1))}
-                disabled={regionDraftCount >= (setupSummary?.maxRegionCount ?? 8)}
-                aria-label="Increase region count"
-              >
-                +
-              </button>
-              <button
-                className={regionSetupDirty ? 'primary-action' : ''}
-                type="button"
-                onClick={() => void applyRegionSetup()}
-                disabled={!scenario || !regionSetupDirty}
-              >
-                Apply
-              </button>
+            <div className="setup-control">
+              <div className="setup-panel-head">
+                <span>Shuttles</span>
+                <strong>{appliedShuttleCount} active</strong>
+              </div>
+              <div className="stepper-row" aria-label="Shuttle count setup">
+                <button
+                  type="button"
+                  onClick={() => setShuttleDraftCount((value) => Math.max(setupSummary?.minShuttleCount ?? 1, value - 1))}
+                  disabled={shuttleDraftCount <= (setupSummary?.minShuttleCount ?? 1)}
+                  aria-label="Decrease shuttle count"
+                >
+                  -
+                </button>
+                <input
+                  min={setupSummary?.minShuttleCount ?? 1}
+                  max={setupSummary?.maxShuttleCount ?? 64}
+                  step="1"
+                  type="number"
+                  value={shuttleDraftCount}
+                  onChange={(event) => setShuttleDraftCount(Number(event.currentTarget.value))}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShuttleDraftCount((value) => Math.min(setupSummary?.maxShuttleCount ?? 64, value + 1))}
+                  disabled={shuttleDraftCount >= (setupSummary?.maxShuttleCount ?? 64)}
+                  aria-label="Increase shuttle count"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+            <button
+              className={setupDirty ? 'primary-action' : ''}
+              type="button"
+              onClick={() => void applyScenarioSetup()}
+              disabled={!scenario || !setupDirty}
+            >
+              Apply setup
+            </button>
+            <div className="run-control-panel">
+              <div className="run-row">
+                <button type="button" onClick={() => postCommand('/api/shuttle/resume')} disabled={setupDirty}>Start / Resume</button>
+                <button type="button" onClick={() => postCommand('/api/shuttle/pause')}>Pause</button>
+                <button type="button" onClick={() => postCommand('/api/shuttle/reset', { seed: state?.seed })}>Reset</button>
+              </div>
+              <div className="speed-row" aria-label="Playback speed">
+                {PLAYBACK_SPEEDS.map((speed) => (
+                  <button
+                    className={playbackSpeed === speed ? 'active' : ''}
+                    key={speed}
+                    type="button"
+                    onClick={() => setPlaybackSpeed(speed)}
+                    aria-pressed={playbackSpeed === speed}
+                  >
+                    {speed}x
+                  </button>
+                ))}
+              </div>
+              <div className="jump-row" aria-label="Run to simulation time">
+                <label>
+                  <span>Run to sec</span>
+                  <input
+                    min="0"
+                    step="1"
+                    type="number"
+                    value={runToTargetSec}
+                    onChange={(event) => setRunToTargetSec(event.target.value)}
+                  />
+                </label>
+                <button type="button" onClick={() => void runToTime()} disabled={setupDirty}>Jump & Pause</button>
+              </div>
+              <div className={`status-line ${commandStatus.tone}`}>
+                <span>{state?.status ?? 'loading'}</span>
+                <strong>{commandStatus.label} / {playbackSpeed}x / {controllerMode}{isPending ? ' / rendering' : ''}</strong>
+              </div>
             </div>
             <div className="setup-metrics">
               <span><strong>{setupSummary?.storageCapacity ?? '--'}</strong> cells</span>
               <span><strong>{setupSummary ? setupSummary.regionCount * 4 : '--'}</strong> zones</span>
               <span><strong>{setupSummary?.physicalLiftCount ?? '--'}</strong> lifts</span>
+              <span><strong>{setupSummary?.shuttleCount ?? '--'}</strong> shuttles</span>
               <span><strong>{setupSummary?.inboundLiftCount ?? '--'}/{setupSummary?.outboundLiftCount ?? '--'}</strong> in/out</span>
             </div>
           </div>

@@ -542,8 +542,20 @@ function moduleSpineNodeId(moduleIndex: number, level: 'top-a' | 'top-b' | 'midd
   return `module-${String(moduleIndex + 1).padStart(2, '0')}-spine-${level}`;
 }
 
+function moduleBoundarySpineNodeId(boundaryIndex: number, level: 'top-a' | 'top-b' | 'middle' | 'bottom-a' | 'bottom-b'): string {
+  return `module-boundary-${String(boundaryIndex + 1).padStart(2, '0')}-spine-${level}`;
+}
+
 function isTopLiftColumnAccessNodeId(nodeId: string): boolean {
-  return /^(?:column-(?:top-a|top-b|middle|bottom-a|bottom-b)-c\d+|module-\d+-spine-(?:top-a|top-b|middle|bottom-a|bottom-b))$/.test(nodeId);
+  return /^(?:column-(?:top-a|top-b|middle|bottom-a|bottom-b)-c\d+|(?:module-\d+|module-boundary-\d+)-spine-(?:top-a|top-b|middle|bottom-a|bottom-b))$/.test(nodeId);
+}
+
+function isTopLiftAisleLevelNodeId(nodeId: string, level: 'top-a' | 'top-b' | 'middle' | 'bottom-a' | 'bottom-b'): boolean {
+  return new RegExp(`^(?:column-${level}-c\\d+|(?:module-\\d+|module-boundary-\\d+)-spine-${level})$`).test(nodeId);
+}
+
+function isTopLiftSpineLevelNodeId(nodeId: string, level: 'top-a' | 'top-b' | 'middle' | 'bottom-a' | 'bottom-b'): boolean {
+  return new RegExp(`^(?:(?:module-\\d+|module-boundary-\\d+)-spine-${level})$`).test(nodeId);
 }
 
 function liftBufferNodeId(liftNodeId: string, slotIndex: number): string {
@@ -643,6 +655,20 @@ function createTopLiftColumnLayout(
     'bottom-a': [],
     'bottom-b': []
   };
+  const moduleBoundarySpineNodeIds: Record<'top-a' | 'top-b' | 'middle' | 'bottom-a' | 'bottom-b', string[]> = {
+    'top-a': [],
+    'top-b': [],
+    middle: [],
+    'bottom-a': [],
+    'bottom-b': []
+  };
+  const spineLevels = [
+    { level: 'top-a' as const, z: topLaneAZM },
+    { level: 'top-b' as const, z: topLaneBZM },
+    { level: 'middle' as const, z: middleAisleZ },
+    { level: 'bottom-a' as const, z: bottomLaneAZM },
+    { level: 'bottom-b' as const, z: bottomLaneBZM }
+  ];
   for (let moduleIndex = 0; moduleIndex < liftPairCount; moduleIndex += 1) {
     const moduleFirstColumn = moduleIndex * columnsPerModule;
     const leftZoneStartX = columnXs[moduleFirstColumn]!;
@@ -650,13 +676,6 @@ function createTopLiftColumnLayout(
     const rightZoneStartX = columnXs[moduleFirstColumn + columnsPerZone]!;
     const rightZoneEndX = columnXs[moduleFirstColumn + columnsPerModule - 1]!;
     const moduleSpineX = round((leftZoneEndX + rightZoneStartX) / 2, 3);
-    const spineLevels = [
-      { level: 'top-a' as const, z: topLaneAZM },
-      { level: 'top-b' as const, z: topLaneBZM },
-      { level: 'middle' as const, z: middleAisleZ },
-      { level: 'bottom-a' as const, z: bottomLaneAZM },
-      { level: 'bottom-b' as const, z: bottomLaneBZM }
-    ];
     for (const spine of spineLevels) {
       const id = moduleSpineNodeId(moduleIndex, spine.level);
       addNode({ id, type: 'intersection', x: moduleSpineX, y: 0, z: spine.z, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
@@ -702,6 +721,16 @@ function createTopLiftColumnLayout(
       }
     }
   }
+  for (let boundaryIndex = 0; boundaryIndex < liftPairCount - 1; boundaryIndex += 1) {
+    const leftColumnIndex = (boundaryIndex + 1) * columnsPerModule - 1;
+    const rightColumnIndex = leftColumnIndex + 1;
+    const boundarySpineX = round((columnXs[leftColumnIndex]! + columnXs[rightColumnIndex]!) / 2, 3);
+    for (const spine of spineLevels) {
+      const id = moduleBoundarySpineNodeId(boundaryIndex, spine.level);
+      addNode({ id, type: 'intersection', x: boundarySpineX, y: 0, z: spine.z, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
+      moduleBoundarySpineNodeIds[spine.level].push(id);
+    }
+  }
 
   const nodesById = new Map(nodes.map((node) => [node.id, node]));
   const edges: LayoutEdge[] = [];
@@ -741,11 +770,11 @@ function createTopLiftColumnLayout(
 
   const throatIds = liftNodes.map((lift) => lift.throatId);
   const bufferAccessIds = liftNodes.map((lift) => lift.bufferAccessId);
-  connectHorizontal('top-a', [...throatIds, ...bufferAccessIds, ...moduleSpineNodeIds['top-a']], 'top-double-aisle-a');
-  connectHorizontal('top-b', moduleSpineNodeIds['top-b'], 'top-double-aisle-b');
-  connectHorizontal('middle', moduleSpineNodeIds.middle, 'middle-aisle');
-  connectHorizontal('bottom-a', moduleSpineNodeIds['bottom-a'], 'bottom-double-aisle-a');
-  connectHorizontal('bottom-b', moduleSpineNodeIds['bottom-b'], 'bottom-double-aisle-b');
+  connectHorizontal('top-a', [...throatIds, ...bufferAccessIds, ...moduleSpineNodeIds['top-a'], ...moduleBoundarySpineNodeIds['top-a']], 'top-double-aisle-a');
+  connectHorizontal('top-b', [...moduleSpineNodeIds['top-b'], ...moduleBoundarySpineNodeIds['top-b']], 'top-double-aisle-b');
+  connectHorizontal('middle', [...moduleSpineNodeIds.middle, ...moduleBoundarySpineNodeIds.middle], 'middle-aisle');
+  connectHorizontal('bottom-a', [...moduleSpineNodeIds['bottom-a'], ...moduleBoundarySpineNodeIds['bottom-a']], 'bottom-double-aisle-a');
+  connectHorizontal('bottom-b', [...moduleSpineNodeIds['bottom-b'], ...moduleBoundarySpineNodeIds['bottom-b']], 'bottom-double-aisle-b');
 
   for (let moduleIndex = 0; moduleIndex < liftPairCount; moduleIndex += 1) {
     const topA = moduleSpineNodeId(moduleIndex, 'top-a');
@@ -754,6 +783,18 @@ function createTopLiftColumnLayout(
     const bottomA = moduleSpineNodeId(moduleIndex, 'bottom-a');
     const bottomB = moduleSpineNodeId(moduleIndex, 'bottom-b');
     const spineLabel = `module-spine-${String(moduleIndex + 1).padStart(2, '0')}`;
+    addEdge(`${topA}-${topB}`, topA, topB, `${spineLabel}-top-transfer`);
+    addEdge(`${topB}-${middle}`, topB, middle, `${spineLabel}-upper-vertical`);
+    addEdge(`${middle}-${bottomA}`, middle, bottomA, `${spineLabel}-lower-vertical`);
+    addEdge(`${bottomA}-${bottomB}`, bottomA, bottomB, `${spineLabel}-bottom-transfer`);
+  }
+  for (let boundaryIndex = 0; boundaryIndex < liftPairCount - 1; boundaryIndex += 1) {
+    const topA = moduleBoundarySpineNodeId(boundaryIndex, 'top-a');
+    const topB = moduleBoundarySpineNodeId(boundaryIndex, 'top-b');
+    const middle = moduleBoundarySpineNodeId(boundaryIndex, 'middle');
+    const bottomA = moduleBoundarySpineNodeId(boundaryIndex, 'bottom-a');
+    const bottomB = moduleBoundarySpineNodeId(boundaryIndex, 'bottom-b');
+    const spineLabel = `module-boundary-spine-${String(boundaryIndex + 1).padStart(2, '0')}`;
     addEdge(`${topA}-${topB}`, topA, topB, `${spineLabel}-top-transfer`);
     addEdge(`${topB}-${middle}`, topB, middle, `${spineLabel}-upper-vertical`);
     addEdge(`${middle}-${bottomA}`, middle, bottomA, `${spineLabel}-lower-vertical`);
@@ -4456,15 +4497,18 @@ export class ShuttleSimCore {
 
   private agentEdgeCostM(fromNodeId: string, toNodeId: string, lengthM: number, goalNodeId: string): number {
     if (this.topLiftColumnLayoutEnabled()) {
-      const topAFrom = /^(?:column-top-a-c\d+|module-\d+-spine-top-a)$/.test(fromNodeId);
-      const topATo = /^(?:column-top-a-c\d+|module-\d+-spine-top-a)$/.test(toNodeId);
-      const topBFrom = /^(?:column-top-b-c\d+|module-\d+-spine-top-b)$/.test(fromNodeId);
-      const topBTo = /^(?:column-top-b-c\d+|module-\d+-spine-top-b)$/.test(toNodeId);
+      const topAFrom = isTopLiftAisleLevelNodeId(fromNodeId, 'top-a');
+      const topATo = isTopLiftAisleLevelNodeId(toNodeId, 'top-a');
+      const topBFrom = isTopLiftAisleLevelNodeId(fromNodeId, 'top-b');
+      const topBTo = isTopLiftAisleLevelNodeId(toNodeId, 'top-b');
       const horizontalTopA = topAFrom && topATo;
       const horizontalTopB = topBFrom && topBTo;
       const goalNode = this.layoutNode(goalNodeId);
-      const storageAccessGoal = goalNode?.type === 'storage' || /^(?:column-(?:top-b|middle|bottom-a)-c\d+|module-\d+-spine-(?:top-b|middle|bottom-a))$/.test(goalNodeId);
-      const liftAccessGoal = goalNode?.type === 'lift-blackbox' || /-throat$/.test(goalNodeId) || /^(?:column-top-a-c\d+|module-\d+-spine-top-a)$/.test(goalNodeId);
+      const storageAccessGoal = goalNode?.type === 'storage' ||
+        isTopLiftAisleLevelNodeId(goalNodeId, 'top-b') ||
+        isTopLiftAisleLevelNodeId(goalNodeId, 'middle') ||
+        isTopLiftAisleLevelNodeId(goalNodeId, 'bottom-a');
+      const liftAccessGoal = goalNode?.type === 'lift-blackbox' || /-throat$/.test(goalNodeId) || isTopLiftAisleLevelNodeId(goalNodeId, 'top-a');
       if (storageAccessGoal && horizontalTopA) {
         return lengthM + 20;
       }
@@ -8221,8 +8265,8 @@ export class ShuttleSimCore {
       vehicle.state === 'waiting-blocked' &&
       vehicle.waitReason === 'edge-head-on' &&
       vehicle.currentEdgeId === null &&
-      /^module-\d+-spine-top-b$/.test(vehicle.currentNodeId) &&
-      /^module-\d+-spine-middle$/.test(vehicle.targetNodeId ?? '')
+      isTopLiftSpineLevelNodeId(vehicle.currentNodeId, 'top-b') &&
+      isTopLiftSpineLevelNodeId(vehicle.targetNodeId ?? '', 'middle')
     );
     if (!loadedDown || !loadedDown.targetNodeId) {
       return false;
@@ -8292,13 +8336,13 @@ export class ShuttleSimCore {
   }
 
   private agentRefreshTopLiftSpineEscapeRank(nodeId: string): number {
-    if (/^module-\d+-spine-bottom-a$/.test(nodeId)) {
+    if (isTopLiftSpineLevelNodeId(nodeId, 'bottom-a')) {
       return 0;
     }
     if (/^column-middle-c\d+$/.test(nodeId)) {
       return 1;
     }
-    if (/^module-\d+-spine-top-a$/.test(nodeId)) {
+    if (isTopLiftSpineLevelNodeId(nodeId, 'top-a')) {
       return 2;
     }
     return 3;
@@ -8419,7 +8463,7 @@ export class ShuttleSimCore {
   }
 
   private topLiftColumnSpineOrAccessNode(nodeId: string): boolean {
-    return isTopLiftColumnAccessNodeId(nodeId) || /^module-\d+-spine-(?:top-a|top-b|middle|bottom-a|bottom-b)$/.test(nodeId);
+    return isTopLiftColumnAccessNodeId(nodeId);
   }
 
   private agentRefreshTemporaryRouteAlreadyActive(vehicle: MutableVehicle, routeNodeIds: string[]): boolean {
