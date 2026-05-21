@@ -257,6 +257,7 @@ export type ShuttleEngineSnapshotV1 = {
 const SHUTTLE_Y_M = 0.08;
 const DEFAULT_RECENT_EVENTS = 80;
 const MAX_CLEAR_THROUGH_HORIZON_LEGS = 8;
+const OUTBOUND_SEED_LOAD_PREFIX = 'outbound-seed-';
 
 function makeRng(seed: number): Rng {
   let state = seed >>> 0;
@@ -1440,7 +1441,8 @@ export function createDefaultShuttleScenario(overrides: ShuttleScenarioOverrides
       outboundRatePerHour: 18,
       inboundOutboundMix: 0.5,
       arrivalDistribution: 'deterministic',
-      maxTasks: 40
+      maxTasks: 40,
+      initialOutboundFullColumns: 0
     },
     physicsParams: {
       emptySpeedMps: 2,
@@ -1530,6 +1532,23 @@ export function createInboundMvpBaselineScenario(overrides: ShuttleScenarioOverr
       dynamicAvoidanceClearanceM: 0.5,
       deadlockDetectSec: 2,
       ...overrides.trafficPolicy
+    }
+  });
+}
+
+export function createInboundOutboundDemoScenario(overrides: ShuttleScenarioOverrides = {}): ShuttleScenario {
+  return createInboundMvpBaselineScenario({
+    ...overrides,
+    id: overrides.id ?? 'shuttle-inbound-outbound-demo',
+    name: overrides.name ?? 'Inbound + Outbound 8 Shuttle Column Demo',
+    taskGeneration: {
+      inboundRatePerHour: 3600,
+      outboundRatePerHour: 3600,
+      inboundOutboundMix: 0.5,
+      arrivalDistribution: 'deterministic',
+      maxTasks: 32,
+      initialOutboundFullColumns: 4,
+      ...overrides.taskGeneration
     }
   });
 }
@@ -1877,6 +1896,7 @@ export class ShuttleSimCore {
     }
 
     this.logEvent('sim-reset', null, null, null, null, null, 'reset', null, { seed });
+    this.primeTopLiftOutboundFullColumns();
     this.primeInboundSourceBacklog();
     return this.getState();
   }
@@ -2753,6 +2773,83 @@ export class ShuttleSimCore {
     this.nextInboundSec = Math.max(this.nextInboundSec, this.nextArrivalInterval('inbound'));
   }
 
+  private primeTopLiftOutboundFullColumns(): void {
+    const targetColumnCount = this.scenario.taskGeneration.initialOutboundFullColumns;
+    if (
+      !this.topLiftColumnLayoutEnabled() ||
+      targetColumnCount <= 0 ||
+      this.scenario.taskGeneration.outboundRatePerHour <= 0
+    ) {
+      return;
+    }
+
+    const occupancy = this.storageNodeLoadOccupancy(false);
+    const seededColumnNumbers = this.initialTopLiftOutboundFullColumnNumbers(targetColumnCount);
+    let seedIndex = 0;
+    for (const column of seededColumnNumbers) {
+      for (const nodeId of this.topLiftStorageColumnNodeIds(column)) {
+        if (occupancy.has(nodeId)) {
+          continue;
+        }
+        seedIndex += 1;
+        const position = this.storageGridPosition(nodeId);
+        const load: LoadStateRecord = {
+          id: `${OUTBOUND_SEED_LOAD_PREFIX}c${String(column).padStart(2, '0')}-r${String(position?.row ?? 0).padStart(2, '0')}-${String(seedIndex).padStart(4, '0')}`,
+          state: 'stored',
+          nodeId,
+          vehicleId: null,
+          weightKg: 450 + Math.round(this.rng.next() * 350)
+        };
+        this.loads.push(load);
+        occupancy.set(nodeId, load.id);
+      }
+    }
+    if (seedIndex > 0) {
+      this.logEvent('outbound-columns-seeded', null, null, null, null, null, 'initial-outbound-full-columns', null, {
+        columns: seededColumnNumbers.map((column) => `c${String(column).padStart(2, '0')}`).join(','),
+        loadCount: seedIndex
+      });
+    }
+  }
+
+  private initialTopLiftOutboundFullColumnNumbers(targetColumnCount: number): number[] {
+    const columns = this.topLiftStorageColumnNumbers();
+    if (columns.length === 0 || targetColumnCount <= 0) {
+      return [];
+    }
+
+    const inboundLiftCount = this.inboundLiftNodes().length;
+    const moduleCount = Math.max(1, Math.round(inboundLiftCount / 2));
+    const columnsPerModule = Math.max(1, Math.floor(columns.length / moduleCount));
+    const selected = new Set<number>();
+    const columnsPerModuleTarget = Math.max(1, Math.ceil(targetColumnCount / moduleCount));
+
+    for (let moduleIndex = 0; moduleIndex < moduleCount && selected.size < targetColumnCount; moduleIndex += 1) {
+      const moduleStart = moduleIndex * columnsPerModule;
+      const moduleColumns = columns.slice(moduleStart, moduleStart + columnsPerModule);
+      const half = Math.max(1, Math.floor(moduleColumns.length / 2));
+      const localCandidates = [
+        ...moduleColumns.slice(0, half),
+        ...moduleColumns.slice(half)
+      ];
+      for (const column of localCandidates.slice(0, columnsPerModuleTarget)) {
+        selected.add(column);
+        if (selected.size >= targetColumnCount) {
+          break;
+        }
+      }
+    }
+
+    for (const column of columns) {
+      if (selected.size >= targetColumnCount) {
+        break;
+      }
+      selected.add(column);
+    }
+
+    return [...selected].sort((left, right) => left - right);
+  }
+
   private shouldPrimeInboundSourceBacklog(): boolean {
     const inboundLiftCount = this.scenario.layout.nodes.filter((node) => liftKindForNode(node) === 'inbound').length;
     const outboundLiftCount = this.scenario.layout.nodes.filter((node) => liftKindForNode(node) === 'outbound').length;
@@ -3230,8 +3327,12 @@ export class ShuttleSimCore {
 
   private selectTopLiftInboundStorageNode(): { nodeId: string; loadId: string } | null {
     const occupancy = this.storageNodeLoadOccupancy(true);
+    const outboundLockedColumns = this.topLiftOutboundLockedColumns();
     const activeColumn = this.activeTopLiftTaskColumn('inbound');
     if (activeColumn !== null) {
+      if (outboundLockedColumns.has(activeColumn)) {
+        return null;
+      }
       if (this.activeTopLiftTaskCountInColumn('inbound', activeColumn) >= this.topLiftSkuColumnActiveTaskLimit('inbound')) {
         return null;
       }
@@ -3240,6 +3341,9 @@ export class ShuttleSimCore {
     }
 
     for (const column of this.topLiftStorageColumnNumbers()) {
+      if (outboundLockedColumns.has(column)) {
+        continue;
+      }
       const nodeId = this.firstAvailableTopLiftInboundNodeInColumn(column, occupancy);
       if (nodeId) {
         return { nodeId, loadId: '' };
@@ -3250,8 +3354,12 @@ export class ShuttleSimCore {
 
   private selectTopLiftInboundStorageNodeForLift(liftNodeId: string): string | null {
     const occupancy = this.storageNodeLoadOccupancy(true);
+    const outboundLockedColumns = this.topLiftOutboundLockedColumns();
     const activeColumn = this.activeTopLiftTaskColumnForLift('inbound', liftNodeId);
     if (activeColumn !== null) {
+      if (outboundLockedColumns.has(activeColumn)) {
+        return null;
+      }
       if (this.activeTopLiftTaskCountInColumnForLift('inbound', activeColumn, liftNodeId) >= this.topLiftSkuColumnActiveTaskLimit('inbound')) {
         return null;
       }
@@ -3259,6 +3367,9 @@ export class ShuttleSimCore {
     }
 
     for (const column of this.topLiftStorageColumnNumbersForLift(liftNodeId)) {
+      if (outboundLockedColumns.has(column)) {
+        continue;
+      }
       const nodeId = this.firstAvailableTopLiftInboundNodeInColumn(column, occupancy);
       if (nodeId) {
         return nodeId;
@@ -3351,6 +3462,7 @@ export class ShuttleSimCore {
 
   private selectTopLiftOutboundLoad(): { nodeId: string; loadId: string } | null {
     const assignedOutboundLoadIds = this.assignedOutboundLoadIds();
+    const outboundLockedColumns = this.topLiftOutboundLockedColumns();
     const activeColumn = this.activeTopLiftTaskColumn('outbound');
     if (activeColumn !== null) {
       if (this.activeTopLiftTaskCountInColumn('outbound', activeColumn) >= this.topLiftSkuColumnActiveTaskLimit('outbound')) {
@@ -3359,7 +3471,14 @@ export class ShuttleSimCore {
       return this.firstAvailableTopLiftOutboundLoadInColumn(activeColumn, assignedOutboundLoadIds);
     }
 
+    if (this.mixedTopLiftFlowEnabled() && outboundLockedColumns.size === 0) {
+      return null;
+    }
+
     for (const column of this.topLiftStorageColumnNumbers()) {
+      if (this.mixedTopLiftFlowEnabled() && !outboundLockedColumns.has(column)) {
+        continue;
+      }
       const selection = this.firstAvailableTopLiftOutboundLoadInColumn(column, assignedOutboundLoadIds);
       if (selection) {
         return selection;
@@ -3371,13 +3490,62 @@ export class ShuttleSimCore {
   private firstAvailableTopLiftOutboundLoadInColumn(column: number, assignedOutboundLoadIds: Set<string>): { nodeId: string; loadId: string } | null {
     for (const nodeId of this.topLiftStorageColumnNodeIds(column)) {
       const load = this.loads.find(
-        (candidate) => candidate.state === 'stored' && candidate.nodeId === nodeId && !assignedOutboundLoadIds.has(candidate.id)
+        (candidate) =>
+          candidate.state === 'stored' &&
+          candidate.nodeId === nodeId &&
+          !assignedOutboundLoadIds.has(candidate.id) &&
+          this.outboundEligibleLoad(candidate)
       );
       if (load) {
         return { nodeId, loadId: load.id };
       }
     }
     return null;
+  }
+
+  private topLiftOutboundLockedColumns(): Set<number> {
+    const columns = new Set<number>();
+    if (!this.topLiftColumnLayoutEnabled()) {
+      return columns;
+    }
+    if (this.scenario.taskGeneration.outboundRatePerHour <= 0) {
+      return columns;
+    }
+
+    for (const task of this.tasks) {
+      if (task.kind !== 'outbound' || task.state === 'completed' || task.state === 'failed') {
+        continue;
+      }
+      const column = this.taskStorageColumn(task);
+      if (column !== null) {
+        columns.add(column);
+      }
+    }
+
+    for (const load of this.loads) {
+      if (load.state !== 'stored' || !load.nodeId || !this.outboundEligibleLoad(load)) {
+        continue;
+      }
+      const column = this.storageGridPosition(load.nodeId)?.column ?? null;
+      if (column !== null) {
+        columns.add(column);
+      }
+    }
+
+    return columns;
+  }
+
+  private outboundEligibleLoad(load: LoadStateRecord): boolean {
+    if (!this.mixedTopLiftFlowEnabled()) {
+      return true;
+    }
+    return load.id.startsWith(OUTBOUND_SEED_LOAD_PREFIX);
+  }
+
+  private mixedTopLiftFlowEnabled(): boolean {
+    return this.topLiftColumnLayoutEnabled() &&
+      this.scenario.taskGeneration.inboundRatePerHour > 0 &&
+      this.scenario.taskGeneration.outboundRatePerHour > 0;
   }
 
   private assignedOutboundLoadIds(): Set<string> {
@@ -4813,6 +4981,10 @@ export class ShuttleSimCore {
 
     for (const columnKey of this.clearingTopLiftColumnKeys()) {
       activeColumnKeys.add(columnKey);
+    }
+
+    for (const column of this.topLiftOutboundLockedColumns()) {
+      activeColumnKeys.add(`c${String(column).padStart(2, '0')}`);
     }
 
     return activeColumnKeys;

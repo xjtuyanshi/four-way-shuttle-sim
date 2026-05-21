@@ -79,7 +79,8 @@ export const TaskGenerationSchema = z.object({
   outboundRatePerHour: z.number().nonnegative(),
   inboundOutboundMix: z.number().min(0).max(1).default(0.5),
   arrivalDistribution: z.enum(['deterministic', 'seeded-exponential']).default('deterministic'),
-  maxTasks: z.number().int().positive().default(200)
+  maxTasks: z.number().int().positive().default(200),
+  initialOutboundFullColumns: z.number().int().nonnegative().default(0)
 });
 
 export const PhysicsParamsSchema = z.object({

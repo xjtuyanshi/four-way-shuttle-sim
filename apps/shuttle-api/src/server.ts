@@ -8,7 +8,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { ShuttleCommandSchema, type ShuttleStreamMessage } from '@four-way-shuttle/schemas';
 import {
   ShuttleSimCore,
-  createInboundMvpBaselineScenario,
+  createInboundOutboundDemoScenario,
   hashEventLog,
   hashScenario,
   type ShuttleEngineSnapshotV1
@@ -76,6 +76,8 @@ type ScenarioSetup = {
   physicalLiftCount: number;
   inboundLiftCount: number;
   outboundLiftCount: number;
+  initialOutboundFullColumns: number;
+  maxInitialOutboundFullColumns: number;
 };
 
 function parsePlaybackSpeed(value: unknown): number | null {
@@ -124,11 +126,22 @@ function parseShuttleCount(value: unknown): number | null {
   return Number.isInteger(shuttleCount) && shuttleCount >= 1 && shuttleCount <= 64 ? shuttleCount : null;
 }
 
+function parseInitialOutboundFullColumns(value: unknown): number | null {
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    return null;
+  }
+  if (typeof value === 'string' && value.trim() === '') {
+    return null;
+  }
+  const columnCount = Number(value);
+  return Number.isInteger(columnCount) && columnCount >= 0 && columnCount <= 256 ? columnCount : null;
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '4mb' }));
 
-let sim = new ShuttleSimCore(createInboundMvpBaselineScenario());
+let sim = new ShuttleSimCore(createInboundOutboundDemoScenario());
 const clients = new Set<WebSocket>();
 let lastEventSequence = -1;
 let lastStreamBroadcastMs = 0;
@@ -168,13 +181,15 @@ function setupFromScenario(scenario: ReturnType<ShuttleSimCore['getScenario']>):
     storageCapacity: storageNodes.length,
     physicalLiftCount: Math.max(inboundLiftCount, outboundLiftCount),
     inboundLiftCount,
-    outboundLiftCount
+    outboundLiftCount,
+    initialOutboundFullColumns: scenario.taskGeneration.initialOutboundFullColumns,
+    maxInitialOutboundFullColumns: storageColumns
   };
 }
 
-function createInboundSetupScenario(regionCount: number, shuttleCount: number): ReturnType<ShuttleSimCore['getScenario']> {
+function createInboundSetupScenario(regionCount: number, shuttleCount: number, initialOutboundFullColumns: number): ReturnType<ShuttleSimCore['getScenario']> {
   const current = sim.getScenario();
-  return createInboundMvpBaselineScenario({
+  return createInboundOutboundDemoScenario({
     seed: current.seed,
     durationSec: current.durationSec,
     timeStepSec: current.timeStepSec,
@@ -182,7 +197,10 @@ function createInboundSetupScenario(regionCount: number, shuttleCount: number): 
       ...current.vehicles,
       count: shuttleCount
     },
-    taskGeneration: current.taskGeneration,
+    taskGeneration: {
+      ...current.taskGeneration,
+      initialOutboundFullColumns
+    },
     physicsParams: current.physicsParams,
     routingPolicy: current.routingPolicy,
     trafficPolicy: current.trafficPolicy,
@@ -523,6 +541,9 @@ app.post('/api/shuttle/setup', (request: Request, response: Response, next: Next
     const shuttleCount = request.body?.shuttleCount === undefined
       ? currentScenario.vehicles.count
       : parseShuttleCount(request.body?.shuttleCount);
+    const requestedInitialOutboundFullColumns = request.body?.initialOutboundFullColumns === undefined
+      ? currentScenario.taskGeneration.initialOutboundFullColumns
+      : parseInitialOutboundFullColumns(request.body?.initialOutboundFullColumns);
     if (regionCount === null) {
       response.status(422).json({ ok: false, error: 'regionCount must be an integer from 1 to 8.' });
       return;
@@ -531,12 +552,18 @@ app.post('/api/shuttle/setup', (request: Request, response: Response, next: Next
       response.status(422).json({ ok: false, error: 'shuttleCount must be an integer from 1 to 64.' });
       return;
     }
+    if (requestedInitialOutboundFullColumns === null) {
+      response.status(422).json({ ok: false, error: 'initialOutboundFullColumns must be an integer from 0 to 256.' });
+      return;
+    }
 
-    const scenario = createInboundSetupScenario(regionCount, shuttleCount);
+    const maxInitialOutboundFullColumns = regionCount * 14;
+    const initialOutboundFullColumns = Math.min(maxInitialOutboundFullColumns, requestedInitialOutboundFullColumns);
+    const scenario = createInboundSetupScenario(regionCount, shuttleCount, initialOutboundFullColumns);
     sim.loadScenario(scenario);
     liveTickCreditSec = 0;
     resetTrace('command');
-    recordTraceCommand('loadScenario', scenario, { ok: true, setup: { regionCount, shuttleCount } }, receivedAtSimTimeSec);
+    recordTraceCommand('loadScenario', scenario, { ok: true, setup: { regionCount, shuttleCount, initialOutboundFullColumns } }, receivedAtSimTimeSec);
     lastEventSequence = -1;
     const state = sim.getState();
     broadcastState({ full: true });

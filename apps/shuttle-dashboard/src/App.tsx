@@ -78,6 +78,8 @@ export type ScenarioSetup = {
   physicalLiftCount: number;
   inboundLiftCount: number;
   outboundLiftCount: number;
+  initialOutboundFullColumns: number;
+  maxInitialOutboundFullColumns: number;
 };
 
 type ScenarioSetupResponse = {
@@ -491,7 +493,9 @@ export function summarizeScenarioSetup(scenario: ShuttleScenario | null | undefi
     storageCapacity: contract.storageCellCount,
     physicalLiftCount: Math.max(inboundLiftCount, outboundLiftCount),
     inboundLiftCount,
-    outboundLiftCount
+    outboundLiftCount,
+    initialOutboundFullColumns: scenario.taskGeneration.initialOutboundFullColumns,
+    maxInitialOutboundFullColumns: contract.storageColumns
   };
 }
 
@@ -2083,6 +2087,7 @@ export function App() {
   const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>('view');
   const [regionDraftCount, setRegionDraftCount] = useState(2);
   const [shuttleDraftCount, setShuttleDraftCount] = useState(8);
+  const [initialOutboundDraftColumns, setInitialOutboundDraftColumns] = useState(4);
   const [sceneCameraView, setSceneCameraView] = useState<ShuttleSceneCameraView>(DEFAULT_SCENE_CAMERA_VIEW);
   const [isPending, startTransition] = useTransition();
   const reconnectAttemptRef = useRef(0);
@@ -2152,6 +2157,7 @@ export function App() {
     if (scenario) {
       setRegionDraftCount(inferTopLiftRegionCount(scenario));
       setShuttleDraftCount(scenario.vehicles.count);
+      setInitialOutboundDraftColumns(scenario.taskGeneration.initialOutboundFullColumns);
     }
   }, [scenario]);
 
@@ -2292,12 +2298,14 @@ export function App() {
     const maxShuttleCount = setupSummary?.maxShuttleCount ?? 64;
     const regionCount = Math.min(maxRegionCount, Math.max(minRegionCount, Math.round(regionDraftCount)));
     const shuttleCount = Math.min(maxShuttleCount, Math.max(minShuttleCount, Math.round(shuttleDraftCount)));
+    const maxInitialOutboundFullColumns = regionCount * 14;
+    const initialOutboundFullColumns = Math.min(maxInitialOutboundFullColumns, Math.max(0, Math.round(initialOutboundDraftColumns)));
     const startedAt = performance.now();
     setCommandStatus({ label: `building ${regionCount} region / ${shuttleCount} shuttle layout...`, tone: 'idle' });
     try {
       const response = await requestJson<ScenarioSetupResponse>('/api/shuttle/setup', {
         method: 'POST',
-        body: JSON.stringify({ regionCount, shuttleCount })
+        body: JSON.stringify({ regionCount, shuttleCount, initialOutboundFullColumns })
       });
       setScenario(response.scenario);
       setState(response.state);
@@ -2306,6 +2314,7 @@ export function App() {
       setValidation(null);
       setRegionDraftCount(response.setup.regionCount);
       setShuttleDraftCount(response.setup.shuttleCount);
+      setInitialOutboundDraftColumns(response.setup.initialOutboundFullColumns);
       const elapsedMs = Math.round(performance.now() - startedAt);
       setCommandStatus({ label: `${response.setup.regionCount} regions / ${response.setup.shuttleCount} shuttles loaded in ${elapsedMs} ms`, tone: 'ok' });
     } catch (error) {
@@ -2460,9 +2469,12 @@ export function App() {
 
   const appliedRegionCount = setupSummary?.regionCount ?? 2;
   const appliedShuttleCount = setupSummary?.shuttleCount ?? 8;
+  const appliedInitialOutboundFullColumns = setupSummary?.initialOutboundFullColumns ?? 4;
+  const draftMaxInitialOutboundFullColumns = Math.max(1, Math.round(regionDraftCount)) * 14;
   const regionSetupDirty = regionDraftCount !== appliedRegionCount;
   const shuttleSetupDirty = shuttleDraftCount !== appliedShuttleCount;
-  const setupDirty = regionSetupDirty || shuttleSetupDirty;
+  const initialOutboundSetupDirty = initialOutboundDraftColumns !== appliedInitialOutboundFullColumns;
+  const setupDirty = regionSetupDirty || shuttleSetupDirty || initialOutboundSetupDirty;
 
   return (
     <main className="app-shell">
@@ -2542,6 +2554,38 @@ export function App() {
                 </button>
               </div>
             </div>
+            <div className="setup-control">
+              <div className="setup-panel-head">
+                <span>Outbound full columns</span>
+                <strong>{appliedInitialOutboundFullColumns} seeded</strong>
+              </div>
+              <div className="stepper-row" aria-label="Initial outbound full columns setup">
+                <button
+                  type="button"
+                  onClick={() => setInitialOutboundDraftColumns((value) => Math.max(0, value - 1))}
+                  disabled={initialOutboundDraftColumns <= 0}
+                  aria-label="Decrease initial outbound full columns"
+                >
+                  -
+                </button>
+                <input
+                  min="0"
+                  max={draftMaxInitialOutboundFullColumns}
+                  step="1"
+                  type="number"
+                  value={initialOutboundDraftColumns}
+                  onChange={(event) => setInitialOutboundDraftColumns(Number(event.currentTarget.value))}
+                />
+                <button
+                  type="button"
+                  onClick={() => setInitialOutboundDraftColumns((value) => Math.min(draftMaxInitialOutboundFullColumns, value + 1))}
+                  disabled={initialOutboundDraftColumns >= draftMaxInitialOutboundFullColumns}
+                  aria-label="Increase initial outbound full columns"
+                >
+                  +
+                </button>
+              </div>
+            </div>
             <button
               className={setupDirty ? 'primary-action' : ''}
               type="button"
@@ -2593,6 +2637,7 @@ export function App() {
               <span><strong>{setupSummary?.physicalLiftCount ?? '--'}</strong> lifts</span>
               <span><strong>{setupSummary?.shuttleCount ?? '--'}</strong> shuttles</span>
               <span><strong>{setupSummary?.inboundLiftCount ?? '--'}/{setupSummary?.outboundLiftCount ?? '--'}</strong> in/out</span>
+              <span><strong>{setupSummary?.initialOutboundFullColumns ?? '--'}</strong> out cols</span>
             </div>
           </div>
           <div className="mode-toggle">

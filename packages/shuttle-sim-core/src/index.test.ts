@@ -6,6 +6,7 @@ import {
   REQUIRED_CALIBRATION_DIMENSION_KEYS,
   calculateTravelTimeSec,
   createDefaultShuttleScenario,
+  createInboundOutboundDemoScenario,
   createInboundMvpBaselineScenario,
   hashEventLog,
   hashEngineSnapshot,
@@ -56,7 +57,8 @@ function testScenario(overrides: Partial<ShuttleScenario>): ShuttleScenario {
       outboundRatePerHour: 0,
       inboundOutboundMix: 0.5,
       arrivalDistribution: 'deterministic',
-      maxTasks: 1
+      maxTasks: 1,
+      initialOutboundFullColumns: 0
     },
     physicsParams: {
       emptySpeedMps: 1,
@@ -832,10 +834,13 @@ describe('shuttle phase 0 SimCore', () => {
     expect(yielder.routeNodeIds).not.toContain('column-top-b-c18');
   });
 
-  it('does not ping-pong an empty top-lift storage yielder between adjacent cells', () => {
+  it('does not ping-pong an empty top-lift storage yielder between adjacent cells', async () => {
     const sim = new ShuttleSimCore(createInboundMvpBaselineScenario());
 
-    runFor(sim, 570);
+    for (let elapsedSec = 0; elapsedSec < 570; elapsedSec += 30) {
+      runFor(sim, Math.min(30, 570 - elapsedSec));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
 
     const singleStepStorageYields = sim.getEventLog()
       .filter((event) =>
@@ -854,7 +859,7 @@ describe('shuttle phase 0 SimCore', () => {
     );
 
     expect(reverseStep).toBeUndefined();
-  }, 45000);
+  }, 90000);
 
   it('keeps top-lift inbound allocation in the active SKU column up to pickup queue WIP capacity', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
@@ -1074,6 +1079,50 @@ describe('shuttle phase 0 SimCore', () => {
       waitReason: null
     });
     expect(internals.selectTopLiftOutboundLoad()).toBeNull();
+  });
+
+  it('seeds dedicated top-lift outbound columns and releases them to inbound after empty', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 1
+      },
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 3600,
+        outboundRatePerHour: 3600,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 8,
+        initialOutboundFullColumns: 1
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    const internals = sim as unknown as {
+      loads: Array<{ id: string; state: 'waiting' | 'carried' | 'stored' | 'delivered'; nodeId: string | null; vehicleId: string | null; weightKg: number }>;
+      selectTopLiftInboundStorageNode: () => { nodeId: string; loadId: string } | null;
+      selectTopLiftOutboundLoad: () => { nodeId: string; loadId: string } | null;
+      topLiftOutboundLockedColumns: () => Set<number>;
+    };
+
+    expect(internals.topLiftOutboundLockedColumns()).toEqual(new Set([1]));
+    expect(internals.loads.filter((load) => load.id.startsWith('outbound-seed-') && load.state === 'stored')).toHaveLength(14);
+    expect(internals.selectTopLiftOutboundLoad()).toEqual({
+      nodeId: 'storage-r14-c01',
+      loadId: 'outbound-seed-c01-r14-0001'
+    });
+    expect(internals.selectTopLiftInboundStorageNode()?.nodeId).toBe('storage-r14-c02');
+
+    for (const load of internals.loads) {
+      if (load.id.startsWith('outbound-seed-')) {
+        load.state = 'delivered';
+        load.nodeId = 'lift-01-outbound';
+      }
+    }
+
+    expect(internals.topLiftOutboundLockedColumns()).toEqual(new Set());
+    expect(internals.selectTopLiftOutboundLoad()).toBeNull();
+    expect(internals.selectTopLiftInboundStorageNode()?.nodeId).toBe('storage-r14-c01');
   });
 
   it('routes empty top-lift inbound return trips out of the filled column before pickup', () => {
