@@ -62,6 +62,8 @@ type VehicleObjectUserData = {
   targetYaw: number;
   loadedMesh: THREE.Group;
   bodyMaterial: THREE.MeshStandardMaterial;
+  accentMaterial: THREE.MeshStandardMaterial;
+  beaconMaterial: THREE.MeshBasicMaterial;
   ringMaterial: THREE.MeshBasicMaterial;
   safetyRing: THREE.Mesh;
   labelSprite: THREE.Sprite | null;
@@ -940,18 +942,36 @@ function createTaskAssignmentMarker(node: ShuttleNode, label: string, role: Load
 function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   const group = new THREE.Group();
   const bodyMaterial = texturedMaterial(TEXTURE_ASSETS.metalPlate, {
-    color: 0x287f78,
+    color: 0xd9e4e7,
     repeat: { x: 1.2, y: 0.8 },
-    roughness: 0.48,
-    metalness: 0.32,
-    normalScale: 0.18
+    roughness: 0.42,
+    metalness: 0.28,
+    normalScale: 0.1
   });
   const chassisMaterial = texturedMaterial(TEXTURE_ASSETS.metalPlate, {
-    color: 0x1c2730,
+    color: 0x43505a,
     repeat: { x: 1.3, y: 0.9 },
-    roughness: 0.58,
-    metalness: 0.42,
-    normalScale: 0.16
+    roughness: 0.54,
+    metalness: 0.34,
+    normalScale: 0.1
+  });
+  const deckMaterial = texturedMaterial(TEXTURE_ASSETS.metalPlate, {
+    color: 0x74838c,
+    repeat: { x: 1, y: 0.7 },
+    roughness: 0.52,
+    metalness: 0.22,
+    normalScale: 0.08
+  });
+  const accentMaterial = new THREE.MeshStandardMaterial({
+    color: FLOW_VISUAL_COLORS.inbound.three,
+    emissive: 0x0b2230,
+    roughness: 0.38,
+    metalness: 0.22
+  });
+  const beaconMaterial = new THREE.MeshBasicMaterial({
+    color: FLOW_VISUAL_COLORS.inbound.three,
+    transparent: true,
+    opacity: 0.92
   });
   const ringMaterial = new THREE.MeshBasicMaterial({
     color: 0x56a9c9,
@@ -970,6 +990,15 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   chassis.receiveShadow = true;
   group.add(chassis);
 
+  const undertray = new THREE.Mesh(
+    new THREE.BoxGeometry(scenario.vehicles.lengthM * 0.78, scenario.vehicles.heightM * 0.1, scenario.vehicles.widthM * 0.66),
+    deckMaterial
+  );
+  undertray.position.y = VEHICLE_BASE_Y + scenario.vehicles.heightM * 0.44;
+  undertray.castShadow = true;
+  undertray.receiveShadow = true;
+  group.add(undertray);
+
   const body = new THREE.Mesh(
     new THREE.BoxGeometry(scenario.vehicles.lengthM * 0.84, scenario.vehicles.heightM * 0.56, scenario.vehicles.widthM * 0.78),
     bodyMaterial
@@ -979,7 +1008,31 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   body.receiveShadow = true;
   group.add(body);
 
-  const noseMaterial = material(0xd8f0ed, 0.42, 0.18);
+  const topPanel = new THREE.Mesh(
+    new THREE.BoxGeometry(scenario.vehicles.lengthM * 0.52, 0.035, scenario.vehicles.widthM * 0.46),
+    deckMaterial
+  );
+  topPanel.position.y = VEHICLE_BASE_Y + scenario.vehicles.heightM * 0.93;
+  topPanel.castShadow = true;
+  topPanel.receiveShadow = true;
+  group.add(topPanel);
+
+  for (const z of [-scenario.vehicles.widthM * 0.43, scenario.vehicles.widthM * 0.43]) {
+    const statusRail = new THREE.Mesh(
+      new THREE.BoxGeometry(scenario.vehicles.lengthM * 0.74, 0.052, 0.052),
+      accentMaterial
+    );
+    statusRail.position.set(0, VEHICLE_BASE_Y + scenario.vehicles.heightM * 0.72, z);
+    statusRail.castShadow = true;
+    group.add(statusRail);
+  }
+
+  const beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.045, 20), beaconMaterial);
+  beacon.position.set(-scenario.vehicles.lengthM * 0.24, VEHICLE_BASE_Y + scenario.vehicles.heightM * 1.03, 0);
+  beacon.castShadow = true;
+  group.add(beacon);
+
+  const noseMaterial = material(0xf4f9fa, 0.36, 0.16);
   const nose = new THREE.Mesh(
     new THREE.BoxGeometry(0.18, scenario.vehicles.heightM * 0.44, scenario.vehicles.widthM * 0.46),
     noseMaterial
@@ -996,7 +1049,7 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   }
 
   const forkMaterial = texturedMaterial(TEXTURE_ASSETS.metalPlate, {
-    color: 0xb8c5c8,
+    color: 0xc6d2d6,
     repeat: { x: 0.9, y: 0.35 },
     roughness: 0.42,
     metalness: 0.34,
@@ -1012,7 +1065,7 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
     group.add(fork);
   }
 
-  const wheelMaterial = material(0x0d1217, 0.72, 0.18);
+  const wheelMaterial = material(0x26323b, 0.68, 0.18);
   for (const x of [-scenario.vehicles.lengthM * 0.34, scenario.vehicles.lengthM * 0.34]) {
     for (const z of [-scenario.vehicles.widthM * 0.48, scenario.vehicles.widthM * 0.48]) {
       const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.105, 0.105, 0.07, 18), wheelMaterial);
@@ -1041,6 +1094,8 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
     targetYaw: 0,
     loadedMesh,
     bodyMaterial,
+    accentMaterial,
+    beaconMaterial,
     ringMaterial,
     safetyRing,
     labelSprite: null,
@@ -1051,6 +1106,30 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
 
 function vehicleUserData(group: THREE.Group): VehicleObjectUserData {
   return group.userData as VehicleObjectUserData;
+}
+
+function applyVehicleVisualStatus(
+  data: VehicleObjectUserData,
+  {
+    bodyColor,
+    accentColor,
+    ringColor,
+    emissiveColor,
+    beaconOpacity = 0.92
+  }: {
+    bodyColor: number;
+    accentColor: number;
+    ringColor: number;
+    emissiveColor: number;
+    beaconOpacity?: number;
+  }
+): void {
+  data.bodyMaterial.color.setHex(bodyColor);
+  data.accentMaterial.color.setHex(accentColor);
+  data.accentMaterial.emissive.setHex(emissiveColor);
+  data.beaconMaterial.color.setHex(accentColor);
+  data.beaconMaterial.opacity = beaconOpacity;
+  data.ringMaterial.color.setHex(ringColor);
 }
 
 function applyVehicleState(group: THREE.Group, state: ShuttleSimState, vehicle: VehicleState, layers: ShuttleSceneLayers, selected: boolean): void {
@@ -1082,31 +1161,54 @@ function applyVehicleState(group: THREE.Group, state: ShuttleSimState, vehicle: 
   data.ringMaterial.opacity = selected ? 0.46 : 0.22;
 
   if (vehicle.state === 'waiting-blocked') {
-    data.bodyMaterial.color.setHex(0x9b7a31);
-    data.ringMaterial.color.setHex(0xe2b84b);
+    applyVehicleVisualStatus(data, {
+      bodyColor: 0xf0e4c8,
+      accentColor: 0xe2b84b,
+      ringColor: 0xe2b84b,
+      emissiveColor: 0x382407
+    });
     return;
   }
 
   if (vehicle.state === 'idle') {
-    data.bodyMaterial.color.setHex(0x344554);
-    data.ringMaterial.color.setHex(0x7a8794);
+    applyVehicleVisualStatus(data, {
+      bodyColor: 0xd6e0e3,
+      accentColor: 0x8fa1ae,
+      ringColor: 0x8fa1ae,
+      emissiveColor: 0x071017,
+      beaconOpacity: 0.56
+    });
     return;
   }
 
   if (vehicle.loaded) {
-    data.bodyMaterial.color.setHex(0x3f9c77);
-    data.ringMaterial.color.setHex(0x4fc190);
+    const loadRole = resolveVehicleLoadFlowRole(state, vehicle);
+    applyVehicleVisualStatus(data, {
+      bodyColor: 0xe4edf0,
+      accentColor: FLOW_VISUAL_COLORS[loadRole].three,
+      ringColor: FLOW_VISUAL_COLORS[loadRole].three,
+      emissiveColor: loadRole === 'outbound' ? 0x302103 : 0x071d2d
+    });
     return;
   }
 
   if (vehicle.taskId) {
-    data.bodyMaterial.color.setHex(0x2f78d4);
-    data.ringMaterial.color.setHex(0x82c7ff);
+    const taskRole = resolveVehicleTaskFlowRole(state, vehicle) ?? 'inbound';
+    applyVehicleVisualStatus(data, {
+      bodyColor: 0xe1eaed,
+      accentColor: FLOW_VISUAL_COLORS[taskRole].three,
+      ringColor: FLOW_VISUAL_COLORS[taskRole].three,
+      emissiveColor: taskRole === 'outbound' ? 0x302103 : 0x071d2d
+    });
     return;
   }
 
-  data.bodyMaterial.color.setHex(0x6158c7);
-  data.ringMaterial.color.setHex(0x8d78ff);
+  applyVehicleVisualStatus(data, {
+    bodyColor: 0xdde6e9,
+    accentColor: 0x8d78ff,
+    ringColor: 0x8d78ff,
+    emissiveColor: 0x140e32
+  });
 }
 
 function vehicleRouteColor(state: ShuttleSimState, vehicle: VehicleState): number {
