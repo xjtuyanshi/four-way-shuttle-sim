@@ -3814,6 +3814,29 @@ export class ShuttleSimCore {
     return null;
   }
 
+  private topLiftColumnKey(nodeId: string): string | null {
+    if (!this.topLiftColumnLayoutEnabled()) {
+      return null;
+    }
+    const storagePosition = this.storageGridPosition(nodeId);
+    if (storagePosition) {
+      return `c${String(storagePosition.column).padStart(2, '0')}`;
+    }
+    const accessMatch = /^column-(?:top-a|top-b|middle|bottom-a|bottom-b)-c(\d+)$/.exec(nodeId);
+    if (accessMatch) {
+      return `c${String(Number(accessMatch[1])).padStart(2, '0')}`;
+    }
+    return null;
+  }
+
+  private topLiftRouteTerminatesOnColumnAccess(routeNodeIds: string[]): boolean {
+    if (!this.topLiftColumnLayoutEnabled()) {
+      return false;
+    }
+    const terminalNodeId = routeNodeIds.at(-1);
+    return terminalNodeId ? isTopLiftColumnAccessNodeId(terminalNodeId) : false;
+  }
+
   private topLiftColumnRowsPerZone(): number {
     if (this.topLiftColumnRowsPerZoneCache !== null) {
       return this.topLiftColumnRowsPerZoneCache;
@@ -3904,7 +3927,7 @@ export class ShuttleSimCore {
     const route = postDropoffExitRoute
       ? this.extendPostDropoffExitRouteToStandby(vehicle, postDropoffExitRoute)
       : this.routeToInboundStandby(vehicle);
-    if (!route || route.length <= 1) {
+    if (!route || route.length <= 1 || this.topLiftRouteTerminatesOnColumnAccess(route)) {
       return false;
     }
 
@@ -3927,10 +3950,10 @@ export class ShuttleSimCore {
     return true;
   }
 
-  private extendPostDropoffExitRouteToStandby(vehicle: MutableVehicle, exitRoute: string[]): string[] {
+  private extendPostDropoffExitRouteToStandby(vehicle: MutableVehicle, exitRoute: string[]): string[] | null {
     const exitNodeId = exitRoute.at(-1);
     if (!exitNodeId) {
-      return exitRoute;
+      return this.topLiftRouteTerminatesOnColumnAccess(exitRoute) ? null : exitRoute;
     }
     for (const candidate of this.inboundStandbyNodeCandidates(vehicle.id)) {
       try {
@@ -3942,7 +3965,7 @@ export class ShuttleSimCore {
         continue;
       }
     }
-    return exitRoute;
+    return this.topLiftRouteTerminatesOnColumnAccess(exitRoute) ? null : exitRoute;
   }
 
   private postDropoffStandbyRouteAcceptable(routeNodeIds: string[]): boolean {
@@ -4093,9 +4116,7 @@ export class ShuttleSimCore {
       node.type === 'storage' && !node.noStop && !node.noParking
     );
     const blockedDropoffNodeIds = this.activeInboundDropoffNodeIds();
-    const blockedDropoffColumnLabels = this.topLiftColumnLayoutEnabled()
-      ? new Set([...blockedDropoffNodeIds].map((nodeId) => this.nodeStorageRowLabel(nodeId)).filter((label): label is string => label !== null))
-      : new Set<string>();
+    const blockedDropoffColumnKeys = this.activeTopLiftInboundColumnKeys();
     const storedLoadNodeIds = new Set(this.storageNodeLoadOccupancy(false).keys());
     const claimedStandbyNodeIds = this.claimedTasklessStorageNodeIds(vehicleId);
     const vehicleOffset = (this.vehicleOrdinal(vehicleId) - 1) % inboundLifts.length;
@@ -4109,8 +4130,8 @@ export class ShuttleSimCore {
         .filter((node) => !storedLoadNodeIds.has(node.id))
         .filter((node) => !blockedDropoffNodeIds.has(node.id))
         .filter((node) => {
-          const columnLabel = this.nodeStorageRowLabel(node.id);
-          return !columnLabel || !blockedDropoffColumnLabels.has(columnLabel);
+          const columnKey = this.topLiftColumnKey(node.id);
+          return !columnKey || !blockedDropoffColumnKeys.has(columnKey);
         })
         .filter((node) => !claimedStandbyNodeIds.has(node.id))
         .filter((node) => {
@@ -4155,6 +4176,50 @@ export class ShuttleSimCore {
         )
         .map((task) => task.dropoffNodeId)
     );
+  }
+
+  private activeTopLiftInboundColumnKeys(): Set<string> {
+    const activeColumnKeys = new Set<string>();
+    if (!this.topLiftColumnLayoutEnabled()) {
+      return activeColumnKeys;
+    }
+
+    for (const nodeId of this.activeInboundDropoffNodeIds()) {
+      const columnKey = this.topLiftColumnKey(nodeId);
+      if (columnKey) {
+        activeColumnKeys.add(columnKey);
+      }
+    }
+
+    for (const columnKey of this.clearingTopLiftColumnKeys()) {
+      activeColumnKeys.add(columnKey);
+    }
+
+    return activeColumnKeys;
+  }
+
+  private clearingTopLiftColumnKeys(): Set<string> {
+    const clearingColumnKeys = new Set<string>();
+    if (!this.topLiftColumnLayoutEnabled()) {
+      return clearingColumnKeys;
+    }
+
+    for (const vehicle of this.vehicles) {
+      if (vehicle.loaded || vehicle.taskId || vehicle.localRouteReason !== 'post-dropoff-column-exit') {
+        continue;
+      }
+      for (const nodeId of [vehicle.currentNodeId, vehicle.targetNodeId]) {
+        if (!nodeId) {
+          continue;
+        }
+        const columnKey = this.topLiftColumnKey(nodeId);
+        if (columnKey) {
+          clearingColumnKeys.add(columnKey);
+        }
+      }
+    }
+
+    return clearingColumnKeys;
   }
 
   private claimedTasklessStorageNodeIds(vehicleId: string): Set<string> {
@@ -4987,7 +5052,7 @@ export class ShuttleSimCore {
     if (!goalNodeId || goalNodeId === fromNodeId) {
       if (!task && this.topLiftColumnLayoutEnabled() && this.layoutNode(fromNodeId)?.noParking) {
         const standbyRoute = this.routeToInboundStandby(vehicle);
-        if (standbyRoute && standbyRoute.length > 1) {
+        if (standbyRoute && standbyRoute.length > 1 && !this.topLiftRouteTerminatesOnColumnAccess(standbyRoute)) {
           const nextStandbyNodeId = standbyRoute[1] ?? null;
           const standbyBlock = nextStandbyNodeId && this.collisionAvoidanceEnabled()
             ? this.agentRefreshMoveBlocker(vehicle, nextStandbyNodeId)
@@ -5011,6 +5076,24 @@ export class ShuttleSimCore {
           vehicle.localRouteReason = null;
           return;
         }
+        this.clearTasklessRouteReservations(vehicle);
+        vehicle.state = 'waiting-blocked';
+        vehicle.speedMps = 0;
+        vehicle.routeNodeIds = [];
+        vehicle.routeIndex = 0;
+        vehicle.targetNodeId = null;
+        vehicle.currentEdgeId = null;
+        vehicle.legRemainingM = 0;
+        vehicle.waitReason = 'standby-unavailable';
+        vehicle.blockingReservationId = null;
+        vehicle.blockingVehicleId = null;
+        vehicle.waitingSinceSec ??= this.simTimeSec;
+        vehicle.plannedGoalNodeId = null;
+        vehicle.plannedRouteNodeIds = [];
+        vehicle.localRouteNodeIds = [];
+        vehicle.localRouteReason = null;
+        this.blockedTimeByReasonSec.set('standby-unavailable', round((this.blockedTimeByReasonSec.get('standby-unavailable') ?? 0) + dtSec));
+        return;
       }
       vehicle.state = vehicle.taskId ? 'assigned' : 'idle';
       vehicle.routeNodeIds = [fromNodeId];
@@ -6037,17 +6120,11 @@ export class ShuttleSimCore {
       return blockedNodeIds;
     }
 
-    const allowedColumnLabels = new Set<string>();
-    if (this.isStorageNode(fromNodeId)) {
-      const fromColumn = this.nodeStorageRowLabel(fromNodeId);
-      if (fromColumn) {
-        allowedColumnLabels.add(fromColumn);
-      }
-    }
-    if (this.isStorageNode(target)) {
-      const targetColumn = this.nodeStorageRowLabel(target);
-      if (targetColumn) {
-        allowedColumnLabels.add(targetColumn);
+    const allowedColumnKeys = new Set<string>();
+    for (const nodeId of [fromNodeId, target, task.dropoffNodeId]) {
+      const columnKey = this.topLiftColumnKey(nodeId);
+      if (columnKey) {
+        allowedColumnKeys.add(columnKey);
       }
     }
 
@@ -6055,8 +6132,8 @@ export class ShuttleSimCore {
       if (node.type !== 'storage') {
         continue;
       }
-      const columnLabel = this.nodeStorageRowLabel(node.id);
-      if (!columnLabel || !allowedColumnLabels.has(columnLabel)) {
+      const columnKey = this.topLiftColumnKey(node.id);
+      if (!columnKey || !allowedColumnKeys.has(columnKey)) {
         blockedNodeIds.add(node.id);
       }
     }
@@ -8857,6 +8934,11 @@ export class ShuttleSimCore {
       !this.isStorageNode(pocketNodeId)
     ) {
       return true;
+    }
+    if (this.topLiftColumnLayoutEnabled()) {
+      const pocketColumnKey = this.topLiftColumnKey(pocketNodeId);
+      const dropoffColumnKey = this.topLiftColumnKey(task.dropoffNodeId);
+      return pocketColumnKey !== null && pocketColumnKey === dropoffColumnKey;
     }
     return this.nodeStorageRowLabel(pocketNodeId) === this.nodeStorageRowLabel(task.dropoffNodeId);
   }
