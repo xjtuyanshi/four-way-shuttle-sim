@@ -1079,6 +1079,9 @@ function storageHopViolation(
   fromNodeId: string,
   toNodeId: string
 ): { edgeId: string | null; fromRow: number; toRow: number } | null {
+  if (scenario.layout.calibrationProfile?.id === 'top-lift-column-v1') {
+    return null;
+  }
   const from = storageGridPosition(fromNodeId);
   const to = storageGridPosition(toNodeId);
   if (!from || !to || from.row === to.row) return null;

@@ -2962,11 +2962,41 @@ export class ShuttleSimCore {
 
   private firstAvailableTopLiftInboundNodeInColumn(column: number, occupancy: Map<string, string>): string | null {
     for (const nodeId of this.topLiftStorageColumnNodeIds(column)) {
-      if (!occupancy.has(nodeId) && !this.currentNodeOccupancy.has(nodeId)) {
+      if (
+        !occupancy.has(nodeId) &&
+        !this.currentNodeOccupancy.has(nodeId) &&
+        this.topLiftInboundStorageNodeReachableInColumn(nodeId, occupancy)
+      ) {
         return nodeId;
       }
     }
     return null;
+  }
+
+  private topLiftInboundStorageNodeReachableInColumn(nodeId: string, occupancy: Map<string, string>): boolean {
+    const position = this.storageGridPosition(nodeId);
+    if (!position || !this.topLiftColumnLayoutEnabled()) {
+      return true;
+    }
+
+    const rowsPerZone = this.topLiftColumnRowsPerZone();
+    const zoneFirstRow = position.row <= rowsPerZone ? 1 : rowsPerZone + 1;
+    const zoneLastRow = position.row <= rowsPerZone ? rowsPerZone : rowsPerZone * 2;
+    const columnIndex = position.column - 1;
+    const rowClear = (row: number): boolean => {
+      const transitNodeId = storageNodeId(row - 1, columnIndex);
+      return !occupancy.has(transitNodeId) && !this.currentNodeOccupancy.has(transitNodeId);
+    };
+    const rangeClear = (firstRow: number, lastRow: number): boolean => {
+      for (let row = firstRow; row <= lastRow; row += 1) {
+        if (!rowClear(row)) {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    return rangeClear(zoneFirstRow, position.row - 1) || rangeClear(position.row + 1, zoneLastRow);
   }
 
   private activeStorageRowTaskCount(rowLabel: string): number {
@@ -3422,6 +3452,19 @@ export class ShuttleSimCore {
   }
 
   private taskAssignmentBlockReason(task: TaskStateRecord): string | null {
+    if (task.kind === 'inbound') {
+      const dropoffLoadId = this.storedLoadIdAtNode(task.dropoffNodeId);
+      if (dropoffLoadId && dropoffLoadId !== task.loadId) {
+        return 'storage-full';
+      }
+      if (
+        this.topLiftColumnLayoutEnabled() &&
+        this.isStorageNode(task.dropoffNodeId) &&
+        !this.topLiftInboundStorageNodeReachableInColumn(task.dropoffNodeId, this.storageNodeLoadOccupancy(true))
+      ) {
+        return 'storage-full';
+      }
+    }
     if (task.kind === 'inbound' && this.isInboundOnlyFlow()) {
       return null;
     }

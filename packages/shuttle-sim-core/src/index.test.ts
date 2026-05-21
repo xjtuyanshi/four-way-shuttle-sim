@@ -610,6 +610,106 @@ describe('shuttle phase 0 SimCore', () => {
     expect(internals.selectTopLiftInboundStorageNode()?.nodeId).toBe('storage-r14-c02');
   });
 
+  it('keeps top-lift inbound allocation on a reachable same-column slot when one side is open', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario({
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 1
+      },
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 32
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh'
+      }
+    }));
+    const internals = sim as unknown as {
+      selectTopLiftInboundStorageNode: () => { nodeId: string; loadId: string } | null;
+    };
+    for (const row of [14, 13, 12, 11]) {
+      sim.addLoadForTest({ id: `stored-c01-r${row}`, state: 'stored', nodeId: `storage-r${row}-c01`, vehicleId: null, weightKg: 100 });
+    }
+
+    expect(internals.selectTopLiftInboundStorageNode()?.nodeId).toBe('storage-r10-c01');
+  });
+
+  it('skips top-lift inbound holes that are blocked by stored loads from both ends', () => {
+    const sim = new ShuttleSimCore(createDefaultShuttleScenario({
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 1
+      },
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 32
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh'
+      }
+    }));
+    const internals = sim as unknown as {
+      selectTopLiftInboundStorageNode: () => { nodeId: string; loadId: string } | null;
+    };
+    for (let row = 1; row <= 14; row += 1) {
+      if (row === 10) continue;
+      const rowLabel = String(row).padStart(2, '0');
+      sim.addLoadForTest({ id: `stored-c01-r${rowLabel}`, state: 'stored', nodeId: `storage-r${rowLabel}-c01`, vehicleId: null, weightKg: 100 });
+    }
+
+    expect(internals.selectTopLiftInboundStorageNode()?.nodeId).toBe('storage-r14-c02');
+  });
+
+  it('does not assign a primed top-lift inbound task after near-full seeding occupies its dropoff', () => {
+    const scenario = createInboundMvpBaselineScenario({
+      vehicles: { count: 12 },
+      trafficPolicy: {
+        deadlockDetectSec: 5
+      },
+      taskGeneration: {
+        inboundRatePerHour: 7200,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 80
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    const storageNodeIds = scenario.layout.nodes
+      .filter((node) => node.type === 'storage')
+      .sort((left, right) => left.z - right.z || left.x - right.x || left.id.localeCompare(right.id))
+      .map((node) => node.id);
+    for (const [index, nodeId] of storageNodeIds.slice(0, storageNodeIds.length - 4).entries()) {
+      sim.addLoadForTest({
+        id: `near-full-seed-${String(index + 1).padStart(4, '0')}`,
+        state: 'stored',
+        nodeId,
+        vehicleId: null,
+        weightKg: 100
+      });
+    }
+
+    sim.start();
+    const state = runFor(sim, 5);
+    const primedTask = state.tasks.find((task) => task.id === 'task-0001');
+
+    expect(primedTask).toMatchObject({
+      state: 'queued',
+      dropoffNodeId: 'storage-r10-c01',
+      waitReason: 'storage-full',
+      vehicleId: null
+    });
+    expectNoTrafficSafetyFailures(state);
+  });
+
   it('holds top-lift outbound allocation on one active SKU-column pick at a time', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       layoutProfile: {
