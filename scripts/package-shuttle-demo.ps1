@@ -151,9 +151,27 @@ Write-Utf8NoBom (Join-Path $simCorePackage 'package.json') @"
 Write-Host 'Copying dashboard assets ...'
 Copy-Item -Path (Join-Path $repoRoot 'apps\shuttle-dashboard\dist') -Destination $webRoot -Recurse -Force
 
+$runningOnWindows = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
 $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
-if ($nodeCommand) {
+if ($runningOnWindows -and $nodeCommand) {
   Copy-Item -LiteralPath $nodeCommand.Source -Destination (Join-Path $runtimeRoot 'node.exe') -Force
+} else {
+  $nodeVersion = '22.22.0'
+  if ($nodeCommand) {
+    $localNodeVersion = (& $nodeCommand.Source -v).Trim()
+    if ($localNodeVersion -match '^v(.+)$') {
+      $nodeVersion = $Matches[1]
+    }
+  }
+  $nodeZip = Join-Path $outputRoot "node-v$nodeVersion-win-x64.zip"
+  $nodeExtractRoot = Join-Path $outputRoot "node-v$nodeVersion-win-x64"
+  if (-not (Test-Path -LiteralPath $nodeZip)) {
+    Write-Host "Downloading Windows Node.js runtime v$nodeVersion ..."
+    Invoke-WebRequest -Uri "https://nodejs.org/dist/v$nodeVersion/node-v$nodeVersion-win-x64.zip" -OutFile $nodeZip
+  }
+  Remove-GeneratedPath $nodeExtractRoot
+  Expand-Archive -LiteralPath $nodeZip -DestinationPath $outputRoot -Force
+  Copy-Item -LiteralPath (Join-Path $nodeExtractRoot 'node.exe') -Destination (Join-Path $runtimeRoot 'node.exe') -Force
 }
 
 Write-Utf8NoBom (Join-Path $toolsRoot 'web-static-server.mjs') @'
@@ -215,17 +233,17 @@ server.listen(port, () => {
 '@
 
 Write-Utf8NoBom (Join-Path $toolsRoot 'load-demo-scenario.mjs') @"
-import { createDefaultShuttleScenario } from '../api/node_modules/@four-way-shuttle/sim-core/src/index.js';
+import { createInboundOutboundDemoScenario } from '../api/node_modules/@four-way-shuttle/sim-core/src/index.js';
 
 const apiBase = process.argv[2] ?? 'http://localhost:$ApiPort/api/shuttle';
 const speed = Number(process.argv[3] ?? $PlaybackSpeed);
 
-const scenario = createDefaultShuttleScenario({
-  id: 'shuttle-all-inbound-8x-7200',
-  name: 'All Inbound 8 Shuttle 7200 PPH Stress',
+const scenario = createInboundOutboundDemoScenario({
+  id: 'shuttle-customer-outbound-demo-4-region',
+  name: 'Customer Demo: 4 Region Inbound + Outbound',
   layoutProfile: {
     layoutKind: 'top-lift-column',
-    liftPairCount: 2
+    liftPairCount: 4
   },
   durationSec: 7200,
   vehicles: {
@@ -244,11 +262,12 @@ const scenario = createDefaultShuttleScenario({
     lowerTimeSec: 0.01
   },
   taskGeneration: {
-    inboundRatePerHour: 7200,
-    outboundRatePerHour: 0,
-    inboundOutboundMix: 1,
+    inboundRatePerHour: 3600,
+    outboundRatePerHour: 3600,
+    inboundOutboundMix: 0.5,
     arrivalDistribution: 'deterministic',
-    maxTasks: 32
+    maxTasks: 32,
+    initialOutboundFullColumns: 4
   },
   trafficPolicy: {
     controllerMode: 'agent-refresh',
@@ -363,7 +382,7 @@ if (`$LASTEXITCODE -ne 0) { throw 'Failed to load demo scenario.' }
 
 Start-Process "http://localhost:`$WebPort"
 Write-Host "Ready: http://localhost:`$WebPort"
-Write-Host "Scenario: 8 shuttle / all inbound / 7200 PPH / avoidance on / `$PlaybackSpeed x"
+Write-Host "Scenario: 4 region / 8 shuttle / inbound 3600 PPH / outbound 3600 PPH / 4 seeded outbound columns / avoidance on / `$PlaybackSpeed x"
 "@
 
 Write-Utf8NoBom (Join-Path $demoRoot 'Stop Shuttle Demo.ps1') @"
@@ -410,9 +429,11 @@ How to run:
 3. Use Stop Shuttle Demo.bat when you are done.
 
 Default scenario:
+- 4 top-lift regions
 - 8 shuttles
-- all inbound
-- 7200 PPH request
+- 3600 inbound PPH request
+- 3600 outbound PPH request
+- 4 seeded outbound full columns
 - collision avoidance on
 - playback speed ${PlaybackSpeed}x
 
