@@ -14,6 +14,7 @@ import {
 } from '@four-way-shuttle/sim-core/static-scene';
 import type { ShuttleSceneCameraView, ShuttleSceneRendererInfo } from './ShuttleScene3D.js';
 import { flowRgba, resolveLoadFlowRole, resolveVehicleTaskFlowRole, FLOW_VISUAL_COLORS } from './flowColors.js';
+import { createStorageColumnRects, createTrackAreaRects } from './layoutVisuals.js';
 
 const ShuttleScene3D = lazy(() =>
   import('./ShuttleScene3D.js').then((module) => ({ default: module.ShuttleScene3D }))
@@ -914,11 +915,25 @@ function AuthoritativeMap({
     const width = Math.max(1, maxX - minX);
     const depth = Math.max(1, maxZ - minZ);
     const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+    const staticScene = scenario ? summarizeScenarioStaticSceneContract(scenario) : null;
 
     const project = (point: { x: number; z: number }) => ({
       left: `${((point.x - minX) / width) * 100}%`,
       top: `${(1 - (point.z - minZ) / depth) * 100}%`
     });
+
+    const projectRect = (rect: { minX: number; maxX: number; minZ: number; maxZ: number }) => {
+      const left = ((rect.minX - minX) / width) * 100;
+      const right = ((rect.maxX - minX) / width) * 100;
+      const top = (1 - (rect.maxZ - minZ) / depth) * 100;
+      const bottom = (1 - (rect.minZ - minZ) / depth) * 100;
+      return {
+        left: `${left}%`,
+        top: `${top}%`,
+        width: `${right - left}%`,
+        height: `${bottom - top}%`
+      };
+    };
 
     const routeSegmentStyle = (from: { x: number; z: number }, to: { x: number; z: number }) => {
       const fromPoint = project(from);
@@ -935,7 +950,17 @@ function AuthoritativeMap({
       };
     };
 
-    return { nodes, nodeMap, edges: scenario?.layout.edges ?? [], project, routeSegmentStyle };
+    return {
+      nodes,
+      nodeMap,
+      edges: scenario?.layout.edges ?? [],
+      aisleRects: staticScene ? createTrackAreaRects(staticScene, ['sideAisle', 'crossAisle', 'parkingConnector']) : [],
+      connectorRects: staticScene ? createTrackAreaRects(staticScene, ['inboundConnector', 'outboundConnector']) : [],
+      storageColumnRects: staticScene ? createStorageColumnRects(staticScene) : [],
+      project,
+      projectRect,
+      routeSegmentStyle
+    };
   }, [scenario]);
 
   const loads = state?.loads.filter((load) => load.nodeId && load.state !== 'carried') ?? [];
@@ -963,11 +988,21 @@ function AuthoritativeMap({
 
   return (
     <div className="authoritative-map" aria-label="Authoritative state map">
+      {geometry.aisleRects.map((rect) => (
+        <span className={`map-area ${rect.category}`} key={rect.id} style={geometry.projectRect(rect)} />
+      ))}
+      {geometry.connectorRects.map((rect) => (
+        <span className={`map-area ${rect.category}`} key={rect.id} style={geometry.projectRect(rect)} />
+      ))}
+      {geometry.storageColumnRects.map((rect) => (
+        <span className="map-storage-column" key={rect.id} style={geometry.projectRect(rect)} />
+      ))}
       {geometry.edges.map((edge) => {
         const from = geometry.nodeMap.get(edge.from);
         const to = geometry.nodeMap.get(edge.to);
         if (!from || !to) return null;
         const reserved = layers.traffic && activeReservations.some((reservation) => reservation.resourceId === edge.id);
+        if (!reserved) return null;
         return (
           <span
             className={`map-edge ${reserved ? 'reserved' : ''} ${isModuleBoundaryEdge(edge) ? 'module-boundary' : ''}`}
@@ -991,11 +1026,13 @@ function AuthoritativeMap({
             />
           );
         })}
-      {geometry.nodes.map((node) => (
-        <span className={`map-node ${node.type}`} key={node.id} style={geometry.project(node)}>
-          {node.type === 'storage' ? '' : node.id.replace('inbound-lift-', 'in-').replace('outbound-lift-', 'out-')}
-        </span>
-      ))}
+      {geometry.nodes
+        .filter((node) => node.type !== 'storage' && node.type !== 'intersection' && node.type !== 'aisle')
+        .map((node) => (
+          <span className={`map-node ${node.type}`} key={node.id} style={geometry.project(node)}>
+            {node.id.replace('inbound-lift-', 'in-').replace('outbound-lift-', 'out-')}
+          </span>
+        ))}
       {layers.loads && loads.map((load) => {
         const node = load.nodeId ? geometry.nodeMap.get(load.nodeId) : null;
         return node ? <span className={`map-load ${load.state} flow-${resolveLoadFlowRole(state!, load)}`} key={load.id} style={geometry.project(node)} /> : null;
@@ -1047,6 +1084,7 @@ function CanvasLiteMap({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const geometry = useMemo(() => {
     const nodes = scenario?.layout.nodes ?? [];
+    const staticScene = scenario ? summarizeScenarioStaticSceneContract(scenario) : null;
     const xValues = nodes.map((node) => node.x);
     const zValues = nodes.map((node) => node.z);
     const minX = Math.min(...xValues, 0) - 2;
@@ -1057,6 +1095,9 @@ function CanvasLiteMap({
       nodes,
       edges: scenario?.layout.edges ?? [],
       nodeMap: new Map(nodes.map((node) => [node.id, node])),
+      aisleRects: staticScene ? createTrackAreaRects(staticScene, ['sideAisle', 'crossAisle', 'parkingConnector']) : [],
+      connectorRects: staticScene ? createTrackAreaRects(staticScene, ['inboundConnector', 'outboundConnector']) : [],
+      storageColumnRects: staticScene ? createStorageColumnRects(staticScene) : [],
       minX,
       maxX,
       minZ,
@@ -1085,25 +1126,28 @@ function CanvasLiteMap({
       context.fillStyle = '#f5f7f8';
       context.fillRect(0, 0, width, height);
 
-      context.strokeStyle = '#e3e8eb';
-      context.lineWidth = 1;
-      for (let x = 0; x <= width; x += 42) {
-        context.beginPath();
-        context.moveTo(x, 0);
-        context.lineTo(x, height);
-        context.stroke();
-      }
-      for (let y = 0; y <= height; y += 42) {
-        context.beginPath();
-        context.moveTo(0, y);
-        context.lineTo(width, y);
-        context.stroke();
-      }
-
       const project = (point: { x: number; z: number }) => ({
         x: padding + ((point.x - geometry.minX) / geometry.width) * (width - padding * 2),
         y: padding + ((point.z - geometry.minZ) / geometry.depth) * (height - padding * 2)
       });
+
+      const projectRect = (meterRect: { minX: number; maxX: number; minZ: number; maxZ: number }) => {
+        const left = padding + ((meterRect.minX - geometry.minX) / geometry.width) * (width - padding * 2);
+        const right = padding + ((meterRect.maxX - geometry.minX) / geometry.width) * (width - padding * 2);
+        const top = padding + ((meterRect.minZ - geometry.minZ) / geometry.depth) * (height - padding * 2);
+        const bottom = padding + ((meterRect.maxZ - geometry.minZ) / geometry.depth) * (height - padding * 2);
+        return { left, top, width: right - left, height: bottom - top };
+      };
+
+      const fillMeterRect = (meterRect: { minX: number; maxX: number; minZ: number; maxZ: number }, color: string, alpha: number) => {
+        const rect = projectRect(meterRect);
+        context.globalAlpha = alpha;
+        context.fillStyle = color;
+        context.beginPath();
+        context.roundRect(rect.left, rect.top, rect.width, rect.height, 3);
+        context.fill();
+        context.globalAlpha = 1;
+      };
 
       const drawLine = (from: { x: number; z: number }, to: { x: number; z: number }, color: string, lineWidth: number, alpha = 1) => {
         const a = project(from);
@@ -1153,11 +1197,25 @@ function CanvasLiteMap({
           : []
       );
 
+      for (const rect of geometry.aisleRects) {
+        fillMeterRect(rect, '#d6aa2f', 0.2);
+      }
+
+      for (const rect of geometry.connectorRects) {
+        const color = rect.category === 'inboundConnector' ? FLOW_VISUAL_COLORS.inbound.hex : FLOW_VISUAL_COLORS.outbound.hex;
+        fillMeterRect(rect, color, 0.16);
+      }
+
+      for (const rect of geometry.storageColumnRects) {
+        fillMeterRect(rect, '#8d78ff', 0.52);
+      }
+
       for (const edge of geometry.edges) {
         const from = geometry.nodeMap.get(edge.from);
         const to = geometry.nodeMap.get(edge.to);
         if (!from || !to) continue;
         const reserved = reservedEdgeIds.has(edge.id);
+        if (!reserved) continue;
         const moduleBoundary = isModuleBoundaryEdge(edge);
         drawLine(
           from,
@@ -1171,14 +1229,11 @@ function CanvasLiteMap({
       if (geometry.nodes.length <= 2500) {
         context.globalAlpha = 0.95;
         for (const node of geometry.nodes) {
+          if (node.type === 'storage' || node.type === 'intersection' || node.type === 'aisle') {
+            continue;
+          }
           const point = project(node);
-          if (node.type === 'storage') {
-            context.fillStyle = '#9d82cc';
-            context.fillRect(point.x - 1.6, point.y - 1.6, 3.2, 3.2);
-          } else if (node.type === 'intersection') {
-            context.fillStyle = '#c8a53a';
-            context.fillRect(point.x - 2.5, point.y - 2.5, 5, 5);
-          } else if (node.type === 'inbound' || node.type === 'outbound') {
+          if (node.type === 'inbound' || node.type === 'outbound') {
             context.fillStyle = node.type === 'inbound' ? FLOW_VISUAL_COLORS.inbound.hex : FLOW_VISUAL_COLORS.outbound.hex;
             context.fillRect(point.x - 2.7, point.y - 2.7, 5.4, 5.4);
           } else if (node.type === 'lift-blackbox') {

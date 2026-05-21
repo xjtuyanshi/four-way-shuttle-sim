@@ -884,6 +884,38 @@ input[type="range"] {
   box-shadow: 0 0 12px rgba(79, 143, 203, 0.18);
 }
 
+.map-area,
+.map-storage-column {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+}
+
+.map-area {
+  z-index: 0;
+  border-radius: 3px;
+}
+
+.map-area.sideAisle,
+.map-area.crossAisle,
+.map-area.parkingConnector {
+  background: rgba(216, 178, 77, 0.16);
+}
+
+.map-area.inboundConnector {
+  background: rgba(var(--flow-inbound-rgb), 0.14);
+}
+
+.map-area.outboundConnector {
+  background: rgba(var(--flow-outbound-rgb), 0.16);
+}
+
+.map-storage-column {
+  z-index: 1;
+  border-radius: 999px;
+  background: rgba(141, 120, 255, 0.48);
+}
+
 .map-node {
   position: absolute;
   z-index: 2;
