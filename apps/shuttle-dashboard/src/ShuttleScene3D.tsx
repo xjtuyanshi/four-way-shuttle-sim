@@ -3,6 +3,7 @@ import * as THREE from 'three';
 
 import type { LoadStateRecord, ShuttleScenario, ShuttleSimState, VehicleState } from '@four-way-shuttle/schemas';
 import { summarizeScenarioStaticSceneContract, type ShuttleStaticSceneContract } from '@four-way-shuttle/sim-core/static-scene';
+import { flowRgba, FLOW_VISUAL_COLORS, resolveLoadFlowRole, resolveVehicleLoadFlowRole, resolveVehicleTaskFlowRole, type LoadFlowRole } from './flowColors.js';
 
 type ShuttleNode = ShuttleScenario['layout']['nodes'][number];
 type ShuttleEdge = ShuttleScenario['layout']['edges'][number];
@@ -803,9 +804,9 @@ function trackBedEndpoints(track: ShuttleStaticSceneTrackBed): [{ x: number; z: 
 function nodeColor(node: ShuttleNode): number {
   switch (node.type) {
     case 'inbound':
-      return 0x4f8fcb;
+      return FLOW_VISUAL_COLORS.inbound.three;
     case 'outbound':
-      return 0x6da8d6;
+      return FLOW_VISUAL_COLORS.outbound.three;
     case 'storage':
       return 0x4fc190;
     case 'parking':
@@ -819,7 +820,7 @@ function nodeColor(node: ShuttleNode): number {
   }
 }
 
-function createPalletLoadObject(widthM: number, depthM: number, crateColor = 0x8d969c): THREE.Group {
+function createPalletLoadObject(widthM: number, depthM: number, crateColor = FLOW_VISUAL_COLORS.inbound.three): THREE.Group {
   const group = new THREE.Group();
 
   const pallet = new THREE.Mesh(new THREE.BoxGeometry(widthM, 0.08, depthM), material(0x6f777d, 0.82, 0.08));
@@ -829,6 +830,7 @@ function createPalletLoadObject(widthM: number, depthM: number, crateColor = 0x8
   group.add(pallet);
 
   const crateMaterial = material(crateColor, 0.68, 0.02);
+  group.userData.crateMaterial = crateMaterial;
   const crateGeometry = new THREE.BoxGeometry(widthM * 0.42, 0.28, depthM * 0.4);
   for (const [x, z] of [
     [-widthM * 0.22, -depthM * 0.18],
@@ -843,6 +845,11 @@ function createPalletLoadObject(widthM: number, depthM: number, crateColor = 0x8
   }
 
   return group;
+}
+
+function setPalletLoadColor(loadMesh: THREE.Group, crateColor: number): void {
+  const crateMaterial = loadMesh.userData.crateMaterial as THREE.MeshStandardMaterial | undefined;
+  crateMaterial?.color.setHex(crateColor);
 }
 
 function createStorageRackField(field: StorageField): THREE.Group {
@@ -1030,7 +1037,7 @@ function createLiftBlackboxPort(node: ShuttleNode, pad?: ShuttleStaticScenePad):
   group.position.set(node.x, 0, node.z);
 
   const isInbound = node.liftKind === 'inbound';
-  const roleAccent = isInbound ? 0x4f8fcb : 0x6da8d6;
+  const roleAccent = isInbound ? FLOW_VISUAL_COLORS.inbound.three : FLOW_VISUAL_COLORS.outbound.three;
   const padLengthX = pad?.lengthXM ?? 1.5;
   const padLengthZ = pad?.lengthZM ?? 1.15;
 
@@ -1153,20 +1160,21 @@ function createTextBillboard(
   return sprite;
 }
 
-function createTaskAssignmentMarker(node: ShuttleNode, label: string): THREE.Group {
+function createTaskAssignmentMarker(node: ShuttleNode, label: string, role: LoadFlowRole): THREE.Group {
   const group = new THREE.Group();
   group.position.set(node.x, 0, node.z);
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(0.52, 0.66, 40),
-    new THREE.MeshBasicMaterial({ color: 0x82c7ff, transparent: true, opacity: 0.88, side: THREE.DoubleSide, depthTest: false, depthWrite: false })
+    new THREE.MeshBasicMaterial({ color: FLOW_VISUAL_COLORS[role].three, transparent: true, opacity: 0.88, side: THREE.DoubleSide, depthTest: false, depthWrite: false })
   );
   ring.rotation.x = -Math.PI / 2;
   ring.position.y = 0.42;
   ring.renderOrder = 150;
   group.add(ring);
   group.add(createTextBillboard(label, {
-    background: 'rgba(47, 120, 212, 0.92)',
-    border: 'rgba(192, 226, 255, 0.96)',
+    background: flowRgba(role, 0.92),
+    foreground: role === 'outbound' ? '#15120b' : '#f8fbff',
+    border: role === 'outbound' ? 'rgba(255, 238, 180, 0.96)' : 'rgba(192, 226, 255, 0.96)',
     scale: { x: 0.82, y: 0.58 },
     y: 1.04
   }));
@@ -1289,7 +1297,7 @@ function vehicleUserData(group: THREE.Group): VehicleObjectUserData {
   return group.userData as VehicleObjectUserData;
 }
 
-function applyVehicleState(group: THREE.Group, vehicle: VehicleState, layers: ShuttleSceneLayers, selected: boolean): void {
+function applyVehicleState(group: THREE.Group, state: ShuttleSimState, vehicle: VehicleState, layers: ShuttleSceneLayers, selected: boolean): void {
   const data = vehicleUserData(group);
   const labelText = vehicleDisplayNumber(vehicle.id);
   if (data.labelText !== labelText) {
@@ -1313,6 +1321,7 @@ function applyVehicleState(group: THREE.Group, vehicle: VehicleState, layers: Sh
   data.targetPosition.set(vehicle.x, 0, vehicle.z);
   data.targetYaw = vehicle.yaw;
   data.loadedMesh.visible = vehicle.loaded;
+  setPalletLoadColor(data.loadedMesh, FLOW_VISUAL_COLORS[resolveVehicleLoadFlowRole(state, vehicle)].three);
   data.safetyRing.visible = layers.physics;
   data.ringMaterial.opacity = selected ? 0.46 : 0.22;
 
@@ -1344,18 +1353,19 @@ function applyVehicleState(group: THREE.Group, vehicle: VehicleState, layers: Sh
   data.ringMaterial.color.setHex(0x8d78ff);
 }
 
-function vehicleRouteColor(vehicle: VehicleState): number {
-  if (vehicle.loaded) return 0x4fc190;
-  if (vehicle.taskId) return 0x56a9c9;
+function vehicleRouteColor(state: ShuttleSimState, vehicle: VehicleState): number {
+  const taskRole = resolveVehicleTaskFlowRole(state, vehicle);
+  if (taskRole) return FLOW_VISUAL_COLORS[taskRole].three;
   return 0x8d78ff;
 }
 
-function createLoadMesh(load: LoadStateRecord, node: ShuttleNode, index: number): THREE.Group {
+function createLoadMesh(state: ShuttleSimState, load: LoadStateRecord, node: ShuttleNode, index: number): THREE.Group {
   const conveyorLoad = node.type === 'inbound' || node.type === 'outbound' || node.type === 'lift-blackbox';
+  const loadRole = resolveLoadFlowRole(state, load);
   const loadMesh = createPalletLoadObject(
     node.type === 'storage' ? 1.04 : conveyorLoad ? 0.68 : 0.78,
     node.type === 'storage' ? 0.88 : conveyorLoad ? 0.58 : 0.62,
-    load.state === 'waiting' ? 0xb98a4a : 0x8d969c
+    FLOW_VISUAL_COLORS[loadRole].three
   );
   const y = node.type === 'storage' ? 0.13 : conveyorLoad ? 0.3 : 0.18;
   loadMesh.position.set(node.x, y, node.z);
@@ -1368,7 +1378,7 @@ function loadOverlayKey(state: ShuttleSimState | null, layers: ShuttleSceneLayer
   if (!layers.loads) return 'off';
   return (state?.loads ?? [])
     .filter((load) => load.nodeId && load.state !== 'carried')
-    .map((load) => `${load.id}:${load.state}:${load.nodeId ?? ''}:${load.vehicleId ?? ''}`)
+    .map((load) => `${load.id}:${load.state}:${load.nodeId ?? ''}:${load.vehicleId ?? ''}:${state ? resolveLoadFlowRole(state, load) : 'inbound'}`)
     .sort()
     .join('|');
 }
@@ -1404,7 +1414,7 @@ function routeOverlayKey(
     .join('|');
   const pickupAssignmentKey = (state?.tasks ?? [])
     .filter((task) => task.vehicleId && task.state !== 'completed' && task.state !== 'failed')
-    .map((task) => `${task.id}:${task.vehicleId}:${task.state}:${task.pickupNodeId}:${task.dropoffNodeId}`)
+    .map((task) => `${task.id}:${task.kind}:${task.vehicleId}:${task.state}:${task.pickupNodeId}:${task.dropoffNodeId}`)
     .sort()
     .join('|');
   return `${routeKey}::selected:${selectedVehicleId ?? ''}::tasks:${pickupAssignmentKey}`;
@@ -1514,7 +1524,9 @@ function updateDynamicScene(
       runtime.vehicleObjects.set(vehicle.id, object);
       runtime.vehicleGroup.add(object);
     }
-    applyVehicleState(object, vehicle, layers, selectedVehicleId === vehicle.id);
+    if (state) {
+      applyVehicleState(object, state, vehicle, layers, selectedVehicleId === vehicle.id);
+    }
   }
 
   const nextLoadOverlayKey = loadOverlayKey(state, layers);
@@ -1522,12 +1534,12 @@ function updateDynamicScene(
     runtime.loadOverlayKey = nextLoadOverlayKey;
     clearGroup(runtime.loadGroup);
   }
-  if (layers.loads && runtime.loadGroup.children.length === 0) {
-    const loads = (state?.loads ?? []).filter((load) => load.nodeId && load.state !== 'carried');
+  if (layers.loads && state && runtime.loadGroup.children.length === 0) {
+    const loads = state.loads.filter((load) => load.nodeId && load.state !== 'carried');
     loads.forEach((load, index) => {
       const node = load.nodeId ? runtime.nodeById.get(load.nodeId) : null;
       if (node) {
-        runtime.loadGroup.add(createLoadMesh(load, node, index));
+        runtime.loadGroup.add(createLoadMesh(state, load, node, index));
       }
     });
   }
@@ -1588,12 +1600,12 @@ function updateDynamicScene(
       if (!vehicle || !pickupNode || vehicle.loaded || task.state === 'completed' || task.state === 'failed') {
         continue;
       }
-      runtime.routeGroup.add(createTaskAssignmentMarker(pickupNode, vehicleDisplayNumber(vehicle.id)));
+      runtime.routeGroup.add(createTaskAssignmentMarker(pickupNode, vehicleDisplayNumber(vehicle.id), task.kind));
     }
 
     for (const vehicle of state?.vehicles ?? []) {
       const selected = selectedVehicleId === vehicle.id;
-      const routeColor = vehicleRouteColor(vehicle);
+      const routeColor = state ? vehicleRouteColor(state, vehicle) : 0x8d78ff;
       const plannedRouteNodes = remainingRouteNodeIds(vehicle, vehicle.plannedRouteNodeIds);
       const plannedRoutePoints = routePointsForNodeIds(runtime, vehicle, plannedRouteNodes);
       if (plannedRoutePoints.length >= 2) {
@@ -1687,7 +1699,7 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
     const isConveyor = track.category === 'inboundConnector' || track.category === 'outboundConnector';
     const segment = isConveyor
       ? createConveyorTrackSegment(from, to, {
-          accentColor: track.category === 'inboundConnector' ? 0x4f8fcb : 0x6da8d6,
+          accentColor: track.category === 'inboundConnector' ? FLOW_VISUAL_COLORS.inbound.three : FLOW_VISUAL_COLORS.outbound.three,
           beltMaterial: conveyorBeltMaterial,
           frameMaterial: conveyorFrameMaterial,
           rollerMaterial: conveyorRollerMaterial
@@ -1719,11 +1731,11 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
       continue;
     }
     if (node.type === 'inbound') {
-      runtime.staticGroup.add(createConveyor(node, 0x4f8fcb, conveyorBeltMaterial, conveyorFrameMaterial));
+      runtime.staticGroup.add(createConveyor(node, FLOW_VISUAL_COLORS.inbound.three, conveyorBeltMaterial, conveyorFrameMaterial));
       continue;
     }
     if (node.type === 'outbound') {
-      runtime.staticGroup.add(createConveyor(node, 0x6da8d6, conveyorBeltMaterial, conveyorFrameMaterial));
+      runtime.staticGroup.add(createConveyor(node, FLOW_VISUAL_COLORS.outbound.three, conveyorBeltMaterial, conveyorFrameMaterial));
       continue;
     }
     if (node.type === 'lift-blackbox') {

@@ -19,6 +19,7 @@ import {
   resolveScene3DVisualState,
   resolveScene3DVisualStaticScene
 } from './ShuttleScene3D.js';
+import { FLOW_VISUAL_COLORS, resolveLoadFlowRole, resolveVehicleLoadFlowRole } from './flowColors.js';
 
 function vehicle(overrides: Partial<VehicleState> & { id: string }): VehicleState {
   const { id, ...rest } = overrides;
@@ -139,6 +140,84 @@ describe('dashboard stream reducers', () => {
     expect(next?.simTimeSec).toBe(22);
     expect(next?.kpis.totalPph).toBe(120);
     expect(next?.kpis.reservationConflictCount).toBe(4);
+  });
+});
+
+describe('dashboard flow colors', () => {
+  it('keeps active outbound loads orange while they are still stored or carried', () => {
+    const outboundState = state({
+      vehicles: [
+        vehicle({ id: 'SH-01', loaded: true, taskId: 'task-outbound-01', currentNodeId: 'storage-r01-c01' })
+      ],
+      tasks: [
+        {
+          id: 'task-outbound-01',
+          kind: 'outbound',
+          state: 'in-progress',
+          createdAtSec: 0,
+          assignedAtSec: 1,
+          startedAtSec: 2,
+          completedAtSec: null,
+          pickupNodeId: 'storage-r01-c01',
+          dropoffNodeId: 'outbound-lift-top-01',
+          loadId: 'load-outbound-01',
+          vehicleId: 'SH-01',
+          replanCount: 0,
+          waitReason: null
+        }
+      ],
+      loads: [
+        {
+          id: 'load-outbound-01',
+          state: 'carried',
+          nodeId: null,
+          vehicleId: 'SH-01',
+          weightKg: 100
+        }
+      ]
+    });
+
+    expect(resolveLoadFlowRole(outboundState, outboundState.loads[0]!)).toBe('outbound');
+    expect(resolveVehicleLoadFlowRole(outboundState, outboundState.vehicles[0]!)).toBe('outbound');
+    expect(FLOW_VISUAL_COLORS.outbound.hex).toBe('#e2b84b');
+  });
+
+  it('keeps inventory inbound-colored until an active outbound task claims it', () => {
+    const storedState = state({
+      loads: [
+        {
+          id: 'load-stored-01',
+          state: 'stored',
+          nodeId: 'storage-r01-c01',
+          vehicleId: null,
+          weightKg: 100
+        }
+      ]
+    });
+
+    const claimedState = state({
+      tasks: [
+        {
+          id: 'task-outbound-02',
+          kind: 'outbound',
+          state: 'assigned',
+          createdAtSec: 0,
+          assignedAtSec: 1,
+          startedAtSec: null,
+          completedAtSec: null,
+          pickupNodeId: 'storage-r01-c01',
+          dropoffNodeId: 'outbound-lift-top-01',
+          loadId: 'load-stored-01',
+          vehicleId: 'SH-01',
+          replanCount: 0,
+          waitReason: null
+        }
+      ],
+      loads: storedState.loads
+    });
+
+    expect(resolveLoadFlowRole(storedState, storedState.loads[0]!)).toBe('inbound');
+    expect(resolveLoadFlowRole(claimedState, claimedState.loads[0]!)).toBe('outbound');
   });
 });
 

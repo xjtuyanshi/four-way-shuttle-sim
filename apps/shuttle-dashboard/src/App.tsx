@@ -13,6 +13,7 @@ import {
   type ShuttleStaticSceneCalibrationReadiness
 } from '@four-way-shuttle/sim-core/static-scene';
 import type { ShuttleSceneCameraView, ShuttleSceneRendererInfo } from './ShuttleScene3D.js';
+import { flowRgba, resolveLoadFlowRole, resolveVehicleTaskFlowRole, FLOW_VISUAL_COLORS } from './flowColors.js';
 
 const ShuttleScene3D = lazy(() =>
   import('./ShuttleScene3D.js').then((module) => ({ default: module.ShuttleScene3D }))
@@ -980,13 +981,16 @@ function AuthoritativeMap({
           ...routeSegments(vehicle, remainingRouteNodeIds(vehicle, vehicle.plannedRouteNodeIds), 'planned'),
           ...routeSegments(vehicle, vehicle.localRouteNodeIds, 'local')
         ])
-        .map((segment) => (
-          <span
-            className={`map-route ${segment.kind} ${segment.vehicle.loaded ? 'loaded' : 'empty'} ${segment.vehicle.taskId ? 'tasked' : 'taskless'} ${selectedVehicleId === segment.vehicle.id ? 'selected' : ''}`}
-            key={segment.key}
-            style={geometry.routeSegmentStyle(segment.from, segment.to)}
-          />
-        ))}
+        .map((segment) => {
+          const taskRole = state ? resolveVehicleTaskFlowRole(state, segment.vehicle) : null;
+          return (
+            <span
+              className={`map-route ${segment.kind} ${segment.vehicle.loaded ? 'loaded' : 'empty'} ${segment.vehicle.taskId ? 'tasked' : 'taskless'} ${taskRole ? `flow-${taskRole}` : ''} ${selectedVehicleId === segment.vehicle.id ? 'selected' : ''}`}
+              key={segment.key}
+              style={geometry.routeSegmentStyle(segment.from, segment.to)}
+            />
+          );
+        })}
       {geometry.nodes.map((node) => (
         <span className={`map-node ${node.type}`} key={node.id} style={geometry.project(node)}>
           {node.type === 'storage' ? '' : node.id.replace('inbound-lift-', 'in-').replace('outbound-lift-', 'out-')}
@@ -994,7 +998,7 @@ function AuthoritativeMap({
       ))}
       {layers.loads && loads.map((load) => {
         const node = load.nodeId ? geometry.nodeMap.get(load.nodeId) : null;
-        return node ? <span className={`map-load ${load.state}`} key={load.id} style={geometry.project(node)} /> : null;
+        return node ? <span className={`map-load ${load.state} flow-${resolveLoadFlowRole(state!, load)}`} key={load.id} style={geometry.project(node)} /> : null;
       })}
       {activeTasks.map((task) => {
         const vehicle = task.vehicleId ? vehicleById.get(task.vehicleId) : null;
@@ -1003,7 +1007,7 @@ function AuthoritativeMap({
           return null;
         }
         return (
-          <span className="map-task-badge pickup" key={task.id} style={geometry.project(pickupNode)}>
+          <span className={`map-task-badge pickup flow-${task.kind}`} key={task.id} style={geometry.project(pickupNode)}>
             {vehicleDisplayNumber(vehicle.id)}
           </span>
         );
@@ -1175,10 +1179,10 @@ function CanvasLiteMap({
             context.fillStyle = '#c8a53a';
             context.fillRect(point.x - 2.5, point.y - 2.5, 5, 5);
           } else if (node.type === 'inbound' || node.type === 'outbound') {
-            context.fillStyle = node.type === 'inbound' ? '#4f8fcb' : '#6da8d6';
+            context.fillStyle = node.type === 'inbound' ? FLOW_VISUAL_COLORS.inbound.hex : FLOW_VISUAL_COLORS.outbound.hex;
             context.fillRect(point.x - 2.7, point.y - 2.7, 5.4, 5.4);
           } else if (node.type === 'lift-blackbox') {
-            context.fillStyle = node.liftKind === 'inbound' ? '#1f7f6b' : '#346da3';
+            context.fillStyle = node.liftKind === 'inbound' ? FLOW_VISUAL_COLORS.inbound.hex : FLOW_VISUAL_COLORS.outbound.hex;
             context.strokeStyle = '#f7fbff';
             context.lineWidth = 1.2;
             context.beginPath();
@@ -1190,13 +1194,14 @@ function CanvasLiteMap({
         context.globalAlpha = 1;
       }
 
-      if (layers.loads) {
-        for (const load of state?.loads ?? []) {
+      if (layers.loads && state) {
+        for (const load of state.loads) {
           if (!load.nodeId || load.state === 'carried') continue;
           const node = geometry.nodeMap.get(load.nodeId);
           if (!node) continue;
           const point = project(node);
-          context.fillStyle = load.state === 'waiting' ? '#d09a3a' : '#8b96a0';
+          const loadRole = resolveLoadFlowRole(state, load);
+          context.fillStyle = flowRgba(loadRole, 0.88);
           context.strokeStyle = '#ffffff';
           context.lineWidth = 1.2;
           context.beginPath();
@@ -1210,7 +1215,8 @@ function CanvasLiteMap({
         for (const vehicle of state?.vehicles ?? []) {
           const selected = selectedVehicleId === vehicle.id;
           const plannedNodes = remainingRouteNodeIds(vehicle, vehicle.plannedRouteNodeIds);
-          const color = vehicle.loaded ? '#2f9e6d' : vehicle.taskId ? '#1976d2' : '#7c5ed8';
+          const taskRole = state ? resolveVehicleTaskFlowRole(state, vehicle) : null;
+          const color = taskRole ? FLOW_VISUAL_COLORS[taskRole].hex : '#7c5ed8';
           drawRoute(vehicle, plannedNodes, color, selected ? 4.8 : 3, selected ? 0.98 : 0.76);
           drawRoute(vehicle, vehicle.localRouteNodeIds, '#d29b22', selected ? 5.5 : 4.2, selected ? 1 : 0.86);
         }
@@ -1223,7 +1229,7 @@ function CanvasLiteMap({
         const pickupNode = geometry.nodeMap.get(task.pickupNodeId);
         if (!vehicle || !pickupNode || vehicle.loaded) continue;
         const point = project(pickupNode);
-        context.fillStyle = '#1976d2';
+        context.fillStyle = flowRgba(task.kind, 0.92);
         context.strokeStyle = '#ffffff';
         context.lineWidth = 1.5;
         context.beginPath();

@@ -14,6 +14,10 @@
   --red: #e16f5d;
   --cyan: #62b6c8;
   --teal: #2f8c75;
+  --flow-inbound: #4f8fcb;
+  --flow-inbound-rgb: 79, 143, 203;
+  --flow-outbound: #e2b84b;
+  --flow-outbound-rgb: 226, 184, 75;
   font-family: Inter, "Avenir Next", "Segoe UI", sans-serif;
 }
 
@@ -772,11 +776,11 @@ input[type="range"] {
 }
 
 .route-legend .planned-empty {
-  background: #56a9c9;
+  background: var(--flow-inbound);
 }
 
 .route-legend .planned-loaded {
-  background: #4fc190;
+  background: var(--flow-outbound);
 }
 
 .route-legend .planned-taskless {
@@ -797,8 +801,8 @@ input[type="range"] {
 .route-legend .pickup {
   width: 13px;
   height: 13px;
-  border: 2px solid #82c7ff;
-  background: rgba(47, 120, 212, 0.8);
+  border: 2px solid rgba(var(--flow-outbound-rgb), 0.9);
+  background: rgba(var(--flow-outbound-rgb), 0.8);
 }
 
 .stream-placeholder {
@@ -926,8 +930,13 @@ input[type="range"] {
   width: 9px;
   height: 9px;
   border-radius: 3px;
-  border: 1px solid #e5c974;
-  background: rgba(226, 184, 75, 0.36);
+  border: 1px solid rgba(var(--flow-inbound-rgb), 0.88);
+  background: rgba(var(--flow-inbound-rgb), 0.42);
+}
+
+.map-load.flow-outbound {
+  border-color: rgba(var(--flow-outbound-rgb), 0.95);
+  background: rgba(var(--flow-outbound-rgb), 0.58);
 }
 
 .map-route {
@@ -941,7 +950,11 @@ input[type="range"] {
 }
 
 .map-route.planned.empty.tasked {
-  background: rgba(86, 169, 201, 0.68);
+  background: rgba(var(--flow-inbound-rgb), 0.68);
+}
+
+.map-route.planned.empty.tasked.flow-outbound {
+  background: rgba(var(--flow-outbound-rgb), 0.74);
 }
 
 .map-route.planned.empty.taskless {
@@ -949,7 +962,11 @@ input[type="range"] {
 }
 
 .map-route.planned.loaded {
-  background: rgba(79, 193, 144, 0.7);
+  background: rgba(var(--flow-inbound-rgb), 0.7);
+}
+
+.map-route.planned.loaded.flow-outbound {
+  background: rgba(var(--flow-outbound-rgb), 0.78);
 }
 
 .map-route.local {
@@ -978,6 +995,13 @@ input[type="range"] {
   font-size: 12px;
   font-weight: 900;
   box-shadow: 0 0 16px rgba(130, 199, 255, 0.34);
+}
+
+.map-task-badge.flow-outbound {
+  border-color: rgba(255, 238, 180, 0.96);
+  background: rgba(var(--flow-outbound-rgb), 0.92);
+  color: #15120b;
+  box-shadow: 0 0 16px rgba(var(--flow-outbound-rgb), 0.34);
 }
 
 .map-vehicle {
@@ -1158,7 +1182,9 @@ input[type="range"] {
 }
 
 .fifo-cell.outbound {
-  box-shadow: inset 0 -3px 0 rgba(86, 169, 201, 0.72);
+  border-color: rgba(var(--flow-outbound-rgb), 0.78);
+  background: rgba(var(--flow-outbound-rgb), 0.14);
+  box-shadow: inset 0 -3px 0 rgba(var(--flow-outbound-rgb), 0.78);
 }
 
 .fifo-reasons {
