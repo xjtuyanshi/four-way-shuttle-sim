@@ -44,6 +44,7 @@ const noProgressWarnSec = numberArg('--no-progress-warn', 35);
 const replanWarnCount = numberArg('--replan-warn', 8);
 const maxLocalRouteNodeCount = numberArg('--max-local-route-nodes', 4);
 const reverseRetreatWarnM = numberArg('--reverse-retreat-warn-m', 4);
+const collisionAvoidanceEnabled = !process.argv.includes('--no-avoidance');
 
 const scenario = createInboundMvpBaselineScenario({
   id: 'audit-agent-refresh-8-inbound',
@@ -51,7 +52,8 @@ const scenario = createInboundMvpBaselineScenario({
   timeStepSec: dtSec,
   durationSec: Math.max(durationSec, 1),
   trafficPolicy: {
-    sourceBufferCapacity: 4
+    sourceBufferCapacity: 4,
+    collisionAvoidanceEnabled
   }
 });
 
@@ -106,6 +108,7 @@ const finalState = sim.getState();
 auditEventLog(finalState, sim.getEventLog());
 const finalSnapshot = sim.createSnapshot();
 const utilization = utilizationAverages(finalState);
+const theoreticalCapacity = finalState.kpis.theoreticalCapacity ?? null;
 const report = {
   scenarioId: scenario.id,
   durationSec,
@@ -123,9 +126,15 @@ const report = {
     stateHash: hashDeterministicReplayState(finalSnapshot)
   },
   summary: {
+    collisionAvoidanceEnabled,
     completedInbound: finalState.kpis.completedInbound,
     inboundPph: finalState.kpis.inboundPph,
     totalPph: finalState.kpis.totalPph,
+    theoreticalFleetPph: theoreticalCapacity?.fleetPph ?? null,
+    theoreticalSingleShuttlePph: theoreticalCapacity?.singleShuttlePph ?? null,
+    theoreticalIdealCycleSec: theoreticalCapacity?.idealCycleSec ?? null,
+    inboundPphGapToTheory: theoreticalCapacity ? round(theoreticalCapacity.fleetPph - finalState.kpis.inboundPph) : null,
+    inboundPctOfTheory: theoreticalCapacity?.achievedInboundPct ?? null,
     activeTasks: finalState.kpis.activeTasks,
     queuedTasks: finalState.kpis.queuedTasks,
     deadlocks: finalState.kpis.deadlockCount,
@@ -678,6 +687,7 @@ function auditRouteDetour(current: ShuttleSimState, vehicle: VehicleState): void
     ? vehicle.plannedRouteNodeIds
     : vehicle.routeNodeIds.slice(Math.max(0, vehicle.routeIndex));
   if (route.length < 3) return;
+  if (isIntentionalPostDropoffColumnExit(vehicle, route)) return;
   const goalNodeId = route.at(-1);
   if (!goalNodeId) return;
   const plannedDistance = routeDistance(route);
@@ -697,6 +707,14 @@ function auditRouteDetour(current: ShuttleSimState, vehicle: VehicleState): void
       `ratio=${ratio.toFixed(2)} extraM=${extraM.toFixed(1)} route=${route.join('>')}`
     );
   }
+}
+
+function isIntentionalPostDropoffColumnExit(vehicle: VehicleState, route: string[]): boolean {
+  return vehicle.localRouteReason === 'post-dropoff-column-exit' &&
+    !vehicle.loaded &&
+    !vehicle.taskId &&
+    route.some((nodeId) => /^storage-r\d+-c\d+$/.test(nodeId)) &&
+    route.some((nodeId) => /^column-(top-b|middle|bottom-a)-c\d+$/.test(nodeId));
 }
 
 function auditRouteShape(

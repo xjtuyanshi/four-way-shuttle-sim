@@ -570,8 +570,10 @@ function liftQueueAccessNodeId(liftNodeId: string): string {
   return `${liftNodeId}-queue-access`;
 }
 
-function liftQueueNodeId(liftNodeId: string): string {
-  return `parking-${liftNodeId}-queue`;
+function liftQueueNodeId(liftNodeId: string, slotIndex = 1): string {
+  return slotIndex <= 1
+    ? `parking-${liftNodeId}-queue`
+    : `parking-${liftNodeId}-queue-${String(slotIndex).padStart(2, '0')}`;
 }
 
 function liftBufferParentNodeId(nodeId: string): { liftNodeId: string; kind: LiftKind; slotIndex: number } | null {
@@ -587,7 +589,18 @@ function liftBufferParentNodeId(nodeId: string): { liftNodeId: string; kind: Lif
 }
 
 function isTopLiftQueueParkingNodeId(nodeId: string): boolean {
-  return /^parking-lift-\d{2}-inbound-queue$/.test(nodeId);
+  return /^parking-lift-\d{2}-inbound-queue(?:-\d{2})?$/.test(nodeId);
+}
+
+function topLiftQueueParkingSlot(nodeId: string): { liftNodeId: string; slotIndex: number } | null {
+  const match = /^parking-(lift-\d{2}-inbound)-queue(?:-(\d{2}))?$/.exec(nodeId);
+  if (!match) {
+    return null;
+  }
+  return {
+    liftNodeId: match[1]!,
+    slotIndex: match[2] ? Number(match[2]) : 1
+  };
 }
 
 function createTopLiftColumnLayout(
@@ -668,7 +681,9 @@ function createTopLiftColumnLayout(
     bufferAccessId: string;
     bufferNodeIds: string[];
     queueAccessId: string | null;
+    queuePickupAccessId: string | null;
     queueNodeId: string | null;
+    queueNodeIds: string[];
   }> = [];
   const moduleSpineNodeIds: Record<'top-a' | 'top-b' | 'middle' | 'bottom-a' | 'bottom-b', string[]> = {
     'top-a': [],
@@ -720,17 +735,35 @@ function createTopLiftColumnLayout(
         const bufferAccessId = liftBufferAccessNodeId(id);
         const bufferNodeIds: string[] = [];
         const queueAccessId = port.kind === 'inbound' ? liftQueueAccessNodeId(id) : null;
+        const queuePickupAccessId = port.kind === 'inbound' ? `${id}-queue-pickup-access` : null;
         const queueNodeId = port.kind === 'inbound' ? liftQueueNodeId(id) : null;
+        const queueNodeIds = port.kind === 'inbound'
+          ? Array.from({ length: 3 }, (_, index) => liftQueueNodeId(id, index + 1))
+          : [];
         addNode({ id, type: 'lift-blackbox', liftKind: port.kind, x: port.x, y: 0, z: liftZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
         addNode({ id: throatId, type: 'intersection', x: port.x, y: 0, z: topLaneAZM, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
         const conveyorSideX = round(port.x + (port.kind === 'inbound' ? profile.liftPortSpacingXM : -profile.liftPortSpacingXM), 3);
         const conveyorPitchZ = round(Math.abs(topLaneAZM - liftZ) / Math.max(1, profile.liftBufferCapacity), 3);
         addNode({ id: bufferAccessId, type: 'intersection', x: conveyorSideX, y: 0, z: topLaneAZM, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
-        if (queueAccessId && queueNodeId) {
+        if (queueAccessId && queuePickupAccessId && queueNodeId) {
           const queueX = round(conveyorSideX + profile.liftPortSpacingXM, 3);
-          const queueZ = round(liftZ + conveyorPitchZ * (profile.liftBufferCapacity - 1), 3);
+          const pickupZ = round(liftZ + conveyorPitchZ * (profile.liftBufferCapacity - 1), 3);
+          const queueZ = round(liftZ + conveyorPitchZ * Math.max(0, profile.liftBufferCapacity - 2), 3);
           addNode({ id: queueAccessId, type: 'intersection', x: queueX, y: 0, z: topLaneAZM, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
-          addNode({ id: queueNodeId, type: 'parking', x: queueX, y: 0, z: queueZ, noStop: false, noParking: false, capacity: 1, allowedDirections: [] });
+          addNode({ id: queuePickupAccessId, type: 'intersection', x: queueX, y: 0, z: pickupZ, noStop: true, noParking: true, capacity: 1, allowedDirections: [] });
+          for (let queueIndex = 0; queueIndex < queueNodeIds.length; queueIndex += 1) {
+            addNode({
+              id: queueNodeIds[queueIndex]!,
+              type: 'parking',
+              x: round(queueX + profile.liftPortSpacingXM * queueIndex, 3),
+              y: 0,
+              z: queueZ,
+              noStop: false,
+              noParking: queueIndex > 0,
+              capacity: 1,
+              allowedDirections: []
+            });
+          }
         }
         for (let bufferIndex = 1; bufferIndex <= profile.liftBufferCapacity; bufferIndex += 1) {
           const bufferId = liftBufferNodeId(id, bufferIndex);
@@ -747,7 +780,7 @@ function createTopLiftColumnLayout(
             allowedDirections: []
           });
         }
-        liftNodes.push({ id, x: port.x, z: liftZ, kind: port.kind, throatId, bufferAccessId, bufferNodeIds, queueAccessId, queueNodeId });
+        liftNodes.push({ id, x: port.x, z: liftZ, kind: port.kind, throatId, bufferAccessId, bufferNodeIds, queueAccessId, queuePickupAccessId, queueNodeId, queueNodeIds });
       }
     }
   }
@@ -850,10 +883,19 @@ function createTopLiftColumnLayout(
     if (pickupBufferNodeId) {
       addEdge(`${lift.bufferAccessId}-${pickupBufferNodeId}`, lift.bufferAccessId, pickupBufferNodeId, `${lift.id}-conveyor-pickup`);
     }
-    if (lift.queueAccessId && lift.queueNodeId && pickupBufferNodeId) {
+    if (lift.queueAccessId && lift.queuePickupAccessId && lift.queueNodeId && pickupBufferNodeId) {
       addEdge(`${lift.bufferAccessId}-${lift.queueAccessId}`, lift.bufferAccessId, lift.queueAccessId, `${lift.id}-standby-queue-access`);
       addEdge(`${lift.queueAccessId}-${lift.queueNodeId}`, lift.queueAccessId, lift.queueNodeId, `${lift.id}-standby-queue`);
-      addEdge(`${lift.queueNodeId}-${pickupBufferNodeId}`, lift.queueNodeId, pickupBufferNodeId, `${lift.id}-standby-queue-pickup`);
+      addEdge(`${lift.queueNodeId}-${lift.queuePickupAccessId}`, lift.queueNodeId, lift.queuePickupAccessId, `${lift.id}-standby-queue-pickup`);
+      addEdge(`${lift.queuePickupAccessId}-${pickupBufferNodeId}`, lift.queuePickupAccessId, pickupBufferNodeId, `${lift.id}-standby-queue-pickup`);
+      for (let queueIndex = 1; queueIndex < lift.queueNodeIds.length; queueIndex += 1) {
+        addEdge(
+          `${lift.queueNodeIds[queueIndex - 1]}-${lift.queueNodeIds[queueIndex]}`,
+          lift.queueNodeIds[queueIndex - 1]!,
+          lift.queueNodeIds[queueIndex]!,
+          `${lift.id}-standby-queue-tail-${String(queueIndex).padStart(2, '0')}`
+        );
+      }
     }
     let previousBufferNodeId: string | null = null;
     for (const bufferNodeId of lift.bufferNodeIds) {
@@ -2604,6 +2646,61 @@ export class ShuttleSimCore {
       return task.pickupNodeId;
     }
     return this.topLiftInboundQueueNodeIdForTask(task) ?? task.pickupNodeId;
+  }
+
+  private inboundPickupClearanceRouteActive(vehicle: MutableVehicle, task: TaskStateRecord): boolean {
+    const queueNodeId = this.topLiftInboundQueueNodeIdForTask(task);
+    return task.kind === 'inbound' &&
+      queueNodeId !== null &&
+      this.inboundTaskHasEarlierPickupTask(task) &&
+      vehicle.routeNodeIds[vehicle.routeIndex] === vehicle.currentNodeId &&
+      vehicle.routeNodeIds.at(-1) === queueNodeId &&
+      vehicle.routeNodeIds[vehicle.routeIndex + 1] !== undefined;
+  }
+
+  private rerouteInboundPickupVehicleBehindEarlierTask(vehicle: MutableVehicle, task: TaskStateRecord): boolean {
+    if (
+      task.kind !== 'inbound' ||
+      vehicle.currentNodeId !== task.pickupNodeId ||
+      !this.inboundTaskHasEarlierPickupTask(task)
+    ) {
+      return false;
+    }
+    const queueNodeId = this.topLiftInboundQueueNodeIdForTask(task);
+    if (!queueNodeId || queueNodeId === vehicle.currentNodeId) {
+      return false;
+    }
+    const route = this.shortestPath(vehicle.currentNodeId, queueNodeId);
+    const nextNodeId = route[1] ?? null;
+    if (!nextNodeId) {
+      return false;
+    }
+    const block = this.collisionAvoidanceEnabled()
+      ? this.agentRefreshEnabled()
+        ? this.agentRefreshMoveBlocker(vehicle, nextNodeId)
+        : this.agentMinimalEnabled()
+          ? this.agentMinimalMoveBlocker(vehicle, nextNodeId)
+          : this.agentMoveBlocker(vehicle, nextNodeId)
+      : null;
+    if (block) {
+      return false;
+    }
+    vehicle.routeNodeIds = route;
+    vehicle.routeIndex = 0;
+    vehicle.targetNodeId = nextNodeId;
+    vehicle.state = vehicle.taskId ? 'assigned' : 'returning';
+    vehicle.waitReason = null;
+    vehicle.blockingReservationId = null;
+    vehicle.blockingVehicleId = null;
+    vehicle.waitingSinceSec = null;
+    vehicle.plannedGoalNodeId = queueNodeId;
+    vehicle.plannedRouteNodeIds = route;
+    vehicle.localRouteNodeIds = [];
+    vehicle.localRouteReason = null;
+    vehicle.yieldHoldUntilSec = null;
+    vehicle.yieldHoldNodeId = null;
+    this.logAgentReroute(vehicle, task, task.pickupNodeId, route, 'inbound-pickup-clears-earlier-load', { countTaskReplan: false });
+    return true;
   }
 
   private waitForInboundPickupLoad(vehicle: MutableVehicle, task: TaskStateRecord, dtSec: number): void {
@@ -4390,9 +4487,9 @@ export class ShuttleSimCore {
   private inboundStorageExitNodeCandidates(storageNodeId: string): string[] {
     if (this.topLiftColumnLayoutEnabled()) {
       return [
-        this.storageSideNodeId(storageNodeId, 'left'),
+        this.topLiftNearestStorageColumnAccessNodeId(storageNodeId),
         this.storageSideNodeId(storageNodeId, 'right'),
-        this.nearestStorageSideNodeId(storageNodeId)
+        this.storageSideNodeId(storageNodeId, 'left')
       ].filter((nodeId, index, nodeIds): nodeId is string =>
         nodeId !== null && nodeIds.indexOf(nodeId) === index
       );
@@ -4414,7 +4511,7 @@ export class ShuttleSimCore {
       return false;
     }
 
-    const postDropoffExitRoute = this.postDropoffColumnExitRoute(vehicle.currentNodeId);
+    const postDropoffExitRoute = this.postDropoffColumnExitRoute(vehicle);
     const route = postDropoffExitRoute
       ? this.extendPostDropoffExitRouteToStandby(vehicle, postDropoffExitRoute)
       : this.routeToInboundStandby(vehicle);
@@ -4497,20 +4594,41 @@ export class ShuttleSimCore {
     return prefix.length >= 2 ? prefix : [];
   }
 
-  private postDropoffColumnExitRoute(fromNodeId: string): string[] | null {
+  private postDropoffColumnExitRoute(vehicle: MutableVehicle): string[] | null {
+    const fromNodeId = vehicle.currentNodeId;
     if (!this.topLiftColumnLayoutEnabled() || !this.isStorageNode(fromNodeId)) {
       return null;
     }
-    for (const exitNodeId of this.inboundStorageExitNodeCandidates(fromNodeId)) {
+    const exitNodeIds = [
+      this.storageSideNodeId(fromNodeId, 'left'),
+      ...this.inboundStorageExitNodeCandidates(fromNodeId)
+    ].filter((nodeId, index, nodeIds): nodeId is string =>
+      nodeId !== null && nodeIds.indexOf(nodeId) === index
+    );
+    for (const exitNodeId of exitNodeIds) {
       if (exitNodeId === fromNodeId) {
         continue;
       }
       const route = this.topLiftDirectStorageColumnExitRoute(fromNodeId, exitNodeId);
-      if (route) {
+      if (route && this.postDropoffColumnExitRouteClear(vehicle, route)) {
         return route;
       }
     }
     return null;
+  }
+
+  private postDropoffColumnExitRouteClear(vehicle: MutableVehicle, routeNodeIds: string[]): boolean {
+    for (const nodeId of routeNodeIds.slice(1)) {
+      const occupantId = this.currentNodeOccupancy.get(nodeId);
+      if (occupantId && occupantId !== vehicle.id) {
+        return false;
+      }
+      const claimantId = this.nodeClaimedByOtherVehicle(nodeId, vehicle.id);
+      if (claimantId) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private topLiftDirectStorageColumnExitRoute(fromNodeId: string, exitNodeId: string): string[] | null {
@@ -5525,19 +5643,25 @@ export class ShuttleSimCore {
 
     if (task && fromNodeId === task.pickupNodeId && !vehicle.loaded) {
       if (!this.inboundTaskLoadReadyAtPickup(task)) {
-        this.waitForInboundPickupLoad(vehicle, task, dtSec);
+        if (!this.inboundPickupClearanceRouteActive(vehicle, task)) {
+          if (this.rerouteInboundPickupVehicleBehindEarlierTask(vehicle, task)) {
+            return;
+          }
+          this.waitForInboundPickupLoad(vehicle, task, dtSec);
+          return;
+        }
+      } else {
+        task.state = 'in-progress';
+        task.startedAtSec ??= this.simTimeSec;
+        vehicle.state = 'lifting';
+        vehicle.speedMps = 0;
+        vehicle.phaseRemainingSec = this.scenario.physicsParams.liftTimeSec;
+        vehicle.waitReason = null;
+        vehicle.blockingReservationId = null;
+        vehicle.blockingVehicleId = null;
+        this.logEvent('lift-started', vehicle.id, task.id, task.loadId, fromNodeId, fromNodeId, 'pickup-aligned', this.vehiclePosition(vehicle), {});
         return;
       }
-      task.state = 'in-progress';
-      task.startedAtSec ??= this.simTimeSec;
-      vehicle.state = 'lifting';
-      vehicle.speedMps = 0;
-      vehicle.phaseRemainingSec = this.scenario.physicsParams.liftTimeSec;
-      vehicle.waitReason = null;
-      vehicle.blockingReservationId = null;
-      vehicle.blockingVehicleId = null;
-      this.logEvent('lift-started', vehicle.id, task.id, task.loadId, fromNodeId, fromNodeId, 'pickup-aligned', this.vehiclePosition(vehicle), {});
-      return;
     }
 
     if (task && fromNodeId === task.dropoffNodeId && vehicle.loaded) {
@@ -5585,7 +5709,10 @@ export class ShuttleSimCore {
     }
 
     const goalNodeId = this.agentGoalNodeId(vehicle, task);
-    if (!goalNodeId || goalNodeId === fromNodeId) {
+    const committedLocalRouteAtGoal = this.agentRefreshEnabled() && goalNodeId === fromNodeId
+      ? this.agentRefreshCommittedLocalRoute(vehicle, goalNodeId)
+      : null;
+    if (!goalNodeId || (goalNodeId === fromNodeId && !committedLocalRouteAtGoal)) {
       if (!task && this.topLiftColumnLayoutEnabled() && this.layoutNode(fromNodeId)?.noParking) {
         const standbyRoute = this.routeToInboundStandby(vehicle);
         if (standbyRoute && standbyRoute.length > 1 && !this.topLiftRouteTerminatesOnColumnAccess(standbyRoute)) {
@@ -5649,7 +5776,7 @@ export class ShuttleSimCore {
 
     let route: string[];
     try {
-      route = this.agentRouteToGoal(vehicle, task, goalNodeId);
+      route = committedLocalRouteAtGoal ?? this.agentRouteToGoal(vehicle, task, goalNodeId);
     } catch {
       this.agentSetWaiting(vehicle, goalNodeId, { reason: 'route-unavailable', blockingVehicleId: null }, dtSec);
       return;
@@ -5725,6 +5852,9 @@ export class ShuttleSimCore {
           : this.agentMoveBlocker(vehicle, toNodeId)
       : null;
     if (block) {
+      if (!task && this.rerouteTasklessStandbyAroundBlockedTarget(vehicle, toNodeId)) {
+        return;
+      }
       if (this.agentRefreshEnabled() && this.agentRefreshHandleMoveBlock(vehicle, toNodeId, block)) {
         return;
       }
@@ -5736,6 +5866,53 @@ export class ShuttleSimCore {
     }
 
     this.beginAgentSimpleLeg(vehicle, edge, toNodeId, task, dtSec);
+  }
+
+  private rerouteTasklessStandbyAroundBlockedTarget(vehicle: MutableVehicle, blockedTargetNodeId: string): boolean {
+    if (
+      !this.topLiftColumnLayoutEnabled() ||
+      vehicle.taskId ||
+      vehicle.loaded ||
+      vehicle.currentEdgeId !== null ||
+      vehicle.legRemainingM > 0
+    ) {
+      return false;
+    }
+    const blockedNode = this.layoutNode(blockedTargetNodeId);
+    if (!blockedNode || (blockedNode.type !== 'parking' && blockedNode.type !== 'storage')) {
+      return false;
+    }
+    const route = this.routeToInboundStandby(vehicle);
+    const nextNodeId = route?.[1] ?? null;
+    if (!route || !nextNodeId || nextNodeId === blockedTargetNodeId || this.topLiftRouteTerminatesOnColumnAccess(route)) {
+      return false;
+    }
+    const nextBlock = this.collisionAvoidanceEnabled()
+      ? this.agentRefreshEnabled()
+        ? this.agentRefreshMoveBlocker(vehicle, nextNodeId)
+        : this.agentMinimalEnabled()
+          ? this.agentMinimalMoveBlocker(vehicle, nextNodeId)
+          : this.agentMoveBlocker(vehicle, nextNodeId)
+      : null;
+    if (nextBlock) {
+      return false;
+    }
+
+    this.clearTasklessRouteReservations(vehicle);
+    vehicle.state = 'assigned';
+    vehicle.routeNodeIds = route;
+    vehicle.routeIndex = 0;
+    vehicle.targetNodeId = nextNodeId;
+    vehicle.plannedGoalNodeId = route.at(-1) ?? null;
+    vehicle.plannedRouteNodeIds = route;
+    vehicle.localRouteNodeIds = [];
+    vehicle.localRouteReason = null;
+    vehicle.waitReason = null;
+    vehicle.blockingReservationId = null;
+    vehicle.blockingVehicleId = null;
+    vehicle.waitingSinceSec = null;
+    this.logAgentReroute(vehicle, null, blockedTargetNodeId, route, 'standby-target-occupied-reroute', { countTaskReplan: false });
+    return true;
   }
 
   private agentRefreshMoveBlocker(
@@ -5785,6 +5962,9 @@ export class ShuttleSimCore {
     if (existingSession) {
       existingSession.updatedAtSec = this.simTimeSec;
       if (vehicle.id === existingSession.winnerVehicleId) {
+        if (this.agentRefreshMoveQueueYielderDeeper(blocker, existingSession, vehicle, blockedTargetNodeId)) {
+          return true;
+        }
         return false;
       }
       if (
@@ -6148,6 +6328,12 @@ export class ShuttleSimCore {
     if (requesterContinuationNodeId) {
       forbiddenNodeIds.add(requesterContinuationNodeId);
     }
+    for (const nodeId of this.agentRefreshLoadedRequesterProtectedRouteNodeIds(requester)) {
+      forbiddenNodeIds.add(nodeId);
+    }
+    for (const nodeId of this.agentRefreshLoadedTrafficProtectedRouteNodeIds(vehicle)) {
+      forbiddenNodeIds.add(nodeId);
+    }
 
     const candidate = this.neighbors(currentNodeId)
       .filter((neighbor) => !forbiddenNodeIds.has(neighbor.nodeId))
@@ -6175,7 +6361,26 @@ export class ShuttleSimCore {
       return false;
     }
 
-    const route = [currentNodeId, selectedCandidate.nodeId];
+    const queueContinuationNodeId = this.topLiftQueueSideYieldContinuationNodeId(
+      vehicle,
+      currentNodeId,
+      selectedCandidate.nodeId
+    );
+    const continuationNodeId = queueContinuationNodeId ?? this.topLiftEmptyStorageSideYieldContinuationNodeId(
+      vehicle,
+      currentNodeId,
+      selectedCandidate.nodeId,
+      blockedTargetNodeId
+    ) ?? this.topLiftEmptySideYieldContinuationNodeId(
+      vehicle,
+      currentNodeId,
+      selectedCandidate.nodeId,
+      blockedTargetNodeId
+    );
+    const route = continuationNodeId
+      ? [currentNodeId, selectedCandidate.nodeId, continuationNodeId]
+      : [currentNodeId, selectedCandidate.nodeId];
+    const yieldHoldNodeId = route[route.length - 1]!;
     vehicle.routeNodeIds = route;
     vehicle.routeIndex = 0;
     vehicle.targetNodeId = selectedCandidate.nodeId;
@@ -6185,19 +6390,224 @@ export class ShuttleSimCore {
     vehicle.blockingVehicleId = null;
     vehicle.waitingSinceSec = null;
     vehicle.yieldHoldUntilSec = round(this.simTimeSec + this.routeTravelEstimateSec(vehicle, route) + 2);
-    vehicle.yieldHoldNodeId = selectedCandidate.nodeId;
+    vehicle.yieldHoldNodeId = yieldHoldNodeId;
     vehicle.localRouteNodeIds = route;
     vehicle.localRouteReason = 'temporary-yield';
     if (session) {
       session.state = 'yielding';
       session.updatedAtSec = this.simTimeSec;
-      session.yielderPocketNodeId = selectedCandidate.nodeId;
+      session.yielderPocketNodeId = yieldHoldNodeId;
       session.yielderLocalRouteNodeIds = route;
       session.resumeNodeId = blockedTargetNodeId;
       session.clearancePolicy = 'immediate-next-move';
     }
     this.logAgentReroute(vehicle, this.taskForVehicle(vehicle), blockedTargetNodeId, route, 'agent-refresh-side-yield', { countTaskReplan: false });
     return true;
+  }
+
+  private agentRefreshLoadedRequesterProtectedRouteNodeIds(requester: MutableVehicle): string[] {
+    if (!this.topLiftColumnLayoutEnabled() || !requester.loaded) {
+      return [];
+    }
+    const task = this.taskForVehicle(requester);
+    if (task?.kind !== 'inbound') {
+      return [];
+    }
+
+    const route = requester.routeNodeIds.length > 1 ? requester.routeNodeIds : requester.plannedRouteNodeIds;
+    const currentIndex = route.indexOf(requester.currentNodeId, Math.max(0, requester.routeIndex));
+    const startIndex = currentIndex >= 0 ? currentIndex : Math.max(0, requester.routeIndex);
+    const dropoffIndex = route.indexOf(task.dropoffNodeId, startIndex);
+    const endIndex = dropoffIndex >= 0 ? dropoffIndex : Math.min(route.length - 1, startIndex + 6);
+    return route.slice(startIndex + 1, endIndex + 1);
+  }
+
+  private agentRefreshLoadedTrafficProtectedRouteNodeIds(yielder: MutableVehicle): string[] {
+    if (!this.topLiftColumnLayoutEnabled() || yielder.loaded) {
+      return [];
+    }
+
+    const protectedNodeIds: string[] = [];
+    const seen = new Set<string>();
+    for (const vehicle of this.vehicles) {
+      if (vehicle.id === yielder.id || !vehicle.loaded) {
+        continue;
+      }
+      for (const nodeId of this.agentRefreshLoadedRequesterProtectedRouteNodeIds(vehicle)) {
+        if (!seen.has(nodeId)) {
+          seen.add(nodeId);
+          protectedNodeIds.push(nodeId);
+        }
+      }
+    }
+    return protectedNodeIds;
+  }
+
+  private agentRefreshMoveQueueYielderDeeper(
+    yielder: MutableVehicle,
+    session: ConflictSessionV1,
+    winner: MutableVehicle,
+    resumeNodeId: string
+  ): boolean {
+    if (
+      !this.topLiftColumnLayoutEnabled() ||
+      session.winnerVehicleId !== winner.id ||
+      session.yielderVehicleId !== yielder.id ||
+      !isTopLiftColumnAccessNodeId(resumeNodeId) ||
+      yielder.loaded ||
+      yielder.currentEdgeId !== null ||
+      yielder.legRemainingM > 0 ||
+      yielder.phaseRemainingSec > 0
+    ) {
+      return false;
+    }
+
+    const currentSlot = topLiftQueueParkingSlot(yielder.currentNodeId);
+    if (!currentSlot) {
+      return false;
+    }
+    const deeperNodeId = liftQueueNodeId(currentSlot.liftNodeId, currentSlot.slotIndex + 1);
+    if (!this.layoutNode(deeperNodeId) || !isTopLiftQueueParkingNodeId(deeperNodeId)) {
+      return false;
+    }
+    if (
+      this.currentNodeOccupancy.get(deeperNodeId) ||
+      this.nodeClaimedByOtherVehicle(deeperNodeId, yielder.id) ||
+      !this.traffic.findEdge(yielder.currentNodeId, deeperNodeId) ||
+      !this.agentMinimalYieldFirstLegSafe(yielder, yielder.currentNodeId, deeperNodeId)
+    ) {
+      return false;
+    }
+
+    const route = [yielder.currentNodeId, deeperNodeId];
+    yielder.routeNodeIds = route;
+    yielder.routeIndex = 0;
+    yielder.targetNodeId = deeperNodeId;
+    yielder.state = yielder.taskId ? 'assigned' : 'returning';
+    yielder.waitReason = null;
+    yielder.blockingReservationId = null;
+    yielder.blockingVehicleId = null;
+    yielder.waitingSinceSec = null;
+    yielder.yieldHoldUntilSec = round(this.simTimeSec + this.routeTravelEstimateSec(yielder, route) + 8);
+    yielder.yieldHoldNodeId = deeperNodeId;
+    yielder.localRouteNodeIds = route;
+    yielder.localRouteReason = 'temporary-yield';
+    session.state = 'yielding';
+    session.updatedAtSec = this.simTimeSec;
+    session.yielderPocketNodeId = deeperNodeId;
+    session.yielderLocalRouteNodeIds = route;
+    session.resumeNodeId = resumeNodeId;
+    session.timeoutAtSec = Math.max(session.timeoutAtSec, round(this.simTimeSec + 18));
+    session.expiresAtSec = Math.max(session.expiresAtSec, round(this.simTimeSec + 24));
+    this.logAgentReroute(yielder, this.taskForVehicle(yielder), resumeNodeId, route, 'agent-refresh-queue-tail-yield', { countTaskReplan: false });
+    return true;
+  }
+
+  private topLiftQueueSideYieldContinuationNodeId(
+    vehicle: MutableVehicle,
+    currentNodeId: string,
+    pocketNodeId: string
+  ): string | null {
+    if (!this.topLiftColumnLayoutEnabled() || vehicle.loaded) {
+      return null;
+    }
+    const currentSlot = topLiftQueueParkingSlot(currentNodeId);
+    const pocketSlot = topLiftQueueParkingSlot(pocketNodeId);
+    if (
+      !currentSlot ||
+      !pocketSlot ||
+      currentSlot.liftNodeId !== pocketSlot.liftNodeId ||
+      pocketSlot.slotIndex !== currentSlot.slotIndex + 1
+    ) {
+      return null;
+    }
+
+    const tailNodeId = liftQueueNodeId(currentSlot.liftNodeId, pocketSlot.slotIndex + 1);
+    if (
+      !this.layoutNode(tailNodeId) ||
+      !this.traffic.findEdge(pocketNodeId, tailNodeId) ||
+      this.currentNodeOccupancy.get(tailNodeId) ||
+      this.nodeClaimedByOtherVehicle(tailNodeId, vehicle.id)
+    ) {
+      return null;
+    }
+    return tailNodeId;
+  }
+
+  private topLiftEmptySideYieldContinuationNodeId(
+    vehicle: MutableVehicle,
+    currentNodeId: string,
+    pocketNodeId: string,
+    blockedTargetNodeId: string
+  ): string | null {
+    if (
+      !this.topLiftColumnLayoutEnabled() ||
+      vehicle.loaded ||
+      this.isStorageNode(currentNodeId) ||
+      !isTopLiftColumnAccessNodeId(currentNodeId) ||
+      !isTopLiftColumnAccessNodeId(pocketNodeId)
+    ) {
+      return null;
+    }
+    const blockedTarget = nodePosition(this.scenario, blockedTargetNodeId);
+    return this.neighbors(pocketNodeId)
+      .filter((neighbor) => this.layoutNode(neighbor.nodeId)?.type === 'storage')
+      .filter((neighbor) => this.agentRefreshYieldPocketAllowed(vehicle, neighbor.nodeId))
+      .filter((neighbor) => this.traffic.findEdge(pocketNodeId, neighbor.nodeId) !== null)
+      .filter((neighbor) => this.agentMinimalYieldFirstLegSafe(vehicle, pocketNodeId, neighbor.nodeId))
+      .sort((left, right) => {
+        const leftPosition = nodePosition(this.scenario, left.nodeId);
+        const rightPosition = nodePosition(this.scenario, right.nodeId);
+        const leftAwayM = Math.abs(leftPosition.x - blockedTarget.x) + Math.abs(leftPosition.z - blockedTarget.z);
+        const rightAwayM = Math.abs(rightPosition.x - blockedTarget.x) + Math.abs(rightPosition.z - blockedTarget.z);
+        return rightAwayM - leftAwayM ||
+          left.lengthM - right.lengthM ||
+          left.nodeId.localeCompare(right.nodeId);
+      })[0]?.nodeId ?? null;
+  }
+
+  private topLiftEmptyStorageSideYieldContinuationNodeId(
+    vehicle: MutableVehicle,
+    currentNodeId: string,
+    pocketNodeId: string,
+    blockedTargetNodeId: string
+  ): string | null {
+    if (
+      !this.topLiftColumnLayoutEnabled() ||
+      vehicle.loaded ||
+      !isTopLiftColumnAccessNodeId(currentNodeId) ||
+      !this.isStorageNode(pocketNodeId)
+    ) {
+      return null;
+    }
+
+    const current = nodePosition(this.scenario, currentNodeId);
+    const blockedTarget = nodePosition(this.scenario, blockedTargetNodeId);
+    const pocketPosition = this.storageGridPosition(pocketNodeId);
+    if (!pocketPosition) {
+      return null;
+    }
+
+    return this.neighbors(pocketNodeId)
+      .filter((neighbor) => {
+        const position = this.storageGridPosition(neighbor.nodeId);
+        return position !== null && position.column === pocketPosition.column;
+      })
+      .filter((neighbor) => this.agentRefreshYieldPocketAllowed(vehicle, neighbor.nodeId))
+      .filter((neighbor) => this.traffic.findEdge(pocketNodeId, neighbor.nodeId) !== null)
+      .filter((neighbor) => this.agentMinimalYieldFirstLegSafe(vehicle, pocketNodeId, neighbor.nodeId))
+      .sort((left, right) => {
+        const leftPosition = nodePosition(this.scenario, left.nodeId);
+        const rightPosition = nodePosition(this.scenario, right.nodeId);
+        const leftAwayFromCurrentM = Math.abs(leftPosition.x - current.x) + Math.abs(leftPosition.z - current.z);
+        const rightAwayFromCurrentM = Math.abs(rightPosition.x - current.x) + Math.abs(rightPosition.z - current.z);
+        const leftAwayFromBlockedM = Math.abs(leftPosition.x - blockedTarget.x) + Math.abs(leftPosition.z - blockedTarget.z);
+        const rightAwayFromBlockedM = Math.abs(rightPosition.x - blockedTarget.x) + Math.abs(rightPosition.z - blockedTarget.z);
+        return rightAwayFromCurrentM - leftAwayFromCurrentM ||
+          rightAwayFromBlockedM - leftAwayFromBlockedM ||
+          left.lengthM - right.lengthM ||
+          left.nodeId.localeCompare(right.nodeId);
+      })[0]?.nodeId ?? null;
   }
 
   private agentRefreshTransferBypassCandidate(
@@ -6320,14 +6730,22 @@ export class ShuttleSimCore {
     }
     if (
       this.topLiftColumnLayoutEnabled() &&
-      !this.isStorageNode(vehicle.currentNodeId) &&
-      isTopLiftColumnAccessNodeId(node.id)
+      !vehicle.loaded &&
+      isTopLiftColumnAccessNodeId(vehicle.currentNodeId) &&
+      node.type === 'storage'
     ) {
       return 0;
     }
+    if (
+      this.topLiftColumnLayoutEnabled() &&
+      !this.isStorageNode(vehicle.currentNodeId) &&
+      isTopLiftColumnAccessNodeId(node.id)
+    ) {
+      return vehicle.loaded ? 0 : 1;
+    }
     if (node.type === 'storage') {
       if (this.topLiftColumnLayoutEnabled() && !this.isStorageNode(vehicle.currentNodeId)) {
-        return vehicle.loaded ? 1 : 3;
+        return vehicle.loaded ? 1 : 0;
       }
       return vehicle.loaded ? 1 : 0;
     }
@@ -7295,16 +7713,62 @@ export class ShuttleSimCore {
 
   private agentRefreshYieldHoldBlocker(
     vehicle: MutableVehicle,
-    task: TaskStateRecord | null
+    _task: TaskStateRecord | null
   ): { reason: string; blockingVehicleId: string | null } | null {
     if (!this.agentRefreshEnabled()) {
       return null;
     }
-    const goalNodeId = this.agentGoalNodeId(vehicle, task);
-    if (!goalNodeId || goalNodeId === vehicle.currentNodeId) {
-      return null;
+    const conflictSession = this.activeConflictSessionForVehicle(vehicle.id);
+    if (
+      conflictSession &&
+      conflictSession.state === 'yielding' &&
+      conflictSession.yielderVehicleId === vehicle.id &&
+      conflictSession.resumeNodeId
+    ) {
+      const winner = this.vehicles.find((candidate) => candidate.id === conflictSession.winnerVehicleId) ?? null;
+      if (winner) {
+        const winnerCurrentIndex = winner.routeNodeIds.indexOf(
+          winner.currentNodeId,
+          Math.max(0, winner.routeIndex)
+        );
+        const searchFromIndex = winnerCurrentIndex >= 0 ? winnerCurrentIndex : Math.max(0, winner.routeIndex);
+        const resumeIndex = winner.routeNodeIds.indexOf(conflictSession.resumeNodeId, searchFromIndex);
+        if (winner.targetNodeId === conflictSession.resumeNodeId || resumeIndex > searchFromIndex) {
+          return { reason: 'local-yield-hold', blockingVehicleId: winner.id };
+        }
+      }
+    }
+    if (vehicle.yieldHoldUntilSec !== null && this.simTimeSec < vehicle.yieldHoldUntilSec) {
+      return {
+        reason: 'local-yield-hold',
+        blockingVehicleId: conflictSession?.winnerVehicleId === vehicle.id ? null : conflictSession?.winnerVehicleId ?? null
+      };
     }
     return null;
+  }
+
+  private agentRefreshWinnerShouldStayCourse(
+    session: ConflictSessionV1 | null,
+    vehicle: MutableVehicle,
+    blocker: MutableVehicle | null
+  ): boolean {
+    if (
+      !session ||
+      !blocker ||
+      session.winnerVehicleId !== vehicle.id ||
+      session.yielderVehicleId !== blocker.id ||
+      !session.resumeNodeId ||
+      !isTopLiftColumnAccessNodeId(session.resumeNodeId)
+    ) {
+      return false;
+    }
+
+    return [
+      blocker.currentNodeId,
+      blocker.targetNodeId,
+      session.yielderPocketNodeId,
+      ...session.yielderLocalRouteNodeIds
+    ].some((nodeId) => nodeId !== null && isTopLiftQueueParkingNodeId(nodeId));
   }
 
   private agentNodeBlocker(vehicle: MutableVehicle, nodeId: string): string | null {
@@ -7443,6 +7907,9 @@ export class ShuttleSimCore {
         blockedNodeIds.delete(blocker.currentNodeId);
         const route = this.agentShortestPath(blocker.currentNodeId, goal, blockedNodeIds);
         const isTaskGoal = taskGoal !== null && goal === taskGoal;
+        if (!isTaskGoal && this.agentEmptyEscapeRouteRepeatsLastStorageStep(blocker, route)) {
+          continue;
+        }
         if (!isTaskGoal && !this.agentYieldEscapeRouteAcceptable(route)) {
           continue;
         }
@@ -7509,6 +7976,15 @@ export class ShuttleSimCore {
     }
 
     return false;
+  }
+
+  private agentEmptyEscapeRouteRepeatsLastStorageStep(vehicle: MutableVehicle, route: string[]): boolean {
+    if (route.length !== 2 || !this.isStorageNode(route[0]!) || !this.isStorageNode(route[1]!)) {
+      return false;
+    }
+
+    const previousNodeId = vehicle.routeIndex > 0 ? vehicle.routeNodeIds[vehicle.routeIndex - 1] : null;
+    return previousNodeId === route[1];
   }
 
   private agentYieldEscapeRouteAcceptable(route: string[]): boolean {
@@ -7642,7 +8118,9 @@ export class ShuttleSimCore {
     const loadPriority = vehicle.loaded ? 1_000_000 : 0;
     const taskPriority = vehicle.taskId ? 100_000 : 0;
     const waitPriority = vehicle.state === 'waiting-blocked' ? 10_000 : 0;
-    return loadPriority + taskPriority + waitPriority + ageSec - this.vehicleOrdinal(vehicle.id) / 1000;
+    const stagedSameLiftPickupPenalty =
+      task && !vehicle.loaded && this.inboundTaskHasEarlierPickupTask(task) ? 90_000 : 0;
+    return loadPriority + taskPriority + waitPriority + ageSec - stagedSameLiftPickupPenalty - this.vehicleOrdinal(vehicle.id) / 1000;
   }
 
   private startNextLeg(vehicle: MutableVehicle, dtSec: number): void {
@@ -7651,20 +8129,26 @@ export class ShuttleSimCore {
 
     if (task && fromNodeId === task.pickupNodeId && !vehicle.loaded) {
       if (!this.inboundTaskLoadReadyAtPickup(task)) {
-        this.waitForInboundPickupLoad(vehicle, task, dtSec);
+        if (!this.inboundPickupClearanceRouteActive(vehicle, task)) {
+          if (this.rerouteInboundPickupVehicleBehindEarlierTask(vehicle, task)) {
+            return;
+          }
+          this.waitForInboundPickupLoad(vehicle, task, dtSec);
+          return;
+        }
+      } else {
+        task.state = 'in-progress';
+        task.startedAtSec ??= this.simTimeSec;
+        vehicle.state = 'lifting';
+        vehicle.speedMps = 0;
+        vehicle.phaseRemainingSec = this.scenario.physicsParams.liftTimeSec;
+        vehicle.waitReason = null;
+        vehicle.blockingReservationId = null;
+        vehicle.blockingVehicleId = null;
+        this.ensureZoneHoldReservation(vehicle, fromNodeId);
+        this.logEvent('lift-started', vehicle.id, task.id, task.loadId, fromNodeId, fromNodeId, 'pickup-aligned', this.vehiclePosition(vehicle), {});
         return;
       }
-      task.state = 'in-progress';
-      task.startedAtSec ??= this.simTimeSec;
-      vehicle.state = 'lifting';
-      vehicle.speedMps = 0;
-      vehicle.phaseRemainingSec = this.scenario.physicsParams.liftTimeSec;
-      vehicle.waitReason = null;
-      vehicle.blockingReservationId = null;
-      vehicle.blockingVehicleId = null;
-      this.ensureZoneHoldReservation(vehicle, fromNodeId);
-      this.logEvent('lift-started', vehicle.id, task.id, task.loadId, fromNodeId, fromNodeId, 'pickup-aligned', this.vehiclePosition(vehicle), {});
-      return;
     }
 
     if (task && fromNodeId === task.dropoffNodeId && vehicle.loaded) {
@@ -8915,6 +9399,9 @@ export class ShuttleSimCore {
           continue;
         }
         const session = blocker ? this.activeConflictSessionForPair(vehicle.id, blocker.id) : null;
+        if (this.agentRefreshWinnerShouldStayCourse(session, vehicle, blocker)) {
+          continue;
+        }
         if (blocker && this.agentRefreshInstallSideYield(vehicle, fromBlockedNodeId, blocker, session)) {
           return true;
         }
@@ -9510,6 +9997,9 @@ export class ShuttleSimCore {
         continue;
       }
       const session = this.activeConflictSessionForPair(vehicle.id, blocker.id);
+      if (this.agentRefreshWinnerShouldStayCourse(session, vehicle, blocker)) {
+        continue;
+      }
       if (this.agentRefreshInstallSideYield(vehicle, vehicle.targetNodeId!, blocker, session)) {
         return true;
       }
