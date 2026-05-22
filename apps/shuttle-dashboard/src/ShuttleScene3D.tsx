@@ -18,6 +18,7 @@ type SceneRuntime = {
   camera: THREE.PerspectiveCamera;
   root: THREE.Group;
   staticGroup: THREE.Group;
+  networkGroup: THREE.Group;
   routeGroup: THREE.Group;
   reservationGroup: THREE.Group;
   loadGroup: THREE.Group;
@@ -630,6 +631,85 @@ function createTrackAreaBlock(rect: MeterRect, areaMaterial: THREE.Material): TH
   area.position.set((rect.minX + rect.maxX) / 2, 0.04, (rect.minZ + rect.maxZ) / 2);
   area.receiveShadow = true;
   return area;
+}
+
+function routeNetworkStyle(category: ShuttleStaticSceneTrackBed['category']): {
+  color: number;
+  edgeColor: number;
+  opacity: number;
+  edgeOpacity: number;
+  widthM: number;
+  yM: number;
+} {
+  switch (category) {
+    case 'storageLane':
+      return { color: 0x59c7ff, edgeColor: 0xa8e8ff, opacity: 0.42, edgeOpacity: 0.72, widthM: 0.11, yM: 0.148 };
+    case 'sideAisle':
+    case 'crossAisle':
+      return { color: 0x4bd7c8, edgeColor: 0xd6fff8, opacity: 0.34, edgeOpacity: 0.64, widthM: 0.22, yM: 0.13 };
+    case 'inboundConnector':
+      return { color: FLOW_VISUAL_COLORS.inbound.three, edgeColor: 0xc7ecff, opacity: 0.42, edgeOpacity: 0.7, widthM: 0.18, yM: 0.31 };
+    case 'outboundConnector':
+      return { color: FLOW_VISUAL_COLORS.outbound.three, edgeColor: 0xffefb8, opacity: 0.44, edgeOpacity: 0.72, widthM: 0.18, yM: 0.31 };
+    case 'parkingConnector':
+      return { color: 0x8fa1ad, edgeColor: 0xe4edf0, opacity: 0.28, edgeOpacity: 0.52, widthM: 0.16, yM: 0.118 };
+    default:
+      return { color: 0x8fa1ad, edgeColor: 0xe4edf0, opacity: 0.24, edgeOpacity: 0.48, widthM: 0.12, yM: 0.12 };
+  }
+}
+
+function createRouteNetworkRibbon(track: ShuttleStaticSceneTrackBed): THREE.Group | null {
+  const [from, to] = trackBedEndpoints(track);
+  const dx = to.x - from.x;
+  const dz = to.z - from.z;
+  const length = Math.hypot(dx, dz);
+  if (length < 0.001) {
+    return null;
+  }
+
+  const style = routeNetworkStyle(track.category);
+  const group = new THREE.Group();
+  group.position.set((from.x + to.x) / 2, 0, (from.z + to.z) / 2);
+  group.rotation.y = -Math.atan2(dz, dx);
+
+  const deck = new THREE.Mesh(
+    new THREE.BoxGeometry(length, 0.018, style.widthM),
+    new THREE.MeshBasicMaterial({
+      color: style.color,
+      transparent: true,
+      opacity: style.opacity,
+      depthWrite: false
+    })
+  );
+  deck.position.y = style.yM;
+  deck.renderOrder = 70;
+  group.add(deck);
+
+  const edgeMaterial = new THREE.MeshBasicMaterial({
+    color: style.edgeColor,
+    transparent: true,
+    opacity: style.edgeOpacity,
+    depthWrite: false
+  });
+  for (const z of [-style.widthM / 2, style.widthM / 2]) {
+    const edge = new THREE.Mesh(new THREE.BoxGeometry(length, 0.026, 0.024), edgeMaterial);
+    edge.position.set(0, style.yM + 0.014, z);
+    edge.renderOrder = 71;
+    group.add(edge);
+  }
+
+  return group;
+}
+
+function createRouteNetwork(staticScene: ShuttleStaticSceneContract): THREE.Group {
+  const group = new THREE.Group();
+  for (const track of staticScene.trackBeds) {
+    const ribbon = createRouteNetworkRibbon(track);
+    if (ribbon) {
+      group.add(ribbon);
+    }
+  }
+  return group;
 }
 
 function trackBedEndpoints(track: ShuttleStaticSceneTrackBed): [{ x: number; z: number }, { x: number; z: number }] {
@@ -1408,6 +1488,8 @@ function updateDynamicScene(
   layers: ShuttleSceneLayers,
   selectedVehicleId: string | null
 ): void {
+  runtime.networkGroup.visible = layers.routes;
+
   const activeVehicleIds = new Set((state?.vehicles ?? []).map((vehicle) => vehicle.id));
   for (const [vehicleId, object] of runtime.vehicleObjects) {
     if (!activeVehicleIds.has(vehicleId)) {
@@ -1550,6 +1632,7 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
   const visualStaticScene = resolveScene3DVisualStaticScene(staticScene);
 
   clearGroup(runtime.staticGroup);
+  clearGroup(runtime.networkGroup);
   clearGroup(runtime.routeGroup);
   clearGroup(runtime.reservationGroup);
   clearGroup(runtime.loadGroup);
@@ -1591,6 +1674,8 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
   for (const rect of createTrackAreaRects(visualStaticScene, ['sideAisle', 'crossAisle', 'parkingConnector'])) {
     runtime.staticGroup.add(createTrackAreaBlock(rect, rect.category === 'parkingConnector' ? parkingAreaMaterial : aisleAreaMaterial));
   }
+
+  runtime.networkGroup.add(createRouteNetwork(visualStaticScene));
 
   const conveyorBeltMaterial = texturedMaterial(TEXTURE_ASSETS.rubber, {
     color: 0x22282d,
@@ -1726,11 +1811,12 @@ export function ShuttleScene3D({
     const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
     const root = new THREE.Group();
     const staticGroup = new THREE.Group();
+    const networkGroup = new THREE.Group();
     const routeGroup = new THREE.Group();
     const reservationGroup = new THREE.Group();
     const loadGroup = new THREE.Group();
     const vehicleGroup = new THREE.Group();
-    root.add(staticGroup, routeGroup, reservationGroup, loadGroup, vehicleGroup);
+    root.add(staticGroup, networkGroup, routeGroup, reservationGroup, loadGroup, vehicleGroup);
     scene.add(root);
 
     const ambient = new THREE.HemisphereLight(0xffffff, 0x26343e, 1.55);
@@ -1764,6 +1850,7 @@ export function ShuttleScene3D({
       camera,
       root,
       staticGroup,
+      networkGroup,
       routeGroup,
       reservationGroup,
       loadGroup,
@@ -1854,6 +1941,7 @@ export function ShuttleScene3D({
       renderer.domElement.removeEventListener('pointercancel', onPointerUp);
       renderer.domElement.removeEventListener('wheel', onWheel);
       clearGroup(staticGroup);
+      clearGroup(networkGroup);
       clearGroup(routeGroup);
       clearGroup(reservationGroup);
       clearGroup(loadGroup);
