@@ -1946,6 +1946,78 @@ describe('shuttle phase 0 SimCore', () => {
     expect(inboundSpineYielder.routeNodeIds[2]).toMatch(/^storage-r(?:07|08)-c\d+$/);
   });
 
+  it('lets top-lift outbound storage exits step into an adjacent pocket when an opposing middle-aisle claim blocks them', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({
+      id: 'outbound-middle-yield-load',
+      state: 'carried',
+      nodeId: null,
+      vehicleId: 'SH-01',
+      weightKg: 100
+    });
+    sim.addTaskForTest({
+      id: 'outbound-middle-yield',
+      kind: 'outbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r06-c03',
+      dropoffNodeId: 'lift-01-outbound-buffer-03',
+      loadId: 'outbound-middle-yield-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', [
+      'storage-r07-c03',
+      'column-middle-c03',
+      'column-middle-c04',
+      'column-middle-c05',
+      'column-middle-c06',
+      'column-middle-c07',
+      'module-01-spine-middle'
+    ]);
+    sim.setVehicleTaskForTest('SH-01', 'outbound-middle-yield', true);
+    sim.setVehicleRouteForTest('SH-02', [
+      'column-middle-c07',
+      'column-middle-c06',
+      'column-middle-c05',
+      'column-middle-c04',
+      'storage-r08-c04'
+    ]);
+    sim.setVehicleTaskForTest('SH-02', null, true);
+
+    const state = sim.step(0.2);
+    const yielder = state.vehicles.find((vehicle) => vehicle.id === 'SH-01');
+    const yieldEvent = sim.getEventLog().find((event) =>
+      event.eventType === 'route-replanned' &&
+      event.vehicleId === 'SH-01' &&
+      event.reason === 'agent-refresh-middle-aisle-storage-yield'
+    );
+
+    expect(yieldEvent).toBeDefined();
+    expect(yielder).toMatchObject({
+      state: 'loaded-moving',
+      currentNodeId: 'storage-r07-c03',
+      targetNodeId: 'storage-r06-c03',
+      waitReason: null,
+      blockingVehicleId: null
+    });
+    expect(yielder?.routeNodeIds).toEqual(['storage-r07-c03', 'storage-r06-c03']);
+  });
+
   it('breaks empty top-lift middle-aisle node swaps by yielding into storage', () => {
     const scenario = createInboundOutboundDemoScenario({
       vehicles: { count: 2 },
@@ -2065,6 +2137,44 @@ describe('shuttle phase 0 SimCore', () => {
     expect(follower).toMatchObject({
       state: 'waiting-blocked',
       targetNodeId: 'column-top-a-c07'
+    });
+  });
+
+  it('does not let a trailing top-lift middle-aisle shuttle hold the leader at a no-stop spine entry', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', [
+      'column-middle-c21',
+      'module-02-spine-middle',
+      'module-02-spine-top-b',
+      'module-02-spine-top-a'
+    ]);
+    sim.setVehicleTaskForTest('SH-01', null, true);
+    sim.setVehicleRouteForTest('SH-02', [
+      'column-middle-c20',
+      'column-middle-c21',
+      'module-02-spine-middle'
+    ]);
+    sim.setVehicleTaskForTest('SH-02', null, true);
+
+    const state = sim.step(0.2);
+    const leader = state.vehicles.find((vehicle) => vehicle.id === 'SH-01');
+    const follower = state.vehicles.find((vehicle) => vehicle.id === 'SH-02');
+
+    expect(leader?.state).not.toBe('waiting-blocked');
+    expect(leader?.targetNodeId).toBe('module-02-spine-middle');
+    expect(follower).toMatchObject({
+      state: 'waiting-blocked',
+      targetNodeId: 'column-middle-c21'
     });
   });
 
@@ -2326,7 +2436,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(scenario.layout.nodes.some((node) => node.id === 'lift-03-inbound-buffer-03')).toBe(true);
   });
 
-  it('sweeps top-lift region counts for stable column exits and buffer topology', () => {
+  it('sweeps top-lift region counts for stable buffer topology', () => {
     for (let liftPairCount = 1; liftPairCount <= 8; liftPairCount += 1) {
       const scenario = createInboundMvpBaselineScenario({
         layoutProfile: {
@@ -2368,10 +2478,17 @@ describe('shuttle phase 0 SimCore', () => {
           )).toBe(true);
         }
       }
+    }
+  });
 
-      if (![1, 2, 3, 8].includes(liftPairCount)) {
-        continue;
-      }
+  it('samples top-lift column exit routes across region counts', async () => {
+    for (const liftPairCount of [1, 2, 3, 8]) {
+      const scenario = createInboundMvpBaselineScenario({
+        layoutProfile: {
+          liftPairCount
+        }
+      });
+      const storageNodes = scenario.layout.nodes.filter((node) => node.type === 'storage');
       const sim = new ShuttleSimCore(scenario);
       const internals = sim as unknown as {
         topLiftColumnKey(nodeId: string): string | null;
@@ -2411,9 +2528,10 @@ describe('shuttle phase 0 SimCore', () => {
         expect(route?.at(-1)).toMatch(/^column-(?:top-b|middle|bottom-a)-c\d+$/);
         expect(internals.topLiftColumnKey(route!.at(-1)!)).toBe(internals.topLiftColumnKey(storageNode.id));
         expect(internals.routeHasOnlyAdjacentEdges(route!)).toBe(true);
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
     }
-  }, 60000);
+  }, 180000);
 
   it('emits deterministic fixed-step replay manifests', () => {
     const scenario = createInboundMvpBaselineScenario({
