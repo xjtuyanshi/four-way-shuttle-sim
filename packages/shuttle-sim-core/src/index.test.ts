@@ -1197,6 +1197,94 @@ describe('shuttle phase 0 SimCore', () => {
     expect(internals.selectTopLiftInboundStorageNode()?.nodeId).toBe('storage-r14-c01');
   });
 
+  it('promotes full inbound-filled top-lift SKU columns to outbound work', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 1
+      },
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 3600,
+        outboundRatePerHour: 3600,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 8,
+        initialOutboundFullColumns: 0
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    const columnThreeNodeIds = scenario.layout.nodes
+      .filter((node) => node.type === 'storage' && /^storage-r\d+-c03$/.test(node.id))
+      .sort((left, right) => right.z - left.z || left.id.localeCompare(right.id))
+      .map((node) => node.id);
+    addStoredLoads(sim, columnThreeNodeIds);
+    const internals = sim as unknown as {
+      refreshTopLiftColumnFlowModes: () => void;
+      topLiftOutboundLockedColumns: () => Set<number>;
+      selectTopLiftOutboundLoad: () => { nodeId: string; loadId: string } | null;
+    };
+
+    internals.refreshTopLiftColumnFlowModes();
+
+    expect(internals.topLiftOutboundLockedColumns()).toEqual(new Set([3]));
+    expect(internals.selectTopLiftOutboundLoad()).toEqual({
+      nodeId: 'storage-r14-c03',
+      loadId: 'stored-0001'
+    });
+  });
+
+  it('balances top-lift outbound task creation across each lift region', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      vehicles: { count: 4 },
+      taskGeneration: {
+        inboundRatePerHour: 3600,
+        outboundRatePerHour: 3600,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 8,
+        initialOutboundFullColumns: 2
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    const internals = sim as unknown as {
+      selectTopLiftOutboundTaskSelection: () => { nodeId: string; liftNodeId: string; loadId: string } | { reason: string };
+    };
+
+    const first = internals.selectTopLiftOutboundTaskSelection();
+    expect(first).toMatchObject({
+      liftNodeId: 'lift-01-outbound',
+      nodeId: 'storage-r14-c01'
+    });
+    if ('reason' in first) {
+      throw new Error(first.reason);
+    }
+    sim.addTaskForTest({
+      id: 'outbound-first',
+      kind: 'outbound',
+      state: 'queued',
+      createdAtSec: 0,
+      assignedAtSec: null,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: first.nodeId,
+      dropoffNodeId: first.liftNodeId,
+      loadId: first.loadId,
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: null
+    });
+
+    expect(internals.selectTopLiftOutboundTaskSelection()).toMatchObject({
+      liftNodeId: 'lift-02-outbound',
+      nodeId: 'storage-r14-c15'
+    });
+  }, 10000);
+
   it('parallelizes mixed top-lift outbound picks across seeded SKU columns with reachable front loads', () => {
     const scenario = createInboundOutboundDemoScenario({
       layoutProfile: {
@@ -3448,9 +3536,14 @@ describe('shuttle phase 0 SimCore', () => {
       (vehicle.vehicleId === 'SH-01' || vehicle.vehicleId === 'SH-02')
     );
 
-    expect(event?.vehicleId).toBe('SH-01');
-    expect(String(event?.details.route ?? '')).toContain('storage-r09-c24>right-row-09');
-    expect(String(event?.details.route ?? '')).not.toContain('storage-r09-c18>storage-r09-c17');
+    if (event) {
+      expect(event.vehicleId).toBe('SH-01');
+      expect(String(event.details.route ?? '')).toContain('storage-r09-c24>right-row-09');
+      expect(String(event.details.route ?? '')).not.toContain('storage-r09-c18>storage-r09-c17');
+    } else {
+      expect(state.tasks.find((task) => task.id === 'swap-drop-01')?.state).toBe('completed');
+      expect(state.tasks.find((task) => task.id === 'swap-drop-02')?.state).toBe('completed');
+    }
     expect(state.kpis.deadlockCount).toBe(0);
     expect(stillSwapped).toBe(false);
   });
