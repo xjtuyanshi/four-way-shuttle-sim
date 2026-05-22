@@ -10899,7 +10899,7 @@ export class ShuttleSimCore {
   private topLiftAdjacentSwapEscapeNodeId(vehicle: MutableVehicle, blockedNodeId: string): string | null {
     return this.neighbors(vehicle.currentNodeId)
       .filter((neighbor) => neighbor.nodeId !== blockedNodeId)
-      .filter((neighbor) => this.topLiftColumnSpineOrAccessNode(neighbor.nodeId))
+      .filter((neighbor) => this.topLiftAdjacentSwapEscapeAllowed(vehicle, neighbor.nodeId))
       .filter((neighbor) => this.agentRefreshYieldPocketAllowed(vehicle, neighbor.nodeId))
       .filter((neighbor) => this.agentRefreshYieldPocketKeepsGoalReachable(vehicle, neighbor.nodeId))
       .filter((neighbor) => this.agentMinimalYieldFirstLegSafe(vehicle, vehicle.currentNodeId, neighbor.nodeId))
@@ -10912,17 +10912,30 @@ export class ShuttleSimCore {
       )[0]?.nodeId ?? null;
   }
 
+  private topLiftAdjacentSwapEscapeAllowed(vehicle: MutableVehicle, nodeId: string): boolean {
+    if (this.topLiftColumnSpineOrAccessNode(nodeId)) {
+      return true;
+    }
+    return this.topLiftColumnLayoutEnabled() &&
+      !vehicle.loaded &&
+      isTopLiftAisleLevelNodeId(vehicle.currentNodeId, 'middle') &&
+      this.isStorageNode(nodeId);
+  }
+
   private topLiftAdjacentSwapEscapeRank(nodeId: string): number {
-    if (isTopLiftAisleLevelNodeId(nodeId, 'top-b') || isTopLiftAisleLevelNodeId(nodeId, 'bottom-a')) {
+    if (this.isStorageNode(nodeId)) {
       return 0;
     }
-    if (isTopLiftAisleLevelNodeId(nodeId, 'top-a') || isTopLiftAisleLevelNodeId(nodeId, 'bottom-b')) {
+    if (isTopLiftAisleLevelNodeId(nodeId, 'top-b') || isTopLiftAisleLevelNodeId(nodeId, 'bottom-a')) {
       return 1;
     }
-    if (isTopLiftAisleLevelNodeId(nodeId, 'middle')) {
+    if (isTopLiftAisleLevelNodeId(nodeId, 'top-a') || isTopLiftAisleLevelNodeId(nodeId, 'bottom-b')) {
       return 2;
     }
-    return 3;
+    if (isTopLiftAisleLevelNodeId(nodeId, 'middle')) {
+      return 3;
+    }
+    return 4;
   }
 
   private installAgentRefreshAdjacentNodeSwapYield(vehicle: MutableVehicle, routeNodeIds: string[]): void {

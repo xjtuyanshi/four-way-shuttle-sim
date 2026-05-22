@@ -1830,6 +1830,46 @@ describe('shuttle phase 0 SimCore', () => {
     expect(inboundSpineYielder.routeNodeIds[2]).toMatch(/^storage-r(?:07|08)-c\d+$/);
   });
 
+  it('breaks empty top-lift middle-aisle node swaps by yielding into storage', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['column-middle-c13', 'column-middle-c14']);
+    sim.setVehicleRouteForTest('SH-02', ['column-middle-c14', 'column-middle-c13']);
+    sim.setVehicleWaitingForTest('SH-01', {
+      targetNodeId: 'column-middle-c14',
+      waitReason: 'node-occupied',
+      blockingVehicleId: 'SH-02',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleWaitingForTest('SH-02', {
+      targetNodeId: 'column-middle-c13',
+      waitReason: 'node-occupied',
+      blockingVehicleId: 'SH-01',
+      waitingSinceSec: 0
+    });
+
+    const internals = sim as unknown as {
+      vehicles: Array<{ id: string; routeNodeIds: string[]; localRouteReason: string | null }>;
+      tryBreakAgentRefreshTopLiftAdjacentNodeSwap(candidateVehicleIds: string[]): boolean;
+    };
+
+    expect(internals.tryBreakAgentRefreshTopLiftAdjacentNodeSwap(['SH-01', 'SH-02'])).toBe(true);
+    const yielder = internals.vehicles.find((vehicle) => vehicle.localRouteReason === 'temporary-yield');
+
+    expect(yielder?.routeNodeIds).toHaveLength(2);
+    expect(yielder?.routeNodeIds[0]).toMatch(/^column-middle-c(?:13|14)$/);
+    expect(yielder?.routeNodeIds[1]).toMatch(/^storage-r(?:07|08)-c(?:13|14)$/);
+  });
+
   it('holds top-lift traffic upstream of no-stop spine nodes until the continuation cell is clear', () => {
     const scenario = createInboundOutboundDemoScenario({
       vehicles: { count: 2 },
