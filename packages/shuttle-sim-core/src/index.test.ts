@@ -563,10 +563,14 @@ describe('shuttle phase 0 SimCore', () => {
 
     expect(task?.pickupNodeId).toBe('lift-01-inbound-buffer-03');
     expect(vehicle?.routeNodeIds.at(-1)).toBe('lift-01-inbound-buffer-03');
-    expect(vehicle?.routeNodeIds.some((nodeId) =>
-      nodeId === 'lift-01-inbound-buffer-access' ||
-      nodeId === 'parking-lift-01-inbound-queue'
-    )).toBe(true);
+    const route = vehicle?.routeNodeIds ?? [];
+    expect(route).toContain('lift-01-inbound-queue-access');
+    expect(route).toContain('parking-lift-01-inbound-queue');
+    expect(route).toContain('lift-01-inbound-queue-pickup-access');
+    expect(route.indexOf('lift-01-inbound-queue-access')).toBeLessThan(route.indexOf('parking-lift-01-inbound-queue'));
+    expect(route.indexOf('parking-lift-01-inbound-queue')).toBeLessThan(route.indexOf('lift-01-inbound-queue-pickup-access'));
+    expect(route.indexOf('lift-01-inbound-queue-pickup-access')).toBeLessThan(route.indexOf('lift-01-inbound-buffer-03'));
+    expect(route).not.toContain('lift-01-inbound-buffer-access');
     expect(vehicle?.routeNodeIds).not.toContain('lift-01-inbound');
   });
 
@@ -582,20 +586,22 @@ describe('shuttle phase 0 SimCore', () => {
     const queuedInboundTasks = state.tasks.filter((task) => task.kind === 'inbound' && task.state === 'queued');
     const movingVehicles = state.vehicles.filter((vehicle) => vehicle.currentEdgeId !== null);
 
-    expect(assignedInboundTasks).toHaveLength(4);
-    expect(queuedInboundTasks).toHaveLength(0);
+    expect(assignedInboundTasks).toHaveLength(2);
+    expect(queuedInboundTasks).toHaveLength(2);
     expect(assignedInboundTasks.map((task) => task.pickupNodeId)).toEqual([
-      'lift-01-inbound-buffer-03',
-      'lift-02-inbound-buffer-03',
       'lift-01-inbound-buffer-03',
       'lift-02-inbound-buffer-03'
     ]);
-    expect(movingVehicles).toHaveLength(4);
+    expect(queuedInboundTasks.map((task) => task.waitReason)).toEqual([
+      'inbound-column-predecessor-pending:c01',
+      'inbound-column-predecessor-pending:c15'
+    ]);
+    expect(movingVehicles).toHaveLength(2);
     const taskGoals = new Map(state.vehicles.map((vehicle) => [vehicle.taskId, vehicle.plannedGoalNodeId]));
     expect(taskGoals.get('task-0001')).toBe('lift-01-inbound-buffer-03');
     expect(taskGoals.get('task-0002')).toBe('lift-02-inbound-buffer-03');
-    expect(taskGoals.get('task-0003')).toBe('parking-lift-01-inbound-queue-02');
-    expect(taskGoals.get('task-0004')).toBe('parking-lift-02-inbound-queue-02');
+    expect(taskGoals.has('task-0003')).toBe(false);
+    expect(taskGoals.has('task-0004')).toBe(false);
   });
 
   it('adds compact tail wait slots beside each top-lift inbound pickup queue', () => {
@@ -626,6 +632,10 @@ describe('shuttle phase 0 SimCore', () => {
     expect(queueEdges.has('lift-01-inbound-queue-access>parking-lift-01-inbound-queue')).toBe(true);
     expect(queueEdges.has('lift-01-inbound-queue-02-access>parking-lift-01-inbound-queue-02')).toBe(true);
     expect(queueEdges.has('lift-01-inbound-queue-03-access>parking-lift-01-inbound-queue-03')).toBe(true);
+    expect(scenario.layout.edges.some((edge) =>
+      (edge.from === 'lift-01-inbound-queue-access' && edge.to.startsWith('column-top-a-')) ||
+      (edge.to === 'lift-01-inbound-queue-access' && edge.from.startsWith('column-top-a-'))
+    )).toBe(true);
     expect(queueEdges.has('parking-lift-01-inbound-queue>parking-lift-01-inbound-queue-02')).toBe(false);
     expect(queueEdges.has('parking-lift-01-inbound-queue-02>parking-lift-01-inbound-queue-03')).toBe(false);
   });
@@ -643,9 +653,9 @@ describe('shuttle phase 0 SimCore', () => {
       String(event.details.route ?? '') === 'column-top-b-c26>column-top-b-c25'
     );
 
-    expect(task8).toMatchObject({ state: 'completed' });
+    expect(task8?.state).not.toBe('failed');
     expect(task8?.vehicleId).toMatch(/^SH-\d{2}$/);
-    expect(task9?.assignedAtSec).toBeGreaterThan(0);
+    expect(task9?.waitReason).toBe('inbound-column-predecessor-pending:c15');
     expect(repeatedTopRightYield).toHaveLength(0);
     expect(state.kpis.deadlockCount).toBe(0);
     expect(state.traffic.physicalViolationCount).toBe(0);
@@ -825,9 +835,11 @@ describe('shuttle phase 0 SimCore', () => {
     expect(internals.agentRefreshInstallSideYield(yielder, 'column-top-b-c16', requester, null)).toBe(true);
     expect(yielder.routeNodeIds).toEqual([
       'column-top-b-c17',
-      'column-top-a-c17'
+      'storage-r01-c17',
+      'storage-r02-c17'
     ]);
     expect(yielder.routeNodeIds).not.toContain('column-top-b-c18');
+    expect(yielder.routeNodeIds).not.toContain('column-top-b-c16');
   });
 
   it('rejects top-lift yield pockets that can only return through storage cells', () => {
@@ -1259,6 +1271,12 @@ describe('shuttle phase 0 SimCore', () => {
       'storage-r13-c15',
       'storage-r14-c15',
       'column-bottom-a-c15'
+    ]);
+    expect(route).toContain('parking-lift-02-outbound-queue');
+    expect(route?.slice(-3)).toEqual([
+      'parking-lift-02-outbound-queue',
+      'lift-02-outbound-queue-pickup-access',
+      'lift-02-outbound-buffer-03'
     ]);
     expect(route).not.toContain('storage-r08-c15');
   });
