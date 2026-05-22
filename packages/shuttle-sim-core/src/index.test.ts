@@ -565,10 +565,9 @@ describe('shuttle phase 0 SimCore', () => {
     expect(vehicle?.routeNodeIds.at(-1)).toBe('lift-01-inbound-buffer-03');
     const route = vehicle?.routeNodeIds ?? [];
     expect(route).toContain('lift-01-inbound-queue-access');
-    expect(route).toContain('parking-lift-01-inbound-queue');
     expect(route).toContain('lift-01-inbound-queue-pickup-access');
-    expect(route.indexOf('lift-01-inbound-queue-access')).toBeLessThan(route.indexOf('parking-lift-01-inbound-queue'));
-    expect(route.indexOf('parking-lift-01-inbound-queue')).toBeLessThan(route.indexOf('lift-01-inbound-queue-pickup-access'));
+    expect(route).not.toContain('parking-lift-01-inbound-queue');
+    expect(route.indexOf('lift-01-inbound-queue-access')).toBeLessThan(route.indexOf('lift-01-inbound-queue-pickup-access'));
     expect(route.indexOf('lift-01-inbound-queue-pickup-access')).toBeLessThan(route.indexOf('lift-01-inbound-buffer-03'));
     expect(route).not.toContain('lift-01-inbound-buffer-access');
     expect(vehicle?.routeNodeIds).not.toContain('lift-01-inbound');
@@ -629,6 +628,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(queueEdges.has('lift-01-inbound-queue-02-entry-access>lift-01-inbound-queue-02-access')).toBe(true);
     expect(queueEdges.has('lift-01-inbound-queue-02-entry-access>lift-01-inbound-queue-03-entry-access')).toBe(true);
     expect(queueEdges.has('lift-01-inbound-queue-03-entry-access>lift-01-inbound-queue-03-access')).toBe(true);
+    expect(queueEdges.has('lift-01-inbound-queue-access>lift-01-inbound-queue-pickup-access')).toBe(true);
     expect(queueEdges.has('lift-01-inbound-queue-access>parking-lift-01-inbound-queue')).toBe(true);
     expect(queueEdges.has('lift-01-inbound-queue-02-access>parking-lift-01-inbound-queue-02')).toBe(true);
     expect(queueEdges.has('lift-01-inbound-queue-03-access>parking-lift-01-inbound-queue-03')).toBe(true);
@@ -1272,9 +1272,9 @@ describe('shuttle phase 0 SimCore', () => {
       'storage-r14-c15',
       'column-bottom-a-c15'
     ]);
-    expect(route).toContain('parking-lift-02-outbound-queue');
+    expect(route).toContain('lift-02-outbound-queue-access');
     expect(route?.slice(-3)).toEqual([
-      'parking-lift-02-outbound-queue',
+      'lift-02-outbound-queue-access',
       'lift-02-outbound-queue-pickup-access',
       'lift-02-outbound-buffer-03'
     ]);

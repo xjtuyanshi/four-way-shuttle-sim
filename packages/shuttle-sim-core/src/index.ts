@@ -937,6 +937,7 @@ function createTopLiftColumnLayout(
     }
     if (lift.queueAccessId && lift.queuePickupAccessId && lift.queueNodeId && pickupBufferNodeId) {
       addEdge(`${lift.bufferAccessId}-${lift.queueAccessId}`, lift.bufferAccessId, lift.queueAccessId, `${lift.id}-standby-queue-access`);
+      addEdge(`${lift.queueAccessId}-${lift.queuePickupAccessId}`, lift.queueAccessId, lift.queuePickupAccessId, `${lift.id}-standby-queue-service`);
       addEdge(`${lift.queueAccessId}-${lift.queueNodeId}`, lift.queueAccessId, lift.queueNodeId, `${lift.id}-standby-queue`);
       addEdge(`${lift.queueNodeId}-${lift.queuePickupAccessId}`, lift.queueNodeId, lift.queuePickupAccessId, `${lift.id}-standby-queue-pickup`);
       addEdge(`${lift.queuePickupAccessId}-${pickupBufferNodeId}`, lift.queuePickupAccessId, pickupBufferNodeId, `${lift.id}-standby-queue-pickup`);
@@ -4449,7 +4450,22 @@ export class ShuttleSimCore {
       blockedPosition.row === currentPosition.row &&
       blockedTargetClaimant?.loaded
     );
-    if (!enteredFromSideAisle && !currentCellClaimedByOther && !loadedVehicleNeedsBlockedStorageCell) {
+    const sideRowExitNodeId = this.storageRowSideExitNodeIdForRoute(vehicle);
+    const sideRowExitClaimId = sideRowExitNodeId ? this.nodeClaimedByOtherVehicle(sideRowExitNodeId, vehicle.id) : null;
+    const sideRowExitClaimant = sideRowExitClaimId
+      ? this.vehicles.find((candidate) => candidate.id === sideRowExitClaimId) ?? null
+      : null;
+    const loadedVehicleBlocksSameRowExit = Boolean(
+      sideRowExitNodeId &&
+      this.storageSideRowMatchesStorageRow(sideRowExitNodeId, currentPosition.row) &&
+      sideRowExitClaimant?.loaded
+    );
+    if (
+      !enteredFromSideAisle &&
+      !currentCellClaimedByOther &&
+      !loadedVehicleNeedsBlockedStorageCell &&
+      !loadedVehicleBlocksSameRowExit
+    ) {
       return null;
     }
 
@@ -4477,7 +4493,27 @@ export class ShuttleSimCore {
     if (!this.isStorageNode(candidateNodeId) || !this.traffic.findEdge(vehicle.currentNodeId, candidateNodeId)) {
       return null;
     }
+    if (this.storedLoadIdAtNode(candidateNodeId)) {
+      return null;
+    }
     return this.nodeClaimedByOtherVehicle(candidateNodeId, vehicle.id) ? null : candidateNodeId;
+  }
+
+  private storageRowSideExitNodeIdForRoute(vehicle: MutableVehicle): string | null {
+    for (let index = vehicle.routeIndex + 1; index < vehicle.routeNodeIds.length; index += 1) {
+      const nodeId = vehicle.routeNodeIds[index]!;
+      const node = this.layoutNode(nodeId);
+      if (node?.type === 'storage') {
+        continue;
+      }
+      return node?.type === 'intersection' && /^left-row-|^right-row-/.test(node.id) ? node.id : null;
+    }
+    return null;
+  }
+
+  private storageSideRowMatchesStorageRow(sideRowNodeId: string, storageRow: number): boolean {
+    const match = /^(?:left|right)-row-(\d+)$/.exec(sideRowNodeId);
+    return match ? Number(match[1]) === storageRow : false;
   }
 
   private tryMoveDeeperIntoStorageRefuge(vehicle: MutableVehicle, blockedTargetNodeId: string): boolean {
@@ -4804,9 +4840,7 @@ export class ShuttleSimCore {
   }
 
   private topLiftSkuColumnActiveTaskLimit(kind: 'inbound' | 'outbound'): number {
-    if (kind === 'inbound') {
-      return 2;
-    }
+    void kind;
     return 2;
   }
 
@@ -5335,6 +5369,11 @@ export class ShuttleSimCore {
     const blockedDropoffNodeIds = this.activeInboundDropoffNodeIds();
     const blockedDropoffColumnKeys = this.activeTopLiftInboundColumnKeys();
     const storedLoadNodeIds = new Set(this.storageNodeLoadOccupancy(false).keys());
+    const storedLoadColumnKeys = new Set(
+      [...storedLoadNodeIds]
+        .map((nodeId) => this.topLiftColumnKey(nodeId))
+        .filter((columnKey): columnKey is string => columnKey !== null)
+    );
     const claimedStandbyNodeIds = this.claimedTasklessParkableNodeIds(vehicleId);
     const vehicleOffset = (this.vehicleOrdinal(vehicleId) - 1) % inboundLifts.length;
     const liftOrder = inboundLifts.map((_, index) => inboundLifts[(index + vehicleOffset) % inboundLifts.length]!);
@@ -5349,6 +5388,10 @@ export class ShuttleSimCore {
         .filter((node) => {
           const columnKey = this.topLiftColumnKey(node.id);
           return !columnKey || !blockedDropoffColumnKeys.has(columnKey);
+        })
+        .filter((node) => {
+          const columnKey = this.topLiftColumnKey(node.id);
+          return !columnKey || !storedLoadColumnKeys.has(columnKey);
         })
         .filter((node) => !claimedStandbyNodeIds.has(node.id))
         .filter((node) => {
@@ -6143,8 +6186,20 @@ export class ShuttleSimCore {
     );
 
     for (const vehicle of vehicles) {
-      if (vehicle.state === 'idle' && !vehicle.taskId && vehicle.routeNodeIds.length === 0) {
-        if (this.dispatchTasklessTopLiftStorageExit(vehicle)) {
+      if (vehicle.state === 'idle' && !vehicle.taskId) {
+        if (
+          this.topLiftTasklessVehicleBlocksInboundColumn(vehicle) &&
+          this.dispatchTasklessTopLiftStorageExit(vehicle)
+        ) {
+          continue;
+        }
+        if (vehicle.routeNodeIds.length === 0) {
+          if (this.dispatchTasklessTopLiftStorageExit(vehicle)) {
+            continue;
+          }
+        }
+        if (this.topLiftColumnLayoutEnabled() && this.layoutNode(vehicle.currentNodeId)?.noParking) {
+          this.startNextLegAgentSimple(vehicle, dtSec);
           continue;
         }
         vehicle.idleTimeSec = round(vehicle.idleTimeSec + dtSec);
@@ -8000,16 +8055,7 @@ export class ShuttleSimCore {
       return [];
     }
 
-    const targets: string[] = [];
-    const currentSlot = topLiftQueueParkingSlot(currentNodeId);
-    if (
-      currentNodeId !== queuePickupAccessId &&
-      (currentSlot?.liftNodeId !== liftNodeId || currentSlot.slotIndex !== 1)
-    ) {
-      targets.push(queueNodeId);
-    }
-    targets.push(queuePickupAccessId, serviceNodeId);
-    return targets;
+    return [queuePickupAccessId, serviceNodeId];
   }
 
   private agentRefreshEmptyInboundRouteToPickup(vehicle: MutableVehicle, task: TaskStateRecord): string[] | null {

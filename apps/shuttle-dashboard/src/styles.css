@@ -642,7 +642,8 @@ input[type="range"] {
 }
 
 .pph-trend-panel,
-.lift-pph-panel {
+.lift-pph-panel,
+.vehicle-time-panel {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
@@ -688,6 +689,31 @@ input[type="range"] {
 
 .pph-line.outbound {
   stroke: var(--amber);
+}
+
+.chart-grid-line {
+  stroke: rgba(118, 137, 158, 0.18);
+  stroke-width: 0.45;
+  vector-effect: non-scaling-stroke;
+}
+
+.chart-axis-line {
+  stroke: rgba(176, 190, 205, 0.56);
+  stroke-width: 0.7;
+  vector-effect: non-scaling-stroke;
+}
+
+.chart-axis-label {
+  fill: rgba(213, 222, 233, 0.78);
+  font-size: 4px;
+}
+
+.chart-axis-label.y-axis {
+  text-anchor: end;
+}
+
+.chart-axis-label.x-axis.end {
+  text-anchor: end;
 }
 
 .pph-legend {
@@ -759,6 +785,110 @@ input[type="range"] {
 
 .lift-pph-card.outbound {
   border-color: rgba(241, 183, 82, 0.42);
+}
+
+.vehicle-time-panel {
+  gap: 12px;
+}
+
+.vehicle-time-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.vehicle-time-legend span::before {
+  content: "";
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  margin-right: 6px;
+  background: currentColor;
+}
+
+.vehicle-time-legend .moving {
+  color: #6aa8ff;
+}
+
+.vehicle-time-legend .handling {
+  color: var(--green);
+}
+
+.vehicle-time-legend .waiting {
+  color: var(--amber);
+}
+
+.vehicle-time-legend .taskless {
+  color: #b58cff;
+}
+
+.vehicle-time-legend .idle {
+  color: #566579;
+}
+
+.vehicle-time-bars {
+  display: grid;
+  gap: 9px;
+}
+
+.vehicle-time-row {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr) 72px;
+  align-items: center;
+  gap: 10px;
+}
+
+.vehicle-time-label {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.vehicle-time-label strong {
+  font-size: 13px;
+}
+
+.vehicle-time-label small,
+.vehicle-time-total {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.vehicle-time-bar {
+  display: flex;
+  height: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(118, 137, 158, 0.18);
+  border-radius: 5px;
+  background: rgba(8, 15, 25, 0.5);
+}
+
+.vehicle-time-segment {
+  min-width: 0;
+  height: 100%;
+}
+
+.vehicle-time-segment.moving {
+  background: #6aa8ff;
+}
+
+.vehicle-time-segment.handling {
+  background: var(--green);
+}
+
+.vehicle-time-segment.waiting {
+  background: var(--amber);
+}
+
+.vehicle-time-segment.taskless {
+  background: #b58cff;
+}
+
+.vehicle-time-segment.idle {
+  background: #566579;
 }
 
 .main-grid {
@@ -1587,6 +1717,15 @@ th {
 
   .lift-pph-grid {
     grid-template-columns: 1fr;
+  }
+
+  .vehicle-time-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .vehicle-time-total {
+    text-align: left;
   }
 
   .traffic-wait-list,

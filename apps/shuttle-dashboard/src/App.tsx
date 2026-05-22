@@ -843,6 +843,39 @@ function pphSeriesPoints(history: PphHistorySample[], valueForSample: (sample: P
     .join(' ');
 }
 
+function niceAxisCeil(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    return 100;
+  }
+  const exponent = 10 ** Math.floor(Math.log10(value));
+  const fraction = value / exponent;
+  const niceFraction = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
+  return niceFraction * exponent;
+}
+
+function pphTrendPoints(
+  history: PphHistorySample[],
+  valueForSample: (sample: PphHistorySample) => number,
+  maxValue: number
+): string {
+  if (history.length === 0) {
+    return '';
+  }
+  const minTime = history[0]!.simTimeSec;
+  const maxTime = Math.max(minTime + 1, history.at(-1)!.simTimeSec);
+  const plotLeft = 14;
+  const plotRight = 114;
+  const plotTop = 6;
+  const plotBottom = 50;
+  return history
+    .map((sample) => {
+      const x = plotLeft + ((sample.simTimeSec - minTime) / (maxTime - minTime)) * (plotRight - plotLeft);
+      const y = plotBottom - (Math.max(0, valueForSample(sample)) / maxValue) * (plotBottom - plotTop);
+      return `${formatNumber(x, 2)},${formatNumber(y, 2)}`;
+    })
+    .join(' ');
+}
+
 function PphSparkline({ history, liftId, kind }: { history: PphHistorySample[]; liftId: string; kind: 'inbound' | 'outbound' }) {
   const points = pphSeriesPoints(history, (sample) => sample.liftPph[liftId] ?? 0);
   return (
@@ -853,10 +886,18 @@ function PphSparkline({ history, liftId, kind }: { history: PphHistorySample[]; 
 }
 
 function PphTrendChart({ history }: { history: PphHistorySample[] }) {
-  const totalPoints = pphSeriesPoints(history, (sample) => sample.totalPph);
-  const inboundPoints = pphSeriesPoints(history, (sample) => sample.inboundPph);
-  const outboundPoints = pphSeriesPoints(history, (sample) => sample.outboundPph);
+  const maxPph = niceAxisCeil(Math.max(
+    1,
+    ...history.flatMap((sample) => [sample.totalPph, sample.inboundPph, sample.outboundPph])
+  ));
+  const totalPoints = pphTrendPoints(history, (sample) => sample.totalPph, maxPph);
+  const inboundPoints = pphTrendPoints(history, (sample) => sample.inboundPph, maxPph);
+  const outboundPoints = pphTrendPoints(history, (sample) => sample.outboundPph, maxPph);
   const latest = history.at(-1);
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => ({
+    value: maxPph * ratio,
+    y: 50 - ratio * 44
+  }));
 
   return (
     <section className="pph-trend-panel" aria-label="PPH trend">
@@ -864,15 +905,102 @@ function PphTrendChart({ history }: { history: PphHistorySample[] }) {
         <h2>PPH Trend</h2>
         <span>{latest ? formatClock(latest.simTimeSec) : '--'}</span>
       </div>
-      <svg className="pph-trend-chart" viewBox="0 0 100 36" role="img" aria-label="Total inbound outbound PPH time curve">
+      <svg className="pph-trend-chart" viewBox="0 0 120 64" role="img" aria-label="Total inbound outbound PPH time curve">
+        {yTicks.map((tick) => (
+          <g key={tick.value}>
+            <line className="chart-grid-line" x1="14" x2="114" y1={tick.y} y2={tick.y} />
+            <text className="chart-axis-label y-axis" x="11" y={tick.y + 1.8}>
+              {formatNumber(tick.value, tick.value >= 100 ? 0 : 1)}
+            </text>
+          </g>
+        ))}
+        <line className="chart-axis-line" x1="14" x2="114" y1="50" y2="50" />
+        <line className="chart-axis-line" x1="14" x2="14" y1="6" y2="50" />
         <polyline className="pph-line total" points={totalPoints} />
         <polyline className="pph-line inbound" points={inboundPoints} />
         <polyline className="pph-line outbound" points={outboundPoints} />
+        <text className="chart-axis-label x-axis" x="14" y="60">
+          {history[0] ? formatClock(history[0].simTimeSec) : '--'}
+        </text>
+        <text className="chart-axis-label x-axis end" x="114" y="60">
+          {latest ? formatClock(latest.simTimeSec) : '--'}
+        </text>
       </svg>
       <div className="pph-legend">
-        <span className="total">Total</span>
-        <span className="inbound">Inbound</span>
-        <span className="outbound">Outbound</span>
+        <span className="total">Total {latest ? formatNumber(latest.totalPph, 1) : '--'}</span>
+        <span className="inbound">Inbound {latest ? formatNumber(latest.inboundPph, 1) : '--'}</span>
+        <span className="outbound">Outbound {latest ? formatNumber(latest.outboundPph, 1) : '--'}</span>
+      </div>
+    </section>
+  );
+}
+
+function VehicleTimeStackedBarChart({
+  vehicles,
+  kpis
+}: {
+  vehicles: VehicleState[];
+  kpis: KpiSnapshot | null;
+}) {
+  const breakdownByVehicle = kpis?.vehicleUtilizationBreakdown ?? {};
+  const segments = [
+    { key: 'productiveMoving', label: 'Moving', className: 'moving' },
+    { key: 'handling', label: 'Lift/handle', className: 'handling' },
+    { key: 'waiting', label: 'Traffic wait', className: 'waiting' },
+    { key: 'tasklessTravel', label: 'Reposition', className: 'taskless' },
+    { key: 'idle', label: 'Idle', className: 'idle' }
+  ] as const;
+  const rows = vehicles.map((vehicle) => {
+    const breakdown = breakdownByVehicle[vehicle.id];
+    const productiveMoving = breakdown ? Math.max(0, breakdown.moving - breakdown.tasklessTravel) : 0;
+    return {
+      vehicle,
+      values: {
+        productiveMoving,
+        handling: breakdown?.handling ?? 0,
+        waiting: breakdown?.waiting ?? 0,
+        tasklessTravel: breakdown?.tasklessTravel ?? 0,
+        idle: breakdown?.idle ?? 0
+      }
+    };
+  });
+
+  return (
+    <section className="vehicle-time-panel" aria-label="Shuttle time allocation">
+      <div className="panel-head compact">
+        <h2>Shuttle Time</h2>
+        <span>{vehicles.length} units</span>
+      </div>
+      <div className="vehicle-time-legend">
+        {segments.map((segment) => (
+          <span className={segment.className} key={segment.key}>{segment.label}</span>
+        ))}
+      </div>
+      <div className="vehicle-time-bars">
+        {rows.map((row) => (
+          <div className="vehicle-time-row" key={row.vehicle.id}>
+            <div className="vehicle-time-label">
+              <strong>{row.vehicle.id}</strong>
+              <small>{formatVehicleState(row.vehicle.state)}</small>
+            </div>
+            <div className="vehicle-time-bar" aria-label={`${row.vehicle.id} time allocation`}>
+              {segments.map((segment) => {
+                const value = row.values[segment.key];
+                return (
+                  <span
+                    className={`vehicle-time-segment ${segment.className}`}
+                    key={segment.key}
+                    style={{ width: `${Math.max(0, value) * 100}%` }}
+                    title={`${segment.label}: ${formatNumber(value * 100, 1)}%`}
+                  />
+                );
+              })}
+            </div>
+            <span className="vehicle-time-total">
+              {formatNumber((kpis?.vehicleUtilization[row.vehicle.id] ?? 0) * 100, 1)}% busy
+            </span>
+          </div>
+        ))}
       </div>
     </section>
   );
@@ -2908,6 +3036,7 @@ export function App() {
             <LiftPphPanel state={sceneState} kpis={kpis} history={pphHistory} />
             <CapacityTheoryPanel kpis={kpis} />
             <ResourceUtilizationPanel scenario={scenario} state={state} />
+            <VehicleTimeStackedBarChart vehicles={vehicles} kpis={kpis} />
           </section>
         )}
 
