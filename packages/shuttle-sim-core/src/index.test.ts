@@ -526,24 +526,28 @@ describe('shuttle phase 0 SimCore', () => {
       expect(occupiedSlotIds).toEqual(sourceSlotIdsByLift.get(liftId)!.sort());
     }
     const inboundTasks = state.tasks.filter((task) => task.kind === 'inbound');
-    expect(inboundTasks).toHaveLength(2);
+    expect(inboundTasks).toHaveLength(4);
     expect(inboundTasks.map((task) => task.pickupNodeId)).toEqual([
+      'lift-01-inbound-buffer-03',
+      'lift-02-inbound-buffer-03',
       'lift-01-inbound-buffer-03',
       'lift-02-inbound-buffer-03'
     ]);
     expect(inboundTasks.map((task) => task.dropoffNodeId)).toEqual([
       'storage-r14-c01',
-      'storage-r14-c15'
+      'storage-r14-c15',
+      'storage-r13-c01',
+      'storage-r13-c15'
     ]);
     expect(state.vehicles.map((vehicle) => vehicle.currentNodeId)).toEqual([
-      'parking-lift-01-inbound-queue',
-      'parking-lift-02-inbound-queue',
       'parking-01',
       'parking-02',
       'parking-03',
       'parking-04',
       'parking-05',
-      'parking-06'
+      'parking-06',
+      'parking-07',
+      'parking-08'
     ]);
     expect(state.traffic.liftPorts.filter((port) => port.kind === 'inbound').map((port) => port.sourceBufferOccupancy)).toEqual([4, 4]);
   });
@@ -566,11 +570,11 @@ describe('shuttle phase 0 SimCore', () => {
     expect(vehicle?.routeNodeIds).not.toContain('lift-01-inbound');
   });
 
-  it('dispatches parallel top-lift inbound work across the available inbound conveyors at startup', () => {
+  it('dispatches top-lift inbound work into lift-side pickup and queue positions at startup', () => {
     const scenario = createInboundMvpBaselineScenario();
     const sim = new ShuttleSimCore(scenario);
 
-    expect(sim.getState().tasks.filter((task) => task.kind === 'inbound')).toHaveLength(2);
+    expect(sim.getState().tasks.filter((task) => task.kind === 'inbound')).toHaveLength(4);
 
     sim.start();
     const state = sim.step(0.25);
@@ -578,16 +582,20 @@ describe('shuttle phase 0 SimCore', () => {
     const queuedInboundTasks = state.tasks.filter((task) => task.kind === 'inbound' && task.state === 'queued');
     const movingVehicles = state.vehicles.filter((vehicle) => vehicle.currentEdgeId !== null);
 
-    expect(assignedInboundTasks).toHaveLength(2);
+    expect(assignedInboundTasks).toHaveLength(4);
     expect(queuedInboundTasks).toHaveLength(0);
-    expect(new Set(assignedInboundTasks.map((task) => task.pickupNodeId))).toEqual(new Set([
+    expect(assignedInboundTasks.map((task) => task.pickupNodeId)).toEqual([
+      'lift-01-inbound-buffer-03',
+      'lift-02-inbound-buffer-03',
       'lift-01-inbound-buffer-03',
       'lift-02-inbound-buffer-03'
-    ]));
-    expect(movingVehicles).toHaveLength(2);
+    ]);
+    expect(movingVehicles).toHaveLength(4);
     const taskGoals = new Map(state.vehicles.map((vehicle) => [vehicle.taskId, vehicle.plannedGoalNodeId]));
     expect(taskGoals.get('task-0001')).toBe('lift-01-inbound-buffer-03');
     expect(taskGoals.get('task-0002')).toBe('lift-02-inbound-buffer-03');
+    expect(taskGoals.get('task-0003')).toBe('parking-lift-01-inbound-queue-02');
+    expect(taskGoals.get('task-0004')).toBe('parking-lift-02-inbound-queue-02');
   });
 
   it('adds compact tail wait slots beside each top-lift inbound pickup queue', () => {
@@ -610,7 +618,7 @@ describe('shuttle phase 0 SimCore', () => {
 
     expect(queueSlots.map((node) => node?.type)).toEqual(['parking', 'parking', 'parking']);
     expect(queueAccesses.map((node) => node?.type)).toEqual(['intersection', 'intersection', 'intersection', 'intersection', 'intersection']);
-    expect(queueSlots.map((node) => node?.noParking)).toEqual([false, true, true]);
+    expect(queueSlots.map((node) => node?.noParking)).toEqual([true, true, true]);
     expect(queueEdges.has('lift-01-inbound-queue-access>lift-01-inbound-queue-02-entry-access')).toBe(true);
     expect(queueEdges.has('lift-01-inbound-queue-02-entry-access>lift-01-inbound-queue-02-access')).toBe(true);
     expect(queueEdges.has('lift-01-inbound-queue-02-entry-access>lift-01-inbound-queue-03-entry-access')).toBe(true);
@@ -637,7 +645,7 @@ describe('shuttle phase 0 SimCore', () => {
 
     expect(task8).toMatchObject({ state: 'completed' });
     expect(task8?.vehicleId).toMatch(/^SH-\d{2}$/);
-    expect(task9?.startedAtSec).toBeGreaterThan(0);
+    expect(task9?.assignedAtSec).toBeGreaterThan(0);
     expect(repeatedTopRightYield).toHaveLength(0);
     expect(state.kpis.deadlockCount).toBe(0);
     expect(state.traffic.physicalViolationCount).toBe(0);
@@ -883,7 +891,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(reverseStep).toBeUndefined();
   }, 90000);
 
-  it('keeps top-lift inbound allocation single-file while a SKU column is active', () => {
+  it('keeps top-lift inbound allocation bounded while a SKU column is active', () => {
     const sim = new ShuttleSimCore(createDefaultShuttleScenario({
       layoutProfile: {
         layoutKind: 'top-lift-column',
@@ -925,6 +933,8 @@ describe('shuttle phase 0 SimCore', () => {
 
     expect(internals.selectTopLiftInboundStorageNode()?.nodeId).toBe('storage-r14-c01');
     addInboundTask(14);
+    expect(internals.selectTopLiftInboundStorageNode()?.nodeId).toBe('storage-r13-c01');
+    addInboundTask(13);
     expect(internals.selectTopLiftInboundStorageNode()).toBeNull();
   });
 
