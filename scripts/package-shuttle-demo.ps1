@@ -11,6 +11,15 @@ $outputRoot = Join-Path $repoRoot 'output'
 $demoRoot = Join-Path $outputRoot 'shuttle-demo-oneclick'
 $compileRoot = Join-Path $outputRoot '.shuttle-demo-compile'
 $zipPath = Join-Path $outputRoot 'shuttle-demo-oneclick.zip'
+$commitSha = 'unknown'
+try {
+  $resolvedCommitSha = git -C $repoRoot rev-parse --short HEAD 2>$null
+  if ($LASTEXITCODE -eq 0 -and $resolvedCommitSha) {
+    $commitSha = $resolvedCommitSha.Trim()
+  }
+} catch {
+  $commitSha = 'unknown'
+}
 
 function Assert-UnderOutput([string]$PathToCheck) {
   $full = [System.IO.Path]::GetFullPath($PathToCheck)
@@ -324,27 +333,51 @@ if (-not (Test-Path -LiteralPath `$node)) {
 }
 
 function Stop-Port([int]`$Port) {
+  Write-Host "Checking port `$Port..."
   `$connections = Get-NetTCPConnection -LocalPort `$Port -ErrorAction SilentlyContinue | Where-Object { `$_.State -eq 'Listen' }
   foreach (`$ownerProcessId in (`$connections | Select-Object -ExpandProperty OwningProcess -Unique)) {
     if (`$ownerProcessId -and `$ownerProcessId -ne `$PID) {
+      Write-Host "Stopping existing process `$ownerProcessId on port `$Port..."
       Stop-Process -Id `$ownerProcessId -Force -ErrorAction SilentlyContinue
     }
   }
 }
 
-function Wait-Http([string]`$Url) {
-  for (`$i = 0; `$i -lt 60; `$i += 1) {
+function Show-LogTail([string]`$Path) {
+  if (Test-Path -LiteralPath `$Path) {
+    Write-Host "---- `$Path ----"
+    Get-Content -LiteralPath `$Path -Tail 40 | Out-Host
+  }
+}
+
+function Wait-Http([string]`$Url, [System.Diagnostics.Process[]]`$Processes, [string[]]`$LogPaths) {
+  Write-Host "Waiting for `$Url..."
+  for (`$i = 0; `$i -lt 120; `$i += 1) {
     try {
       `$response = Invoke-WebRequest -Uri `$Url -UseBasicParsing -TimeoutSec 2
-      if (`$response.StatusCode -ge 200 -and `$response.StatusCode -lt 500) { return }
+      if (`$response.StatusCode -ge 200 -and `$response.StatusCode -lt 500) {
+        Write-Host "Ready: `$Url"
+        return
+      }
     } catch {
+      foreach (`$process in `$Processes) {
+        if (`$process -and `$process.HasExited) {
+          foreach (`$logPath in `$LogPaths) { Show-LogTail `$logPath }
+          throw "Service exited while waiting for `$Url. Exit code: `$(`$process.ExitCode)"
+        }
+      }
+      if ((`$i % 10) -eq 0) {
+        Write-Host "Still waiting for `$Url..."
+      }
       Start-Sleep -Milliseconds 500
     }
   }
+  foreach (`$logPath in `$LogPaths) { Show-LogTail `$logPath }
   throw "Timed out waiting for `$Url"
 }
 
 Write-Host 'Starting Shuttle demo...'
+Write-Host "Root: `$Root"
 Stop-Port `$ApiPort
 Stop-Port `$WebPort
 Start-Sleep -Milliseconds 500
@@ -358,12 +391,15 @@ Remove-Item -LiteralPath `$apiLog, `$apiErr, `$webLog, `$webErr -ErrorAction Sil
 `$env:SHUTTLE_PORT = [string]`$ApiPort
 `$env:SHUTTLE_SPEED = [string]`$PlaybackSpeed
 `$env:SHUTTLE_TICK_MS = '100'
+`$env:SHUTTLE_COMMIT_SHA = '$commitSha'
 `$apiScript = Join-Path `$Root 'api\src\server.js'
+Write-Host "Starting API on port `$ApiPort..."
 `$apiProc = Start-Process -FilePath `$node -ArgumentList @(`$apiScript) -WorkingDirectory (Join-Path `$Root 'api') -WindowStyle Hidden -RedirectStandardOutput `$apiLog -RedirectStandardError `$apiErr -PassThru
 
 `$webScript = Join-Path `$Root 'tools\web-static-server.mjs'
 `$webDist = Join-Path `$Root 'web\dist'
 `$webArgs = @(`$webScript, `$webDist, [string]`$WebPort)
+Write-Host "Starting dashboard on port `$WebPort..."
 `$webProc = Start-Process -FilePath `$node -ArgumentList `$webArgs -WorkingDirectory `$Root -WindowStyle Hidden -RedirectStandardOutput `$webLog -RedirectStandardError `$webErr -PassThru
 
 `$pidInfo = @{
@@ -374,12 +410,17 @@ Remove-Item -LiteralPath `$apiLog, `$apiErr, `$webLog, `$webErr -ErrorAction Sil
 }
 `$pidInfo | ConvertTo-Json | Set-Content -Path (Join-Path `$Logs 'pids.json') -Encoding UTF8
 
-Wait-Http "http://localhost:`$ApiPort/api/shuttle/health"
-Wait-Http "http://localhost:`$WebPort/"
+Wait-Http -Url "http://localhost:`$ApiPort/api/shuttle/health" -Processes @(`$apiProc) -LogPaths @(`$apiErr, `$apiLog)
+Wait-Http -Url "http://localhost:`$WebPort/" -Processes @(`$webProc) -LogPaths @(`$webErr, `$webLog)
 
 `$loader = Join-Path `$Root 'tools\load-demo-scenario.mjs'
+Write-Host 'Loading demo scenario...'
 & `$node `$loader "http://localhost:`$ApiPort/api/shuttle" `$PlaybackSpeed
-if (`$LASTEXITCODE -ne 0) { throw 'Failed to load demo scenario.' }
+if (`$LASTEXITCODE -ne 0) {
+  Show-LogTail `$apiErr
+  Show-LogTail `$apiLog
+  throw 'Failed to load demo scenario.'
+}
 
 Start-Process "http://localhost:`$WebPort"
 Write-Host "Ready: http://localhost:`$WebPort"
