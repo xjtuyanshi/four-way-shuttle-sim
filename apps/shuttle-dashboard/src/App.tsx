@@ -95,8 +95,18 @@ type LiveStreamSnapshot = {
   kpis: KpiSnapshot | null;
 };
 
+type PphHistorySample = {
+  simTimeSec: number;
+  inboundPph: number;
+  outboundPph: number;
+  totalPph: number;
+  liftPph: Record<string, number>;
+};
+
 type MapViewMode = '3d' | 'lite' | '2d';
 type WorkspaceTab = 'view' | 'statistics' | 'diagnostics';
+
+const MAX_PPH_HISTORY_SAMPLES = 240;
 
 type BottleneckBreakdown = Record<string, number>;
 
@@ -471,8 +481,14 @@ function getPointerValue(source: unknown, pointer: string): unknown {
 
 export function inferTopLiftRegionCount(scenario: ShuttleScenario | null | undefined): number {
   if (!scenario) return 2;
+  const storageNodes = scenario.layout.nodes.filter((node) => node.type === 'storage');
+  const storageRows = new Set(storageNodes.map((node) => node.z)).size;
+  const storageColumns = storageRows > 0 ? Math.round(storageNodes.length / storageRows) : 0;
+  if (scenario.layout.calibrationProfile?.id === 'top-lift-column-v1' && storageColumns > 0) {
+    return Math.max(1, Math.round(storageColumns / 14));
+  }
   const inboundLiftCount = scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound').length;
-  return Math.max(1, Math.round(inboundLiftCount / 2));
+  return Math.max(1, inboundLiftCount);
 }
 
 export function summarizeScenarioSetup(scenario: ShuttleScenario | null | undefined): ScenarioSetup | null {
@@ -491,7 +507,7 @@ export function summarizeScenarioSetup(scenario: ShuttleScenario | null | undefi
     storageColumns: contract.storageColumns,
     storageRows: contract.storageRows,
     storageCapacity: contract.storageCellCount,
-    physicalLiftCount: Math.max(inboundLiftCount, outboundLiftCount),
+    physicalLiftCount: inboundLiftCount + outboundLiftCount,
     inboundLiftCount,
     outboundLiftCount,
     initialOutboundFullColumns: scenario.taskGeneration.initialOutboundFullColumns,
@@ -513,6 +529,27 @@ function mergeEvents(previous: EventLogEntry[], next: EventLogEntry[]): EventLog
     bySequence.set(event.sequence, event);
   }
   return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence).slice(-80);
+}
+
+function createPphHistorySample(simTimeSec: number, kpis: KpiSnapshot): PphHistorySample {
+  return {
+    simTimeSec,
+    inboundPph: kpis.inboundPph,
+    outboundPph: kpis.outboundPph,
+    totalPph: kpis.totalPph,
+    liftPph: Object.fromEntries(Object.entries(kpis.liftPph ?? {}).map(([nodeId, value]) => [nodeId, value.pph]))
+  };
+}
+
+function appendPphHistorySample(previous: PphHistorySample[], sample: PphHistorySample): PphHistorySample[] {
+  const last = previous.at(-1);
+  if (last && sample.simTimeSec < last.simTimeSec) {
+    return [sample];
+  }
+  if (last && Math.abs(sample.simTimeSec - last.simTimeSec) < 0.25) {
+    return [...previous.slice(0, -1), sample];
+  }
+  return [...previous, sample].slice(-MAX_PPH_HISTORY_SAMPLES);
 }
 
 export function mergeVehicleStateUpdate(
@@ -690,6 +727,7 @@ function KpiStrip({ scenario, kpis }: { scenario: ShuttleScenario | null; kpis: 
   const items = [
     ['Achieved total PPH', kpis ? formatNumber(kpis.totalPph, 1) : '--'],
     ['Achieved inbound PPH', kpis ? formatNumber(kpis.inboundPph, 1) : '--'],
+    ['Achieved outbound PPH', kpis ? formatNumber(kpis.outboundPph, 1) : '--'],
     ['Requested total PPH', requestedTotalPph !== null ? formatNumber(requestedTotalPph, 0) : '--'],
     ['Active / queued', kpis ? `${kpis.activeTasks} / ${kpis.queuedTasks}` : '--'],
     ['Task assign wait', kpis ? `${formatNumber(kpis.averageTaskWaitSec, 1)}s` : '--'],
@@ -785,6 +823,111 @@ function ResourceUtilizationPanel({ scenario, state }: { scenario: ShuttleScenar
           <small>{item.detail}</small>
         </div>
       ))}
+    </section>
+  );
+}
+
+function pphSeriesPoints(history: PphHistorySample[], valueForSample: (sample: PphHistorySample) => number): string {
+  if (history.length === 0) {
+    return '';
+  }
+  const minTime = history[0]!.simTimeSec;
+  const maxTime = Math.max(minTime + 1, history.at(-1)!.simTimeSec);
+  const maxValue = Math.max(1, ...history.map(valueForSample));
+  return history
+    .map((sample) => {
+      const x = ((sample.simTimeSec - minTime) / (maxTime - minTime)) * 100;
+      const y = 32 - (valueForSample(sample) / maxValue) * 28;
+      return `${formatNumber(x, 2)},${formatNumber(y, 2)}`;
+    })
+    .join(' ');
+}
+
+function PphSparkline({ history, liftId, kind }: { history: PphHistorySample[]; liftId: string; kind: 'inbound' | 'outbound' }) {
+  const points = pphSeriesPoints(history, (sample) => sample.liftPph[liftId] ?? 0);
+  return (
+    <svg className="pph-sparkline" viewBox="0 0 100 36" role="img" aria-label={`${liftId} PPH trend`}>
+      <polyline className={`pph-line ${kind}`} points={points} />
+    </svg>
+  );
+}
+
+function PphTrendChart({ history }: { history: PphHistorySample[] }) {
+  const totalPoints = pphSeriesPoints(history, (sample) => sample.totalPph);
+  const inboundPoints = pphSeriesPoints(history, (sample) => sample.inboundPph);
+  const outboundPoints = pphSeriesPoints(history, (sample) => sample.outboundPph);
+  const latest = history.at(-1);
+
+  return (
+    <section className="pph-trend-panel" aria-label="PPH trend">
+      <div className="panel-head compact">
+        <h2>PPH Trend</h2>
+        <span>{latest ? formatClock(latest.simTimeSec) : '--'}</span>
+      </div>
+      <svg className="pph-trend-chart" viewBox="0 0 100 36" role="img" aria-label="Total inbound outbound PPH time curve">
+        <polyline className="pph-line total" points={totalPoints} />
+        <polyline className="pph-line inbound" points={inboundPoints} />
+        <polyline className="pph-line outbound" points={outboundPoints} />
+      </svg>
+      <div className="pph-legend">
+        <span className="total">Total</span>
+        <span className="inbound">Inbound</span>
+        <span className="outbound">Outbound</span>
+      </div>
+    </section>
+  );
+}
+
+function LiftPphPanel({
+  state,
+  kpis,
+  history
+}: {
+  state: ShuttleSimState | null;
+  kpis: KpiSnapshot | null;
+  history: PphHistorySample[];
+}) {
+  const liftPorts = state?.traffic.liftPorts ?? [];
+  const liftPph = kpis?.liftPph ?? {};
+  const entries = liftPorts.map((port) => ({
+    nodeId: port.nodeId,
+    kind: port.kind,
+    pph: port.pph ?? liftPph[port.nodeId]?.pph ?? 0,
+    completed: port.completedTasks ?? liftPph[port.nodeId]?.completed ?? 0,
+    activeTaskId: port.activeTaskId,
+    approachOccupancy: port.approachOccupancy ?? 0,
+    approachCapacity: port.approachCapacity ?? 1,
+    queueLength: port.queueLength,
+    sourceBufferOccupancy: port.sourceBufferOccupancy ?? 0,
+    sourceBufferCapacity: port.sourceBufferCapacity ?? 1
+  }));
+
+  return (
+    <section className="lift-pph-panel" aria-label="Per lift PPH">
+      <div className="panel-head compact">
+        <h2>Lift PPH</h2>
+        <span>{entries.length} ports</span>
+      </div>
+      <div className="lift-pph-grid">
+        {entries.length === 0 ? (
+          <p className="muted">No lift diagnostics yet.</p>
+        ) : (
+          entries.map((entry) => (
+            <div className={`lift-pph-card ${entry.kind}`} key={entry.nodeId}>
+              <div>
+                <span>{entry.nodeId}</span>
+                <strong>{formatNumber(entry.pph, 1)} PPH</strong>
+              </div>
+              <PphSparkline history={history} liftId={entry.nodeId} kind={entry.kind} />
+              <small>
+                {entry.completed} done, approach {entry.approachOccupancy}/{entry.approachCapacity}, q{entry.queueLength}
+                {entry.kind === 'inbound' ? `, buffer ${entry.sourceBufferOccupancy}/${entry.sourceBufferCapacity}` : ''}
+                {entry.activeTaskId ? `, active ${entry.activeTaskId}` : ''}
+              </small>
+            </div>
+          ))
+        )}
+      </div>
     </section>
   );
 }
@@ -1652,7 +1795,7 @@ function TrafficDiagnosticsPanel({ state }: { state: ShuttleSimState | null }) {
         ) : (
           liftPorts.map((port) => (
             <small key={port.nodeId}>
-              {port.nodeId} / {port.kind} / source {port.sourceBufferOccupancy ?? 0}/{port.sourceBufferCapacity ?? 1} / approach {port.approachOccupancy ?? 0}/{port.approachCapacity ?? 1} / q{port.queueLength} / cycle {Math.round(port.utilization * 100)}%
+              {port.nodeId} / {port.kind} / {formatNumber(port.pph ?? 0, 1)} PPH / done {port.completedTasks ?? 0} / source {port.sourceBufferOccupancy ?? 0}/{port.sourceBufferCapacity ?? 1} / approach {port.approachOccupancy ?? 0}/{port.approachCapacity ?? 1} / q{port.queueLength} / cycle {Math.round(port.utilization * 100)}%
             </small>
           ))
         )}
@@ -2067,6 +2210,7 @@ export function App() {
   const [scenario, setScenario] = useState<ShuttleScenario | null>(null);
   const [state, setState] = useState<ShuttleSimState | null>(null);
   const [liveStream, setLiveStream] = useState<LiveStreamSnapshot | null>(null);
+  const [pphHistory, setPphHistory] = useState<PphHistorySample[]>([]);
   const [events, setEvents] = useState<EventLogEntry[]>([]);
   const [prerequisites, setPrerequisites] = useState<PrerequisiteReport | null>(null);
   const [validation, setValidation] = useState<Phase0ValidationResult | null>(null);
@@ -2104,6 +2248,7 @@ export function App() {
     };
     pendingLiveStreamRef.current = snapshot;
     setLiveStream(snapshot);
+    setPphHistory((previous) => appendPphHistorySample(previous, createPphHistorySample(nextState.simTimeSec, nextState.kpis)));
   }
 
   function scheduleLiveStreamPatch(patch: Partial<LiveStreamSnapshot> & { simTimeSec: number }): void {
@@ -2120,6 +2265,9 @@ export function App() {
       vehicles: patch.vehicles ?? previous.vehicles,
       kpis: patch.kpis ?? previous.kpis
     };
+    if (patch.kpis) {
+      setPphHistory((previousHistory) => appendPphHistorySample(previousHistory, createPphHistorySample(patch.simTimeSec, patch.kpis!)));
+    }
     if (liveStreamFrameRef.current !== null) {
       return;
     }
@@ -2756,6 +2904,8 @@ export function App() {
         {workspaceTab === 'statistics' && (
           <section className="tab-panel statistics-panel" aria-label="Simulation statistics">
             <KpiStrip scenario={scenario} kpis={kpis} />
+            <PphTrendChart history={pphHistory} />
+            <LiftPphPanel state={sceneState} kpis={kpis} history={pphHistory} />
             <CapacityTheoryPanel kpis={kpis} />
             <ResourceUtilizationPanel scenario={scenario} state={state} />
           </section>

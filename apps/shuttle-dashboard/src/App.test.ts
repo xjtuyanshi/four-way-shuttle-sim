@@ -71,6 +71,7 @@ function kpis(overrides: Partial<KpiSnapshot> = {}): KpiSnapshot {
     averageTaskWaitSec: 0,
     vehicleUtilization: {},
     vehicleUtilizationBreakdown: {},
+    liftPph: {},
     blockedTimeByReasonSec: {},
     reservationConflictCount: 0,
     replanCount: 0,
@@ -262,8 +263,8 @@ describe('dashboard scenario setup', () => {
       storageColumns: 42,
       storageCapacity: 588,
       physicalLiftCount: 6,
-      inboundLiftCount: 6,
-      outboundLiftCount: 6
+      inboundLiftCount: 3,
+      outboundLiftCount: 3
     });
   });
 });
@@ -325,6 +326,8 @@ describe('dashboard resource utilization', () => {
             approachCapacity: 1,
             sourceBufferOccupancy: 2,
             sourceBufferCapacity: 4,
+            completedTasks: 3,
+            pph: 36,
             utilization: 0.5
           },
           {
@@ -337,6 +340,8 @@ describe('dashboard resource utilization', () => {
             approachCapacity: 1,
             sourceBufferOccupancy: 0,
             sourceBufferCapacity: 1,
+            completedTasks: 1,
+            pph: 12,
             utilization: 0.1
           }
         ],

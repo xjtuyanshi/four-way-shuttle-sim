@@ -458,6 +458,12 @@ export const VehicleUtilizationBreakdownSchema = z.object({
   tasklessTravel: z.number().min(0).max(1)
 });
 
+export const LiftPphSnapshotSchema = z.object({
+  kind: z.enum(['inbound', 'outbound']),
+  completed: z.number().int().nonnegative(),
+  pph: z.number().nonnegative()
+});
+
 export const KpiSnapshotSchema = z.object({
   inboundPph: z.number().nonnegative(),
   outboundPph: z.number().nonnegative(),
@@ -471,6 +477,7 @@ export const KpiSnapshotSchema = z.object({
   averageTaskWaitSec: z.number().nonnegative(),
   vehicleUtilization: z.record(z.number().min(0).max(1)),
   vehicleUtilizationBreakdown: z.record(VehicleUtilizationBreakdownSchema).default({}),
+  liftPph: z.record(LiftPphSnapshotSchema).default({}),
   blockedTimeByReasonSec: z.record(z.number().nonnegative()),
   reservationConflictCount: z.number().int().nonnegative(),
   replanCount: z.number().int().nonnegative(),
@@ -553,6 +560,8 @@ export const LiftPortDiagnosticsSchema = z.object({
   approachCapacity: z.number().int().positive().default(1),
   sourceBufferOccupancy: z.number().int().nonnegative().default(0),
   sourceBufferCapacity: z.number().int().positive().default(1),
+  completedTasks: z.number().int().nonnegative().default(0),
+  pph: z.number().nonnegative().default(0),
   utilization: z.number().min(0).max(1)
 });
 
@@ -622,6 +631,7 @@ export type LoadStateRecord = z.infer<typeof LoadStateRecordSchema>;
 export type Reservation = z.infer<typeof ReservationSchema>;
 export type TrafficDiagnostics = z.infer<typeof TrafficDiagnosticsSchema>;
 export type ConflictSession = z.infer<typeof ConflictSessionSchema>;
+export type LiftPphSnapshot = z.infer<typeof LiftPphSnapshotSchema>;
 export type KpiSnapshot = z.infer<typeof KpiSnapshotSchema>;
 export type EventLogEntry = z.infer<typeof EventLogEntrySchema>;
 export type ShuttleSimState = z.infer<typeof ShuttleSimStateSchema>;

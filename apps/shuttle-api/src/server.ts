@@ -158,8 +158,14 @@ let lastTraceSnapshotSimTimeSec = -Infinity;
 let traceInitialSnapshot: ShuttleEngineSnapshotV1 | null = null;
 
 function inferTopLiftRegionCount(scenario: ReturnType<ShuttleSimCore['getScenario']>): number {
+  const storageNodes = scenario.layout.nodes.filter((node) => node.type === 'storage');
+  const storageRows = new Set(storageNodes.map((node) => node.z)).size;
+  const storageColumns = storageRows > 0 ? Math.round(storageNodes.length / storageRows) : 0;
+  if (scenario.layout.calibrationProfile?.id === 'top-lift-column-v1' && storageColumns > 0) {
+    return Math.max(1, Math.round(storageColumns / 14));
+  }
   const inboundLiftCount = scenario.layout.nodes.filter((node) => node.type === 'lift-blackbox' && node.liftKind === 'inbound').length;
-  return Math.max(1, Math.round(inboundLiftCount / 2));
+  return Math.max(1, inboundLiftCount);
 }
 
 function setupFromScenario(scenario: ReturnType<ShuttleSimCore['getScenario']>): ScenarioSetup {
@@ -179,7 +185,7 @@ function setupFromScenario(scenario: ReturnType<ShuttleSimCore['getScenario']>):
     storageColumns,
     storageRows,
     storageCapacity: storageNodes.length,
-    physicalLiftCount: Math.max(inboundLiftCount, outboundLiftCount),
+    physicalLiftCount: inboundLiftCount + outboundLiftCount,
     inboundLiftCount,
     outboundLiftCount,
     initialOutboundFullColumns: scenario.taskGeneration.initialOutboundFullColumns,
