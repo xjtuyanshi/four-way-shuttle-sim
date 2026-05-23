@@ -1834,6 +1834,8 @@ export class ShuttleSimCore {
   private vehicles: MutableVehicle[] = [];
   private tasks: TaskStateRecord[] = [];
   private loads: LoadStateRecord[] = [];
+  private tasksById = new Map<string, TaskStateRecord>();
+  private loadsById = new Map<string, LoadStateRecord>();
   private reservations: Reservation[] = [];
   private currentNodeOccupancy = new Map<string, string>();
   private eventLog: EventLogEntry[] = [];
@@ -1894,6 +1896,8 @@ export class ShuttleSimCore {
     this.tickIndex = 0;
     this.tasks = [];
     this.loads = [];
+    this.tasksById = new Map();
+    this.loadsById = new Map();
     this.reservations = [];
     this.currentNodeOccupancy = new Map();
     this.eventLog = [];
@@ -2098,6 +2102,8 @@ export class ShuttleSimCore {
     this.assignQueuedTasks(stepSec);
     this.advanceVehicles(stepSec);
     this.updateConflictSessions();
+    // Keep this post-advance refill: vehicles can consume inbound source slots during the tick,
+    // and moving it changes deterministic event/state hashes.
     this.replenishInboundSourceBuffers();
     this.updateLiftPortUtilization(stepSec);
     this.updateDeadlockSmokeCounters();
@@ -2242,6 +2248,7 @@ export class ShuttleSimCore {
     this.vehicles = structuredClone(snapshot.vehicles);
     this.tasks = structuredClone(snapshot.tasks);
     this.loads = structuredClone(snapshot.loads);
+    this.rebuildTaskLoadIndexes();
     this.reservations = structuredClone(snapshot.reservations);
     this.completedTaskCycleTimes = [...snapshot.completedTaskCycleTimes];
     this.completedTaskWaitTimes = [...snapshot.completedTaskWaitTimes];
@@ -2266,6 +2273,31 @@ export class ShuttleSimCore {
     this.traffic = new TrafficControllerV2(this.scenario);
     this.rebuildGraphNeighbors();
     return this.getState();
+  }
+
+  private rebuildTaskLoadIndexes(): void {
+    this.tasksById = new Map(this.tasks.map((task) => [task.id, task]));
+    this.loadsById = new Map(this.loads.map((load) => [load.id, load]));
+  }
+
+  private pushTask(task: TaskStateRecord): TaskStateRecord {
+    this.tasks.push(task);
+    this.tasksById.set(task.id, task);
+    return task;
+  }
+
+  private pushLoad(load: LoadStateRecord): LoadStateRecord {
+    this.loads.push(load);
+    this.loadsById.set(load.id, load);
+    return load;
+  }
+
+  private taskById(taskId: string | null | undefined): TaskStateRecord | null {
+    return taskId ? this.tasksById.get(taskId) ?? null : null;
+  }
+
+  private loadById(loadId: string | null | undefined): LoadStateRecord | null {
+    return loadId ? this.loadsById.get(loadId) ?? null : null;
   }
 
   setVehicleRouteForTest(vehicleId: string, routeNodeIds: string[]): ShuttleSimState {
@@ -2362,12 +2394,12 @@ export class ShuttleSimCore {
   }
 
   addLoadForTest(load: LoadStateRecord): ShuttleSimState {
-    this.loads.push(LoadStateRecordSchema.parse(load));
+    this.pushLoad(LoadStateRecordSchema.parse(load));
     return this.getState();
   }
 
   addTaskForTest(task: TaskStateRecord): ShuttleSimState {
-    this.tasks.push(TaskStateRecordSchema.parse(task));
+    this.pushTask(TaskStateRecordSchema.parse(task));
     return this.getState();
   }
 
@@ -2484,7 +2516,7 @@ export class ShuttleSimCore {
       replanCount: 0,
       waitReason: null
     };
-    this.tasks.push(task);
+    this.pushTask(task);
     this.logEvent('task-created', null, task.id, loadId, null, pickupNodeId, 'task-generation', nodePosition(this.scenario, pickupNodeId), {
       kind,
       fifoNodeId: storageSelection.nodeId
@@ -2571,7 +2603,7 @@ export class ShuttleSimCore {
           vehicleId: null,
           weightKg: 450 + Math.round(this.rng.next() * 350)
         };
-        this.loads.push(load);
+        this.pushLoad(load);
         this.logEvent('source-load-replenished', null, null, load.id, null, liftNode.id, 'inbound-source-buffer-refill', nodePosition(this.scenario, slotNodeId), {
           sourceSlotNodeId: slotNodeId,
           sourceBufferOccupancy: this.inboundLiftWaitingSourceLoads(liftNode.id).length,
@@ -2701,7 +2733,7 @@ export class ShuttleSimCore {
     return this.liftBufferNodeIds(liftNodeId).at(-1) ?? liftNodeId;
   }
 
-  private inboundSourceLoadBelongsToLift(load: LoadStateRecord | undefined, liftNodeId: string): boolean {
+  private inboundSourceLoadBelongsToLift(load: LoadStateRecord | null | undefined, liftNodeId: string): boolean {
     return Boolean(
       load &&
       load.state === 'waiting' &&
@@ -2719,7 +2751,7 @@ export class ShuttleSimCore {
       return true;
     }
     this.compactInboundSourceBuffer(bufferParent.liftNodeId);
-    const load = this.loads.find((candidate) => candidate.id === task.loadId);
+    const load = this.loadById(task.loadId);
     return Boolean(load && load.state === 'waiting' && load.nodeId === task.pickupNodeId && load.vehicleId === null);
   }
 
@@ -2759,7 +2791,7 @@ export class ShuttleSimCore {
     if (vehicle?.loaded) {
       return true;
     }
-    const load = this.loads.find((candidate) => candidate.id === task.loadId);
+    const load = this.loadById(task.loadId);
     return Boolean(load && load.state !== 'waiting');
   }
 
@@ -3063,7 +3095,7 @@ export class ShuttleSimCore {
           vehicleId: null,
           weightKg: 450 + Math.round(this.rng.next() * 350)
         };
-        this.loads.push(load);
+        this.pushLoad(load);
         occupancy.set(nodeId, load.id);
       }
     }
@@ -3174,7 +3206,7 @@ export class ShuttleSimCore {
   }
 
   private vehicleTaskLiftPortNodeId(vehicle: MutableVehicle | VehicleState): string | null {
-    const task = vehicle.taskId ? this.tasks.find((candidate) => candidate.id === vehicle.taskId) ?? null : null;
+    const task = this.taskById(vehicle.taskId);
     return task ? this.taskLiftPortNodeId(task) : null;
   }
 
@@ -3227,7 +3259,7 @@ export class ShuttleSimCore {
       return true;
     }
     if (kind === 'inbound') {
-      const load = this.loads.find((candidate) => candidate.id === task.loadId);
+      const load = this.loadById(task.loadId);
       return task.state === 'assigned' || this.inboundSourceLoadBelongsToLift(load, liftNodeId);
     }
     return true;
@@ -3261,7 +3293,7 @@ export class ShuttleSimCore {
       if (this.nodeBelongsToLiftPort(other.currentNodeId, liftNodeId) || (other.targetNodeId && this.nodeBelongsToLiftPort(other.targetNodeId, liftNodeId))) {
         return other.id;
       }
-      const task = other.taskId ? this.tasks.find((candidate) => candidate.id === other.taskId) ?? null : null;
+      const task = this.taskById(other.taskId);
       if (!task || task.state === 'completed' || task.state === 'failed' || this.taskLiftPortNodeId(task) !== liftNodeId) {
         continue;
       }
@@ -6433,7 +6465,8 @@ export class ShuttleSimCore {
       return;
     }
 
-    for (const vehicle of this.vehicles.sort((left, right) => left.id.localeCompare(right.id))) {
+    const sortedVehicles = [...this.vehicles].sort((left, right) => left.id.localeCompare(right.id));
+    for (const vehicle of sortedVehicles) {
       if (vehicle.state === 'idle') {
         vehicle.idleTimeSec = round(vehicle.idleTimeSec + dtSec);
         continue;
@@ -6534,10 +6567,10 @@ export class ShuttleSimCore {
       return;
     }
 
-    const task = vehicle.taskId ? this.tasks.find((candidate) => candidate.id === vehicle.taskId) ?? null : null;
+    const task = this.taskById(vehicle.taskId);
     if (vehicle.state === 'lifting' && task) {
       vehicle.loaded = true;
-      const load = this.loads.find((candidate) => candidate.id === task.loadId);
+      const load = this.loadById(task.loadId);
       if (load) {
         load.state = 'carried';
         load.nodeId = null;
@@ -6589,7 +6622,7 @@ export class ShuttleSimCore {
 
     if (vehicle.state === 'lowering' && task) {
       vehicle.loaded = false;
-      const load = this.loads.find((candidate) => candidate.id === task.loadId);
+      const load = this.loadById(task.loadId);
       if (load) {
         load.state = task.kind === 'inbound' ? 'stored' : 'delivered';
         load.nodeId = task.dropoffNodeId;
@@ -8480,7 +8513,7 @@ export class ShuttleSimCore {
   }
 
   private taskForVehicle(vehicle: MutableVehicle): TaskStateRecord | null {
-    return vehicle.taskId ? this.tasks.find((candidate) => candidate.id === vehicle.taskId) ?? null : null;
+    return this.taskById(vehicle.taskId);
   }
 
   private agentGoalNodeId(vehicle: MutableVehicle, task: TaskStateRecord | null): string | null {
@@ -9985,7 +10018,7 @@ export class ShuttleSimCore {
 
   private startNextLeg(vehicle: MutableVehicle, dtSec: number): void {
     const fromNodeId = vehicle.currentNodeId;
-    const task = vehicle.taskId ? this.tasks.find((candidate) => candidate.id === vehicle.taskId) ?? null : null;
+    const task = this.taskById(vehicle.taskId);
 
     if (task && fromNodeId === task.pickupNodeId && !vehicle.loaded) {
       if (!this.inboundTaskLoadReadyAtPickup(task)) {
@@ -10789,7 +10822,7 @@ export class ShuttleSimCore {
     const from = nodePosition(this.scenario, fromNodeId);
     const to = nodePosition(this.scenario, toNodeId);
     const edge = this.traffic.findEdge(fromNodeId, toNodeId);
-    const task = vehicle.taskId ? this.tasks.find((candidate) => candidate.id === vehicle.taskId) ?? null : null;
+    const task = this.taskById(vehicle.taskId);
     const lengthM = edge?.lengthM ?? Math.hypot(to.x - from.x, to.z - from.z);
     const remainingLegSec = Math.max(0, vehicle.legTravelSec - vehicle.legElapsedSec);
     const previousLegElapsedSec = vehicle.legElapsedSec;
@@ -10958,7 +10991,7 @@ export class ShuttleSimCore {
   }
 
   private priorityFor(vehicle: MutableVehicle): number {
-    const task = vehicle.taskId ? this.tasks.find((candidate) => candidate.id === vehicle.taskId) ?? null : null;
+    const task = this.taskById(vehicle.taskId);
     const base = task?.createdAtSec ?? this.simTimeSec;
     const age = Math.floor((this.simTimeSec - base) / Math.max(1, this.scenario.trafficPolicy.priorityAgingSec));
     return age * 1000 - Number(vehicle.id.replace(/\D+/g, '') || 0);
@@ -12430,7 +12463,7 @@ export class ShuttleSimCore {
     vehicle.blockingVehicleId = null;
     vehicle.waitingSinceSec = null;
     vehicle.state = 'assigned';
-    const task = vehicle.taskId ? this.tasks.find((candidateTask) => candidateTask.id === vehicle.taskId) ?? null : null;
+    const task = this.taskById(vehicle.taskId);
     if (task && !this.agentMinimalEnabled()) {
       task.replanCount += 1;
     }

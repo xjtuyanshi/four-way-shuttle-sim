@@ -1346,20 +1346,63 @@ function AuthoritativeMap({
   );
 }
 
+type LiteMapSnapshot = {
+  simTime: number;
+  wallMs: number;
+  vehicles: Map<string, VehicleState>;
+};
+
+function interpolateVehiclesForFrame(
+  prev: LiteMapSnapshot | null,
+  curr: LiteMapSnapshot | null,
+  playbackSpeed: number,
+  running: boolean
+): VehicleState[] {
+  if (!curr) return [];
+  const list = Array.from(curr.vehicles.values());
+  if (!prev || !running) return list;
+  const snapshotDtSec = curr.simTime - prev.simTime;
+  if (snapshotDtSec <= 0) return list;
+  const wallElapsedSec = (performance.now() - curr.wallMs) / 1000;
+  const projectionSec = Math.max(0, Math.min(0.6, wallElapsedSec * playbackSpeed));
+  if (projectionSec < 1e-4) return list;
+  return list.map((vehicle) => {
+    const previous = prev.vehicles.get(vehicle.id);
+    if (!previous) return vehicle;
+    const dx = (vehicle.x - previous.x) / snapshotDtSec;
+    const dz = (vehicle.z - previous.z) / snapshotDtSec;
+    const stepLenSq = dx * dx + dz * dz;
+    if (stepLenSq < 1e-6) return vehicle;
+    return { ...vehicle, x: vehicle.x + dx * projectionSec, z: vehicle.z + dz * projectionSec };
+  });
+}
+
 function CanvasLiteMap({
   scenario,
   state,
   layers,
   selectedVehicleId,
+  playbackSpeed,
   onSelectVehicle
 }: {
   scenario: ShuttleScenario | null;
   state: ShuttleSimState | null;
   layers: SceneLayers;
   selectedVehicleId: string | null;
+  playbackSpeed: number;
   onSelectVehicle: (vehicleId: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const snapshotsRef = useRef<{ prev: LiteMapSnapshot | null; curr: LiteMapSnapshot | null }>({
+    prev: null,
+    curr: null
+  });
+  const renderInputRef = useRef<{
+    state: ShuttleSimState | null;
+    layers: SceneLayers;
+    selectedVehicleId: string | null;
+    playbackSpeed: number;
+  }>({ state: null, layers, selectedVehicleId, playbackSpeed });
   const geometry = useMemo(() => {
     const nodes = scenario?.layout.nodes ?? [];
     const staticScene = scenario ? summarizeScenarioStaticSceneContract(scenario) : null;
@@ -1386,10 +1429,29 @@ function CanvasLiteMap({
   }, [scenario]);
 
   useEffect(() => {
+    renderInputRef.current = { state, layers, selectedVehicleId, playbackSpeed };
+    if (state) {
+      const snap: LiteMapSnapshot = {
+        simTime: state.simTimeSec,
+        wallMs: performance.now(),
+        vehicles: new Map(state.vehicles.map((vehicle) => [vehicle.id, vehicle]))
+      };
+      const current = snapshotsRef.current.curr;
+      if (!current || current.simTime !== snap.simTime) {
+        snapshotsRef.current.prev = current;
+        snapshotsRef.current.curr = snap;
+      } else {
+        snapshotsRef.current.curr = snap;
+      }
+    }
+  }, [layers, playbackSpeed, selectedVehicleId, state]);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const draw = () => {
+      const { state, layers, selectedVehicleId, playbackSpeed } = renderInputRef.current;
       const rect = canvas.getBoundingClientRect();
       const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
       const width = Math.max(1, rect.width);
@@ -1558,8 +1620,16 @@ function CanvasLiteMap({
         }
       }
 
+      const running = state?.status === 'running';
+      const renderVehicles = interpolateVehiclesForFrame(
+        snapshotsRef.current.prev,
+        snapshotsRef.current.curr,
+        playbackSpeed,
+        running
+      );
+
       if (layers.routes) {
-        for (const vehicle of state?.vehicles ?? []) {
+        for (const vehicle of renderVehicles) {
           const selected = selectedVehicleId === vehicle.id;
           const plannedNodes = remainingRouteNodeIds(vehicle, vehicle.plannedRouteNodeIds);
           const taskRole = state ? resolveVehicleTaskFlowRole(state, vehicle) : null;
@@ -1570,7 +1640,7 @@ function CanvasLiteMap({
       }
 
       const activeTasks = state?.tasks.filter((task) => task.vehicleId && task.state !== 'completed' && task.state !== 'failed') ?? [];
-      const vehicleById = new Map((state?.vehicles ?? []).map((vehicle) => [vehicle.id, vehicle]));
+      const vehicleById = new Map(renderVehicles.map((vehicle) => [vehicle.id, vehicle]));
       for (const task of activeTasks) {
         const vehicle = task.vehicleId ? vehicleById.get(task.vehicleId) : null;
         const pickupNode = geometry.nodeMap.get(task.pickupNodeId);
@@ -1591,7 +1661,7 @@ function CanvasLiteMap({
         context.fillText(vehicleDisplayNumber(vehicle.id), point.x, point.y - 12);
       }
 
-      for (const vehicle of state?.vehicles ?? []) {
+      for (const vehicle of renderVehicles) {
         const point = project(vehicle);
         const selected = selectedVehicleId === vehicle.id;
         context.fillStyle = vehicle.state === 'waiting-blocked'
@@ -1621,11 +1691,17 @@ function CanvasLiteMap({
       }
     };
 
-    draw();
+    let frameId = window.requestAnimationFrame(function loop() {
+      draw();
+      frameId = window.requestAnimationFrame(loop);
+    });
     const resizeObserver = new ResizeObserver(draw);
     resizeObserver.observe(canvas);
-    return () => resizeObserver.disconnect();
-  }, [geometry, layers, selectedVehicleId, state]);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      resizeObserver.disconnect();
+    };
+  }, [geometry]);
 
   const handleClick = (event: MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -1675,6 +1751,7 @@ function StreamingPane({
   viewMode,
   cameraView,
   rendererInfo,
+  playbackSpeed,
   onCameraViewChange,
   onToggleLayer,
   onSelectVehicle,
@@ -1688,6 +1765,7 @@ function StreamingPane({
   viewMode: MapViewMode;
   cameraView: ShuttleSceneCameraView;
   rendererInfo: ShuttleSceneRendererInfo | null;
+  playbackSpeed: number;
   onCameraViewChange: (view: ShuttleSceneCameraView) => void;
   onToggleLayer: (layer: keyof SceneLayers) => void;
   onSelectVehicle: (vehicleId: string) => void;
@@ -1777,6 +1855,7 @@ function StreamingPane({
             state={state}
             layers={layers}
             selectedVehicleId={selectedVehicleId}
+            playbackSpeed={playbackSpeed}
             onSelectVehicle={onSelectVehicle}
           />
         ) : viewMode === '2d' ? (
@@ -1795,6 +1874,7 @@ function StreamingPane({
             layers={layers}
             selectedVehicleId={selectedVehicleId}
             cameraView={cameraView}
+            playbackSpeed={playbackSpeed}
             onCameraViewChange={onCameraViewChange}
             onRendererInfo={onRendererInfo}
             />
@@ -2334,6 +2414,252 @@ function ValidationPanel({
   );
 }
 
+function TopBar({
+  scenarioName,
+  liveClockSec,
+  durationSec,
+  status,
+  controllerMode,
+  collisionAvoidanceEnabled,
+  playbackSpeed,
+  setupDirty,
+  isPending,
+  kpis,
+  trafficHoldsCount,
+  onPlay,
+  onPause,
+  onReset,
+  onSetSpeed
+}: {
+  scenarioName: string;
+  liveClockSec: number;
+  durationSec: number;
+  status: ShuttleSimState['status'] | undefined;
+  controllerMode: string;
+  collisionAvoidanceEnabled: boolean;
+  playbackSpeed: number;
+  setupDirty: boolean;
+  isPending: boolean;
+  kpis: KpiSnapshot | null;
+  trafficHoldsCount: number;
+  onPlay: () => void;
+  onPause: () => void;
+  onReset: () => void;
+  onSetSpeed: (speed: number) => void;
+}) {
+  const running = status === 'running';
+  const paused = status === 'paused';
+  const idle = status === 'idle' || status === undefined;
+  const progressPct = durationSec > 0 ? Math.min(100, Math.max(0, (liveClockSec / durationSec) * 100)) : 0;
+  const statusTone: 'ok' | 'warn' | 'idle' | 'danger' = running ? 'ok' : paused ? 'warn' : idle ? 'idle' : 'danger';
+  const totalPph = kpis?.totalPph ?? 0;
+  const inboundPph = kpis?.inboundPph ?? 0;
+  const outboundPph = kpis?.outboundPph ?? 0;
+  const queued = kpis?.queuedTasks ?? 0;
+  const utilization = kpis ? average(Object.values(kpis.vehicleUtilization)) * 100 : 0;
+  const breakdowns = kpis ? Object.values(kpis.vehicleUtilizationBreakdown) : [];
+  const productive = breakdowns.length > 0
+    ? (breakdowns.reduce((sum, bd) => sum + bd.productive, 0) / breakdowns.length) * 100
+    : 0;
+  return (
+    <header className="top-bar">
+      <div className="top-brand">
+        <div className="brand-mark" aria-hidden="true">S0</div>
+        <div className="brand-text">
+          <h1>Shuttle Sim</h1>
+          <span className="brand-scenario">{scenarioName}</span>
+        </div>
+      </div>
+
+      <div className="top-controls" aria-label="Playback controls">
+        <button
+          type="button"
+          className={`play-toggle ${running ? 'is-running' : ''}`}
+          onClick={running ? onPause : onPlay}
+          disabled={setupDirty}
+          title={running ? 'Pause (Space)' : 'Play (Space)'}
+          aria-label={running ? 'Pause' : 'Play'}
+        >
+          <span className="play-icon" aria-hidden="true">{running ? '⏸' : '▶'}</span>
+          <span className="play-label">{running ? 'Pause' : paused ? 'Resume' : 'Start'}</span>
+        </button>
+        <button type="button" className="reset-btn" onClick={onReset} title="Reset (R)">
+          <span aria-hidden="true">⟲</span>
+          <span>Reset</span>
+        </button>
+        <div className="speed-group" role="group" aria-label="Playback speed">
+          {PLAYBACK_SPEEDS.map((speed) => (
+            <button
+              key={speed}
+              type="button"
+              className={playbackSpeed === speed ? 'speed-btn active' : 'speed-btn'}
+              onClick={() => onSetSpeed(speed)}
+              aria-pressed={playbackSpeed === speed}
+            >
+              {speed}×
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="top-clock">
+        <div className="clock-time">
+          <span className="clock-value">{formatClock(liveClockSec)}</span>
+          <span className="clock-total">/ {formatClock(durationSec)}</span>
+        </div>
+        <div className={`clock-status status-${statusTone}`}>
+          <span className="status-dot" aria-hidden="true" />
+          <span>{running ? 'Running' : paused ? 'Paused' : idle ? 'Idle' : status}</span>
+          <span className="status-divider">·</span>
+          <span>{controllerMode}</span>
+          {isPending && <><span className="status-divider">·</span><span>rendering</span></>}
+        </div>
+        <div className="clock-progress" role="progressbar" aria-valuenow={Math.round(progressPct)} aria-valuemin={0} aria-valuemax={100}>
+          <div className="clock-progress-fill" style={{ width: `${progressPct}%` }} />
+        </div>
+      </div>
+
+      <div className="top-kpis" aria-label="Live KPIs">
+        <div className="kpi-cell">
+          <span className="kpi-label">PPH</span>
+          <strong className="kpi-value">{formatNumber(totalPph, 1)}</strong>
+          <span className="kpi-sub">
+            <em className="kpi-inbound">in {formatNumber(inboundPph, 0)}</em>
+            <em className="kpi-outbound">out {formatNumber(outboundPph, 0)}</em>
+          </span>
+        </div>
+        <div className="kpi-cell">
+          <span className="kpi-label">Queue</span>
+          <strong className="kpi-value">{queued}</strong>
+          <span className="kpi-sub">tasks</span>
+        </div>
+        <div className="kpi-cell">
+          <span className="kpi-label">Holds</span>
+          <strong className="kpi-value">{trafficHoldsCount}</strong>
+          <span className="kpi-sub">traffic</span>
+        </div>
+        <div className="kpi-cell">
+          <span className="kpi-label">Util</span>
+          <strong className="kpi-value">{formatNumber(productive, 1)}%</strong>
+          <span className="kpi-sub">productive · {formatNumber(utilization, 0)}% busy</span>
+        </div>
+        <div className={`kpi-chip ${collisionAvoidanceEnabled ? 'ok' : 'danger'}`} title="Collision avoidance">
+          <span>Avoid</span>
+          <strong>{collisionAvoidanceEnabled ? 'On' : 'Off'}</strong>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function TimelineScrubber({
+  liveClockSec,
+  durationSec,
+  status,
+  runToTargetSec,
+  setupDirty,
+  onScrubCommit,
+  onSetTargetText,
+  onJumpClick
+}: {
+  liveClockSec: number;
+  durationSec: number;
+  status: ShuttleSimState['status'] | undefined;
+  runToTargetSec: string;
+  setupDirty: boolean;
+  onScrubCommit: (targetSec: number) => void;
+  onSetTargetText: (text: string) => void;
+  onJumpClick: () => void;
+}) {
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [hoverPct, setHoverPct] = useState<number | null>(null);
+  const safeDur = durationSec > 0 ? durationSec : 1;
+  const progressPct = Math.min(100, Math.max(0, (liveClockSec / safeDur) * 100));
+  const hoverSec = hoverPct === null ? null : Math.round((hoverPct / 100) * safeDur);
+
+  const pctFromEvent = (event: { clientX: number }) => {
+    const track = trackRef.current;
+    if (!track) return 0;
+    const rect = track.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    return Math.max(0, Math.min(100, (x / Math.max(1, rect.width)) * 100));
+  };
+
+  return (
+    <div className="timeline-scrubber" aria-label="Simulation timeline">
+      <div className="timeline-leader">
+        <span className="timeline-label">Timeline</span>
+        <span className="timeline-now">{formatClock(liveClockSec)}</span>
+      </div>
+      <div
+        ref={trackRef}
+        className={`timeline-track ${dragging ? 'is-dragging' : ''}`}
+        onPointerDown={(event) => {
+          if (setupDirty) return;
+          event.currentTarget.setPointerCapture(event.pointerId);
+          setDragging(true);
+          const pct = pctFromEvent(event);
+          setHoverPct(pct);
+        }}
+        onPointerMove={(event) => {
+          const pct = pctFromEvent(event);
+          setHoverPct(pct);
+        }}
+        onPointerUp={(event) => {
+          if (!dragging) {
+            setHoverPct(null);
+            return;
+          }
+          const pct = pctFromEvent(event);
+          setDragging(false);
+          setHoverPct(null);
+          const targetSec = (pct / 100) * safeDur;
+          onScrubCommit(Math.max(0, Math.min(durationSec, targetSec)));
+        }}
+        onPointerLeave={() => {
+          if (!dragging) setHoverPct(null);
+        }}
+        onPointerCancel={() => {
+          setDragging(false);
+          setHoverPct(null);
+        }}
+      >
+        <div className="timeline-fill" style={{ width: `${progressPct}%` }} />
+        <div className="timeline-cursor" style={{ left: `${progressPct}%` }}>
+          <span className="timeline-cursor-tip" aria-hidden="true" />
+        </div>
+        {hoverPct !== null && hoverSec !== null && (
+          <div className="timeline-ghost" style={{ left: `${hoverPct}%` }}>
+            <span className="timeline-ghost-tip">{formatClock(hoverSec)}</span>
+          </div>
+        )}
+        <div className="timeline-endpoints">
+          <span>00:00</span>
+          <span>{formatClock(durationSec)}</span>
+        </div>
+      </div>
+      <div className="timeline-jump">
+        <label>
+          <span>Jump to</span>
+          <input
+            type="number"
+            min={0}
+            step={1}
+            value={runToTargetSec}
+            onChange={(event) => onSetTargetText(event.currentTarget.value)}
+            placeholder="sec"
+          />
+        </label>
+        <button type="button" onClick={onJumpClick} disabled={setupDirty}>Go</button>
+        <span className={`timeline-status ${status ?? ''}`}>
+          {status ?? '--'}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function App() {
   const [scenario, setScenario] = useState<ShuttleScenario | null>(null);
   const [state, setState] = useState<ShuttleSimState | null>(null);
@@ -2523,6 +2849,34 @@ export function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+      if (event.key === ' ' || event.code === 'Space') {
+        event.preventDefault();
+        const running = state?.status === 'running';
+        void postCommand(running ? '/api/shuttle/pause' : '/api/shuttle/resume');
+      } else if (event.key === 'r' || event.key === 'R') {
+        if (event.metaKey || event.ctrlKey) return;
+        event.preventDefault();
+        void postCommand('/api/shuttle/reset', { seed: state?.seed });
+      } else if (event.key === '[') {
+        const idx = PLAYBACK_SPEEDS.indexOf(playbackSpeed as typeof PLAYBACK_SPEEDS[number]);
+        const next = PLAYBACK_SPEEDS[Math.max(0, idx - 1)] ?? PLAYBACK_SPEEDS[0];
+        void setPlaybackSpeed(next);
+      } else if (event.key === ']') {
+        const idx = PLAYBACK_SPEEDS.indexOf(playbackSpeed as typeof PLAYBACK_SPEEDS[number]);
+        const next = PLAYBACK_SPEEDS[Math.min(PLAYBACK_SPEEDS.length - 1, idx + 1)] ?? PLAYBACK_SPEEDS[PLAYBACK_SPEEDS.length - 1];
+        void setPlaybackSpeed(next);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [playbackSpeed, state?.status, state?.seed]);
+
   const scenarioParamValues = useMemo(() => {
     if (!scenario) return new Map<string, number>();
     return new Map(CONTROLLED_PARAMS.map((param) => [param.path, Number(getPointerValue(scenario, param.path) ?? 0)]));
@@ -2688,8 +3042,8 @@ export function App() {
     }
   }
 
-  async function runToTime(): Promise<void> {
-    const targetSimTimeSec = Number(runToTargetSec);
+  async function runToTime(explicitTargetSec?: number): Promise<void> {
+    const targetSimTimeSec = explicitTargetSec !== undefined ? explicitTargetSec : Number(runToTargetSec);
     if (!Number.isFinite(targetSimTimeSec) || targetSimTimeSec < 0) {
       setCommandStatus({ label: 'enter a non-negative second', tone: 'error' });
       return;
@@ -2752,315 +3106,205 @@ export function App() {
   const initialOutboundSetupDirty = initialOutboundDraftColumns !== appliedInitialOutboundFullColumns;
   const setupDirty = regionSetupDirty || shuttleSetupDirty || initialOutboundSetupDirty;
 
+  const trafficHoldsCount = state?.traffic?.waitingVehicles?.length ?? 0;
+  const handlePlay = () => { void postCommand('/api/shuttle/resume'); };
+  const handlePause = () => { void postCommand('/api/shuttle/pause'); };
+  const handleReset = () => { void postCommand('/api/shuttle/reset', { seed: state?.seed }); };
+  const handleScrubCommit = (targetSec: number) => {
+    setRunToTargetSec(String(Math.round(targetSec)));
+    void runToTime(Math.round(targetSec));
+  };
+
   return (
-    <main className="app-shell">
-      <aside className="sidebar">
-        <div className="brand-block">
-          <div className="mark" aria-hidden="true">S0</div>
-          <div>
-            <h1>Shuttle Sim</h1>
-            <p>Local 3D operations test bench.</p>
-          </div>
-        </div>
-
-        <section className="control-block param-block">
-          <h2>Scenario</h2>
-          <div className="setup-panel">
-            <div className="setup-control">
-              <div className="setup-panel-head">
-                <span>Top-lift regions</span>
-                <strong>{appliedRegionCount} active</strong>
-              </div>
-              <div className="stepper-row" aria-label="Region count setup">
-                <button
-                  type="button"
-                  onClick={() => setRegionDraftCount((value) => Math.max(setupSummary?.minRegionCount ?? 1, value - 1))}
-                  disabled={regionDraftCount <= (setupSummary?.minRegionCount ?? 1)}
-                  aria-label="Decrease region count"
-                >
-                  -
-                </button>
-                <input
-                  min={setupSummary?.minRegionCount ?? 1}
-                  max={setupSummary?.maxRegionCount ?? 8}
-                  step="1"
-                  type="number"
-                  value={regionDraftCount}
-                  onChange={(event) => setRegionDraftCount(Number(event.currentTarget.value))}
-                />
-                <button
-                  type="button"
-                  onClick={() => setRegionDraftCount((value) => Math.min(setupSummary?.maxRegionCount ?? 8, value + 1))}
-                  disabled={regionDraftCount >= (setupSummary?.maxRegionCount ?? 8)}
-                  aria-label="Increase region count"
-                >
-                  +
-                </button>
-              </div>
+    <div className="app-root">
+      <TopBar
+        scenarioName={scenario?.name ?? 'Phase 0 Scenario'}
+        liveClockSec={liveClockSec}
+        durationSec={state?.durationSec ?? 0}
+        status={state?.status}
+        controllerMode={controllerMode}
+        collisionAvoidanceEnabled={collisionAvoidanceEnabled}
+        playbackSpeed={playbackSpeed}
+        setupDirty={setupDirty}
+        isPending={isPending}
+        kpis={kpis}
+        trafficHoldsCount={trafficHoldsCount}
+        onPlay={handlePlay}
+        onPause={handlePause}
+        onReset={handleReset}
+        onSetSpeed={setPlaybackSpeed}
+      />
+      <main className="app-shell">
+        <aside className="sidebar">
+          <section className="control-block param-block">
+            <div className="block-head">
+              <h2>Scenario</h2>
+              <span className="block-validation">{validationMode.label}</span>
             </div>
-            <div className="setup-control">
-              <div className="setup-panel-head">
-                <span>Shuttles</span>
-                <strong>{appliedShuttleCount} active</strong>
+            <div className="setup-panel">
+              <div className="setup-control">
+                <div className="setup-panel-head">
+                  <span>Top-lift regions</span>
+                  <strong>{appliedRegionCount} active</strong>
+                </div>
+                <div className="stepper-row" aria-label="Region count setup">
+                  <button type="button" onClick={() => setRegionDraftCount((value) => Math.max(setupSummary?.minRegionCount ?? 1, value - 1))} disabled={regionDraftCount <= (setupSummary?.minRegionCount ?? 1)} aria-label="Decrease region count">−</button>
+                  <input min={setupSummary?.minRegionCount ?? 1} max={setupSummary?.maxRegionCount ?? 8} step="1" type="number" value={regionDraftCount} onChange={(event) => setRegionDraftCount(Number(event.currentTarget.value))} />
+                  <button type="button" onClick={() => setRegionDraftCount((value) => Math.min(setupSummary?.maxRegionCount ?? 8, value + 1))} disabled={regionDraftCount >= (setupSummary?.maxRegionCount ?? 8)} aria-label="Increase region count">+</button>
+                </div>
               </div>
-              <div className="stepper-row" aria-label="Shuttle count setup">
-                <button
-                  type="button"
-                  onClick={() => setShuttleDraftCount((value) => Math.max(setupSummary?.minShuttleCount ?? 1, value - 1))}
-                  disabled={shuttleDraftCount <= (setupSummary?.minShuttleCount ?? 1)}
-                  aria-label="Decrease shuttle count"
-                >
-                  -
-                </button>
-                <input
-                  min={setupSummary?.minShuttleCount ?? 1}
-                  max={setupSummary?.maxShuttleCount ?? 64}
-                  step="1"
-                  type="number"
-                  value={shuttleDraftCount}
-                  onChange={(event) => setShuttleDraftCount(Number(event.currentTarget.value))}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShuttleDraftCount((value) => Math.min(setupSummary?.maxShuttleCount ?? 64, value + 1))}
-                  disabled={shuttleDraftCount >= (setupSummary?.maxShuttleCount ?? 64)}
-                  aria-label="Increase shuttle count"
-                >
-                  +
-                </button>
+              <div className="setup-control">
+                <div className="setup-panel-head">
+                  <span>Shuttles</span>
+                  <strong>{appliedShuttleCount} active</strong>
+                </div>
+                <div className="stepper-row" aria-label="Shuttle count setup">
+                  <button type="button" onClick={() => setShuttleDraftCount((value) => Math.max(setupSummary?.minShuttleCount ?? 1, value - 1))} disabled={shuttleDraftCount <= (setupSummary?.minShuttleCount ?? 1)} aria-label="Decrease shuttle count">−</button>
+                  <input min={setupSummary?.minShuttleCount ?? 1} max={setupSummary?.maxShuttleCount ?? 64} step="1" type="number" value={shuttleDraftCount} onChange={(event) => setShuttleDraftCount(Number(event.currentTarget.value))} />
+                  <button type="button" onClick={() => setShuttleDraftCount((value) => Math.min(setupSummary?.maxShuttleCount ?? 64, value + 1))} disabled={shuttleDraftCount >= (setupSummary?.maxShuttleCount ?? 64)} aria-label="Increase shuttle count">+</button>
+                </div>
               </div>
-            </div>
-            <div className="setup-control">
-              <div className="setup-panel-head">
-                <span>Outbound full columns</span>
-                <strong>{appliedInitialOutboundFullColumns} seeded</strong>
+              <div className="setup-control">
+                <div className="setup-panel-head">
+                  <span>Outbound full columns</span>
+                  <strong>{appliedInitialOutboundFullColumns} seeded</strong>
+                </div>
+                <div className="stepper-row" aria-label="Initial outbound full columns setup">
+                  <button type="button" onClick={() => setInitialOutboundDraftColumns((value) => Math.max(0, value - 1))} disabled={initialOutboundDraftColumns <= 0} aria-label="Decrease initial outbound full columns">−</button>
+                  <input min="0" max={draftMaxInitialOutboundFullColumns} step="1" type="number" value={initialOutboundDraftColumns} onChange={(event) => setInitialOutboundDraftColumns(Number(event.currentTarget.value))} />
+                  <button type="button" onClick={() => setInitialOutboundDraftColumns((value) => Math.min(draftMaxInitialOutboundFullColumns, value + 1))} disabled={initialOutboundDraftColumns >= draftMaxInitialOutboundFullColumns} aria-label="Increase initial outbound full columns">+</button>
+                </div>
               </div>
-              <div className="stepper-row" aria-label="Initial outbound full columns setup">
-                <button
-                  type="button"
-                  onClick={() => setInitialOutboundDraftColumns((value) => Math.max(0, value - 1))}
-                  disabled={initialOutboundDraftColumns <= 0}
-                  aria-label="Decrease initial outbound full columns"
-                >
-                  -
-                </button>
-                <input
-                  min="0"
-                  max={draftMaxInitialOutboundFullColumns}
-                  step="1"
-                  type="number"
-                  value={initialOutboundDraftColumns}
-                  onChange={(event) => setInitialOutboundDraftColumns(Number(event.currentTarget.value))}
-                />
-                <button
-                  type="button"
-                  onClick={() => setInitialOutboundDraftColumns((value) => Math.min(draftMaxInitialOutboundFullColumns, value + 1))}
-                  disabled={initialOutboundDraftColumns >= draftMaxInitialOutboundFullColumns}
-                  aria-label="Increase initial outbound full columns"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-            <button
-              className={setupDirty ? 'primary-action' : ''}
-              type="button"
-              onClick={() => void applyScenarioSetup()}
-              disabled={!scenario || !setupDirty}
-            >
-              Apply setup
-            </button>
-            <div className="run-control-panel">
-              <div className="run-row">
-                <button type="button" onClick={() => postCommand('/api/shuttle/resume')} disabled={setupDirty}>Start / Resume</button>
-                <button type="button" onClick={() => postCommand('/api/shuttle/pause')}>Pause</button>
-                <button type="button" onClick={() => postCommand('/api/shuttle/reset', { seed: state?.seed })}>Reset</button>
-              </div>
-              <div className="speed-row" aria-label="Playback speed">
-                {PLAYBACK_SPEEDS.map((speed) => (
-                  <button
-                    className={playbackSpeed === speed ? 'active' : ''}
-                    key={speed}
-                    type="button"
-                    onClick={() => setPlaybackSpeed(speed)}
-                    aria-pressed={playbackSpeed === speed}
-                  >
-                    {speed}x
-                  </button>
-                ))}
-              </div>
-              <div className="jump-row" aria-label="Run to simulation time">
-                <label>
-                  <span>Run to sec</span>
-                  <input
-                    min="0"
-                    step="1"
-                    type="number"
-                    value={runToTargetSec}
-                    onChange={(event) => setRunToTargetSec(event.target.value)}
-                  />
-                </label>
-                <button type="button" onClick={() => void runToTime()} disabled={setupDirty}>Jump & Pause</button>
-              </div>
-              <div className={`status-line ${commandStatus.tone}`}>
-                <span>{state?.status ?? 'loading'}</span>
-                <strong>{commandStatus.label} / {playbackSpeed}x / {controllerMode}{isPending ? ' / rendering' : ''}</strong>
-              </div>
-            </div>
-            <div className="setup-metrics">
-              <span><strong>{setupSummary?.storageCapacity ?? '--'}</strong> cells</span>
-              <span><strong>{setupSummary ? setupSummary.regionCount * 4 : '--'}</strong> zones</span>
-              <span><strong>{setupSummary?.physicalLiftCount ?? '--'}</strong> lifts</span>
-              <span><strong>{setupSummary?.shuttleCount ?? '--'}</strong> shuttles</span>
-              <span><strong>{setupSummary?.inboundLiftCount ?? '--'}/{setupSummary?.outboundLiftCount ?? '--'}</strong> in/out</span>
-              <span><strong>{setupSummary?.initialOutboundFullColumns ?? '--'}</strong> out cols</span>
-            </div>
-          </div>
-          <div className="mode-toggle">
-            <span>
-              Collision avoidance
-              <strong>{collisionAvoidanceEnabled ? 'On' : 'Off'}</strong>
-            </span>
-            <div className="mode-row" aria-label="Collision avoidance">
-              <button
-                className={collisionAvoidanceEnabled ? 'active' : ''}
-                type="button"
-                onClick={() => updateParam(COLLISION_AVOIDANCE_PARAM, true)}
-                aria-pressed={collisionAvoidanceEnabled}
-              >
-                On
+              <button className={setupDirty ? 'primary-action apply-setup' : 'apply-setup'} type="button" onClick={() => void applyScenarioSetup()} disabled={!scenario || !setupDirty}>
+                {setupDirty ? 'Apply setup ▸' : 'Setup applied'}
               </button>
-              <button
-                className={!collisionAvoidanceEnabled ? 'active danger' : ''}
-                type="button"
-                onClick={() => updateParam(COLLISION_AVOIDANCE_PARAM, false)}
-                aria-pressed={!collisionAvoidanceEnabled}
-              >
-                Off
-              </button>
+              <div className="setup-metrics">
+                <span><strong>{setupSummary?.storageCapacity ?? '--'}</strong> cells</span>
+                <span><strong>{setupSummary ? setupSummary.regionCount * 4 : '--'}</strong> zones</span>
+                <span><strong>{setupSummary?.physicalLiftCount ?? '--'}</strong> lifts</span>
+                <span><strong>{setupSummary?.shuttleCount ?? '--'}</strong> shuttles</span>
+                <span><strong>{setupSummary?.inboundLiftCount ?? '--'}/{setupSummary?.outboundLiftCount ?? '--'}</strong> in/out</span>
+                <span><strong>{setupSummary?.initialOutboundFullColumns ?? '--'}</strong> out cols</span>
+              </div>
             </div>
-            {!collisionAvoidanceEnabled && (
-              <p className="unsafe-note">
-                UNSAFE DIAGNOSTIC - collision checks are bypassed. Physical and reservation audits still run; do not treat this as a safety pass.
-              </p>
-            )}
-          </div>
-          {CONTROLLED_PARAMS.map((param) => {
-            const value = paramValues.get(param.path) ?? 0;
-            return (
-              <label key={param.path}>
-                <span>
-                  {param.label}
-                  <strong>{formatNumber(value, 2)} {param.unit}</strong>
-                </span>
-                <input
-                  type="range"
-                  min={param.min}
-                  max={param.max}
-                  step={param.step}
-                  value={value}
-                  onChange={(event) => scheduleParamUpdate(param.path, Number(event.currentTarget.value))}
-                />
-              </label>
-            );
-          })}
-        </section>
 
-        <details className="details-block">
-          <summary>System details</summary>
-          <PrerequisitePanel report={prerequisites} />
-          <CalibrationPanel scenario={scenario} />
-          <ValidationPanel validation={validation} validating={validating} onRun={runValidation} />
-        </details>
-      </aside>
-
-      <section className="workspace">
-        <header className="workspace-header">
-          <div>
-            <p className="caption">SimCore / WCS-lite is source of truth</p>
-            <h2>{scenario?.name ?? 'Phase 0 Scenario'}</h2>
-          </div>
-          <div className="header-status">
-            <div className={`safety-chip ${collisionAvoidanceEnabled ? 'ok' : 'danger'}`}>
-              <span>Avoidance</span>
-              <strong>{collisionAvoidanceEnabled ? 'On' : 'Off'}</strong>
+            <div className="mode-toggle">
+              <span>
+                Collision avoidance
+                <strong>{collisionAvoidanceEnabled ? 'On' : 'Off'}</strong>
+              </span>
+              <div className="mode-row" aria-label="Collision avoidance">
+                <button className={collisionAvoidanceEnabled ? 'active' : ''} type="button" onClick={() => updateParam(COLLISION_AVOIDANCE_PARAM, true)} aria-pressed={collisionAvoidanceEnabled}>On</button>
+                <button className={!collisionAvoidanceEnabled ? 'active danger' : ''} type="button" onClick={() => updateParam(COLLISION_AVOIDANCE_PARAM, false)} aria-pressed={!collisionAvoidanceEnabled}>Off</button>
+              </div>
+              {!collisionAvoidanceEnabled && (
+                <p className="unsafe-note">UNSAFE DIAGNOSTIC — collision checks bypassed. Audits still run.</p>
+              )}
             </div>
-            <div className={`safety-chip ${validationMode.tone}`}>
-              <span>Validation</span>
-              <strong>{validationMode.label}</strong>
-            </div>
-            <div className={`runtime-badge ${statusTone}`}>
-              <span>{formatClock(liveClockSec)}</span>
-              <strong>{state ? `${Math.round((liveClockSec / state.durationSec) * 100)}%` : '--'}</strong>
-            </div>
-          </div>
-        </header>
 
-        <nav className="workspace-tabs" aria-label="Workspace sections">
-          {WORKSPACE_TABS.map((tab) => (
-            <button
-              className={workspaceTab === tab.id ? 'active' : ''}
-              key={tab.id}
-              type="button"
-              onClick={() => setWorkspaceTab(tab.id)}
-              aria-pressed={workspaceTab === tab.id}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </nav>
-
-        {workspaceTab === 'view' && (
-          <section className="tab-panel view-panel" aria-label="2D and 3D simulation view">
-            <StreamingPane
-              scenario={scenario}
-              state={sceneState}
-              layers={sceneLayers}
-              selectedVehicleId={selectedVehicleId}
-              viewMode={mapViewMode}
-              cameraView={sceneCameraView}
-              rendererInfo={rendererInfo}
-              onCameraViewChange={(view) => setSceneCameraView(clampSceneCameraView(view))}
-              onToggleLayer={toggleSceneLayer}
-              onSelectVehicle={setSelectedVehicleId}
-              onViewModeChange={setMapViewMode}
-              onRendererInfo={setRendererInfo}
-            />
-          </section>
-        )}
-
-        {workspaceTab === 'statistics' && (
-          <section className="tab-panel statistics-panel" aria-label="Simulation statistics">
-            <KpiStrip scenario={scenario} kpis={kpis} />
-            <PphTrendChart history={pphHistory} />
-            <LiftPphPanel state={sceneState} kpis={kpis} history={pphHistory} />
-            <CapacityTheoryPanel kpis={kpis} />
-            <ResourceUtilizationPanel scenario={scenario} state={state} />
-            <VehicleTimeStackedBarChart vehicles={vehicles} kpis={kpis} />
-          </section>
-        )}
-
-        {workspaceTab === 'diagnostics' && (
-          <section className="tab-panel diagnostics-panel" aria-label="Traffic and inventory diagnostics">
-            <TrafficDiagnosticsPanel state={state} />
-            <div className="main-grid">
-              <VehicleTable
-                vehicles={vehicles}
-                selectedVehicleId={selectedVehicleId}
-                onSelectVehicle={setSelectedVehicleId}
-              />
-              <details className="diagnostics-details" open>
-                <summary>Event log</summary>
-                <EventLog events={events} />
-              </details>
-            </div>
-            <details className="workspace-details">
-              <summary>Inventory / FIFO details</summary>
-              <FifoInventoryPanel scenario={scenario} state={state} />
+            <details className="params-details" open>
+              <summary>Parameters</summary>
+              <div className="params-list">
+                {CONTROLLED_PARAMS.map((param) => {
+                  const value = paramValues.get(param.path) ?? 0;
+                  return (
+                    <label key={param.path}>
+                      <span>
+                        {param.label}
+                        <strong>{formatNumber(value, 2)} {param.unit}</strong>
+                      </span>
+                      <input type="range" min={param.min} max={param.max} step={param.step} value={value} onChange={(event) => scheduleParamUpdate(param.path, Number(event.currentTarget.value))} />
+                    </label>
+                  );
+                })}
+              </div>
             </details>
           </section>
-        )}
-      </section>
-    </main>
+
+          <details className="details-block">
+            <summary>System details</summary>
+            <PrerequisitePanel report={prerequisites} />
+            <CalibrationPanel scenario={scenario} />
+            <ValidationPanel validation={validation} validating={validating} onRun={runValidation} />
+          </details>
+        </aside>
+
+        <section className="workspace">
+          <nav className="workspace-tabs" aria-label="Workspace sections">
+            {WORKSPACE_TABS.map((tab) => (
+              <button className={workspaceTab === tab.id ? 'active' : ''} key={tab.id} type="button" onClick={() => setWorkspaceTab(tab.id)} aria-pressed={workspaceTab === tab.id}>
+                {tab.label}
+              </button>
+            ))}
+            <div className="workspace-tab-spacer" />
+            <div className={`tab-status-chip tone-${statusTone}`}>
+              <span className="status-dot" aria-hidden="true" />
+              <span>{state?.status ?? 'loading'}</span>
+            </div>
+          </nav>
+
+          <div className="workspace-body">
+            {workspaceTab === 'view' && (
+              <section className="tab-panel view-panel" aria-label="2D and 3D simulation view">
+                <StreamingPane
+                  scenario={scenario}
+                  state={sceneState}
+                  layers={sceneLayers}
+                  selectedVehicleId={selectedVehicleId}
+                  viewMode={mapViewMode}
+                  cameraView={sceneCameraView}
+                  playbackSpeed={playbackSpeed}
+                  rendererInfo={rendererInfo}
+                  onCameraViewChange={(view) => setSceneCameraView(clampSceneCameraView(view))}
+                  onToggleLayer={toggleSceneLayer}
+                  onSelectVehicle={setSelectedVehicleId}
+                  onViewModeChange={setMapViewMode}
+                  onRendererInfo={setRendererInfo}
+                />
+              </section>
+            )}
+
+            {workspaceTab === 'statistics' && (
+              <section className="tab-panel statistics-panel" aria-label="Simulation statistics">
+                <KpiStrip scenario={scenario} kpis={kpis} />
+                <PphTrendChart history={pphHistory} />
+                <LiftPphPanel state={sceneState} kpis={kpis} history={pphHistory} />
+                <CapacityTheoryPanel kpis={kpis} />
+                <ResourceUtilizationPanel scenario={scenario} state={state} />
+                <VehicleTimeStackedBarChart vehicles={vehicles} kpis={kpis} />
+              </section>
+            )}
+
+            {workspaceTab === 'diagnostics' && (
+              <section className="tab-panel diagnostics-panel" aria-label="Traffic and inventory diagnostics">
+                <TrafficDiagnosticsPanel state={state} />
+                <div className="main-grid">
+                  <VehicleTable vehicles={vehicles} selectedVehicleId={selectedVehicleId} onSelectVehicle={setSelectedVehicleId} />
+                  <details className="diagnostics-details" open>
+                    <summary>Event log</summary>
+                    <EventLog events={events} />
+                  </details>
+                </div>
+                <details className="workspace-details">
+                  <summary>Inventory / FIFO details</summary>
+                  <FifoInventoryPanel scenario={scenario} state={state} />
+                </details>
+              </section>
+            )}
+          </div>
+
+          <TimelineScrubber
+            liveClockSec={liveClockSec}
+            durationSec={state?.durationSec ?? 0}
+            status={state?.status}
+            runToTargetSec={runToTargetSec}
+            setupDirty={setupDirty}
+            onScrubCommit={handleScrubCommit}
+            onSetTargetText={setRunToTargetSec}
+            onJumpClick={() => void runToTime()}
+          />
+        </section>
+      </main>
+    </div>
   );
 }
