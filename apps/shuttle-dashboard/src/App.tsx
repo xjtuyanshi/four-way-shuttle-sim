@@ -71,6 +71,72 @@ type HeadlessDesResponse = {
   result: HeadlessDesResult;
 };
 
+type PhysicalRecordingFrame = Pick<
+  ShuttleSimState,
+  'simTimeSec' | 'status' | 'vehicles' | 'tasks' | 'loads' | 'reservations' | 'traffic' | 'kpis' | 'recentEvents' | 'error'
+>;
+
+type PhysicalRecordingMarker = {
+  sequence: number;
+  simTimeSec: number;
+  kind: 'deadlock' | 'livelock' | 'physical-violation';
+  note: string;
+  vehicleIds: string[];
+};
+
+type PhysicalRecording = {
+  schemaVersion: 'shuttle.physicalRecording.v1';
+  id: string;
+  createdAtIso: string;
+  completedAtIso: string;
+  scenarioHash: string;
+  scenario: ShuttleScenario;
+  durationSec: number;
+  sampleIntervalSec: number;
+  frameCount: number;
+  elapsedMs: number;
+  summary: {
+    finalSimTimeSec: number;
+    status: ShuttleSimState['status'];
+    completedInbound: number;
+    completedOutbound: number;
+    inboundPph: number;
+    outboundPph: number;
+    totalPph: number;
+    deadlocks: number;
+    livelocks: number;
+    physicalViolations: number;
+  };
+  anomalyMarkers: PhysicalRecordingMarker[];
+  frames: PhysicalRecordingFrame[];
+};
+
+type PhysicalRecordingJob = {
+  id: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  createdAtIso: string;
+  durationSec: number;
+  sampleIntervalSec: number;
+  latestSec: number;
+  progressPct: number;
+  framesRecorded: number;
+  elapsedMs: number;
+  scenarioHash: string;
+  recordingId: string | null;
+  summary: PhysicalRecording['summary'] | null;
+  error: string | null;
+};
+
+type PhysicalRecordingJobResponse = {
+  ok: boolean;
+  job: PhysicalRecordingJob;
+};
+
+type PhysicalRecordingResponse = {
+  ok: boolean;
+  recording: PhysicalRecording;
+};
+
 export type ScenarioSetup = {
   regionCount: number;
   minRegionCount: number;
@@ -118,12 +184,22 @@ type FastRunProgress = {
   chunksCompleted: number;
 };
 
+type ReplayControlState = {
+  active: boolean;
+  playing: boolean;
+  cursorSec: number;
+  speed: number;
+};
+
 type MapViewMode = '3d' | 'lite' | '2d';
 type WorkspaceTab = 'view' | 'statistics' | 'diagnostics';
 
 const MAX_PPH_HISTORY_SAMPLES = 240;
 const SIX_HOURS_SEC = 6 * 60 * 60;
+const THREE_HOURS_SEC = 3 * 60 * 60;
 const FAST_RUN_CHUNK_SEC = 10;
+const RECORDING_SAMPLE_INTERVAL_SEC = 5;
+const REPLAY_SPEEDS = [1, 2, 4, 10, 20] as const;
 
 type BottleneckBreakdown = Record<string, number>;
 
@@ -567,6 +643,101 @@ function appendPphHistorySample(previous: PphHistorySample[], sample: PphHistory
     return [...previous.slice(0, -1), sample];
   }
   return [...previous, sample].slice(-MAX_PPH_HISTORY_SAMPLES);
+}
+
+function lerpNumber(left: number, right: number, alpha: number): number {
+  return left + (right - left) * alpha;
+}
+
+function lerpAngleRad(left: number, right: number, alpha: number): number {
+  const delta = Math.atan2(Math.sin(right - left), Math.cos(right - left));
+  return left + delta * alpha;
+}
+
+function physicalRecordingFramePair(
+  recording: PhysicalRecording,
+  cursorSec: number
+): { before: PhysicalRecordingFrame; after: PhysicalRecordingFrame; alpha: number } {
+  const frames = recording.frames;
+  const first = frames[0]!;
+  const last = frames.at(-1)!;
+  if (cursorSec <= first.simTimeSec || frames.length === 1) {
+    return { before: first, after: first, alpha: 0 };
+  }
+  if (cursorSec >= last.simTimeSec) {
+    return { before: last, after: last, alpha: 0 };
+  }
+
+  let low = 0;
+  let high = frames.length - 1;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (frames[middle]!.simTimeSec < cursorSec) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  const after = frames[low] ?? last;
+  const before = frames[Math.max(0, low - 1)] ?? first;
+  const span = Math.max(1e-9, after.simTimeSec - before.simTimeSec);
+  return { before, after, alpha: Math.min(1, Math.max(0, (cursorSec - before.simTimeSec) / span)) };
+}
+
+function vehicleHasSameMotionLeg(left: VehicleState, right: VehicleState): boolean {
+  return (
+    left.id === right.id &&
+    left.currentEdgeId === right.currentEdgeId &&
+    left.currentNodeId === right.currentNodeId &&
+    left.targetNodeId === right.targetNodeId &&
+    left.taskId === right.taskId &&
+    left.loaded === right.loaded
+  );
+}
+
+function physicalRecordingStateAt(
+  recording: PhysicalRecording,
+  cursorSec: number,
+  playing: boolean
+): ShuttleSimState | null {
+  if (recording.frames.length === 0) {
+    return null;
+  }
+
+  const clampedSec = Math.min(recording.durationSec, Math.max(0, cursorSec));
+  const { before, after, alpha } = physicalRecordingFramePair(recording, clampedSec);
+  const beforeVehicleById = new Map(before.vehicles.map((vehicle) => [vehicle.id, vehicle]));
+  const vehicles = after.vehicles.map((vehicle) => {
+    const previous = beforeVehicleById.get(vehicle.id);
+    if (!previous || alpha <= 0 || !vehicleHasSameMotionLeg(previous, vehicle)) {
+      return vehicle;
+    }
+    return {
+      ...vehicle,
+      x: lerpNumber(previous.x, vehicle.x, alpha),
+      y: lerpNumber(previous.y, vehicle.y, alpha),
+      z: lerpNumber(previous.z, vehicle.z, alpha),
+      yaw: lerpAngleRad(previous.yaw, vehicle.yaw, alpha)
+    };
+  });
+
+  return {
+    schemaVersion: 'shuttle.phase0.state.v0',
+    scenarioId: recording.scenario.id,
+    sessionId: `replay-${recording.id}`,
+    status: playing ? 'running' : 'paused',
+    simTimeSec: clampedSec,
+    durationSec: recording.durationSec,
+    seed: recording.scenario.seed,
+    vehicles,
+    tasks: after.tasks,
+    loads: after.loads,
+    reservations: after.reservations,
+    traffic: after.traffic,
+    kpis: after.kpis,
+    recentEvents: after.recentEvents,
+    error: after.error
+  };
 }
 
 export function mergeVehicleStateUpdate(
@@ -2828,6 +2999,108 @@ function TimelineScrubber({
   );
 }
 
+function RecordingReplayPanel({
+  recording,
+  job,
+  replay,
+  setupDirty,
+  onRecordThreeHours,
+  onToggleReplay,
+  onStopReplay,
+  onSeek,
+  onSetReplaySpeed
+}: {
+  recording: PhysicalRecording | null;
+  job: PhysicalRecordingJob | null;
+  replay: ReplayControlState;
+  setupDirty: boolean;
+  onRecordThreeHours: () => void;
+  onToggleReplay: () => void;
+  onStopReplay: () => void;
+  onSeek: (seconds: number) => void;
+  onSetReplaySpeed: (speed: number) => void;
+}) {
+  const jobActive = job?.status === 'queued' || job?.status === 'running';
+  const durationSec = recording?.durationSec ?? job?.durationSec ?? THREE_HOURS_SEC;
+  const cursorSec = Math.min(durationSec, Math.max(0, replay.cursorSec));
+  const cursorPct = durationSec > 0 ? (cursorSec / durationSec) * 100 : 0;
+  const progressPct = job?.progressPct ?? 0;
+  const summary = recording?.summary ?? job?.summary ?? null;
+  const markerCount = recording?.anomalyMarkers.length ?? 0;
+  const anomalyCount = summary ? (markerCount || summary.deadlocks + summary.livelocks + summary.physicalViolations) : 0;
+
+  return (
+    <section className="recording-replay-panel" aria-label="Physical recording and replay">
+      <div className="recording-head">
+        <div>
+          <span className="recording-eyebrow">Physical replay</span>
+          <strong>{recording ? `${formatClock(recording.durationSec)} captured` : jobActive ? 'Recording physical run' : 'No recording loaded'}</strong>
+        </div>
+        <button type="button" onClick={onRecordThreeHours} disabled={setupDirty || jobActive}>
+          {jobActive ? 'Recording...' : 'Record 3h Fast'}
+        </button>
+      </div>
+
+      <div className="recording-track">
+        <div className="recording-progress" style={{ width: `${jobActive ? progressPct : cursorPct}%` }} />
+        {recording && (
+          <input
+            aria-label="Replay scrubber"
+            type="range"
+            min={0}
+            max={recording.durationSec}
+            step={recording.sampleIntervalSec}
+            value={cursorSec}
+            onChange={(event) => onSeek(Number(event.currentTarget.value))}
+          />
+        )}
+      </div>
+
+      <div className="recording-controls">
+        <span className="recording-time">
+          {recording ? `${formatClock(cursorSec)} / ${formatClock(recording.durationSec)}` : job ? `${formatClock(job.latestSec)} / ${formatClock(job.durationSec)}` : `00:00:00 / ${formatClock(THREE_HOURS_SEC)}`}
+        </span>
+        <button type="button" onClick={onToggleReplay} disabled={!recording}>
+          {replay.playing ? 'Pause Replay' : replay.active && replay.cursorSec > 0 ? 'Resume Replay' : 'Play Replay'}
+        </button>
+        <button type="button" onClick={onStopReplay} disabled={!recording || (!replay.active && replay.cursorSec <= 0)}>
+          Stop
+        </button>
+        <div className="replay-speed-group" role="group" aria-label="Replay speed">
+          {REPLAY_SPEEDS.map((speed) => (
+            <button
+              key={speed}
+              type="button"
+              className={replay.speed === speed ? 'active' : ''}
+              onClick={() => onSetReplaySpeed(speed)}
+              disabled={!recording}
+              aria-pressed={replay.speed === speed}
+            >
+              {speed}×
+            </button>
+          ))}
+        </div>
+        <span className={`recording-status ${job?.status ?? (recording ? 'completed' : 'idle')}`}>
+          {jobActive
+            ? `${formatNumber(progressPct, 0)}% · ${job.framesRecorded} frames`
+            : recording
+              ? `${recording.frameCount} frames · ${formatNumber(recording.elapsedMs / 1000, 1)}s compute`
+              : 'ready'}
+        </span>
+      </div>
+
+      {summary && (
+        <div className="recording-metrics">
+          <span><strong>{formatNumber(summary.totalPph, 1)}</strong> PPH</span>
+          <span><strong>{formatNumber(summary.inboundPph, 1)}</strong> in</span>
+          <span><strong>{formatNumber(summary.outboundPph, 1)}</strong> out</span>
+          <span><strong>{anomalyCount}</strong> flags</span>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function App() {
   const [scenario, setScenario] = useState<ShuttleScenario | null>(null);
   const [state, setState] = useState<ShuttleSimState | null>(null);
@@ -2841,6 +3114,9 @@ export function App() {
   const [playbackSpeed, setPlaybackSpeedState] = useState(1);
   const [fastRun, setFastRun] = useState<FastRunProgress | null>(null);
   const [desResult, setDesResult] = useState<HeadlessDesResult | null>(null);
+  const [physicalRecordingJob, setPhysicalRecordingJob] = useState<PhysicalRecordingJob | null>(null);
+  const [physicalRecording, setPhysicalRecording] = useState<PhysicalRecording | null>(null);
+  const [replay, setReplay] = useState<ReplayControlState>({ active: false, playing: false, cursorSec: 0, speed: 4 });
   const [runToTargetSec, setRunToTargetSec] = useState('2400');
   const [paramDraftValues, setParamDraftValues] = useState<Map<string, number>>(() => new Map());
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
@@ -2865,6 +3141,8 @@ export function App() {
   const paramUpdateTimersRef = useRef<Map<string, number>>(new Map());
   const pendingLiveStreamRef = useRef<LiveStreamSnapshot | null>(null);
   const liveStreamFrameRef = useRef<number | null>(null);
+  const recordingPollTokenRef = useRef(0);
+  const replayFrameRef = useRef<number | null>(null);
 
   function commitLiveStreamFromState(nextState: ShuttleSimState): void {
     const snapshot = {
@@ -2903,10 +3181,17 @@ export function App() {
     });
   }
 
-  const liveClockSec = liveStream?.simTimeSec ?? state?.simTimeSec ?? 0;
-  const kpis = liveStream?.kpis ?? state?.kpis ?? null;
-  const vehicles = liveStream?.vehicles ?? state?.vehicles ?? [];
+  const replaySceneState = useMemo(() => (
+    replay.active && physicalRecording
+      ? physicalRecordingStateAt(physicalRecording, replay.cursorSec, replay.playing)
+      : null
+  ), [physicalRecording, replay.active, replay.cursorSec, replay.playing]);
+  const activeScenario = replaySceneState && physicalRecording ? physicalRecording.scenario : scenario;
+  const liveClockSec = replaySceneState?.simTimeSec ?? liveStream?.simTimeSec ?? state?.simTimeSec ?? 0;
+  const kpis = replaySceneState?.kpis ?? liveStream?.kpis ?? state?.kpis ?? null;
+  const vehicles = replaySceneState?.vehicles ?? liveStream?.vehicles ?? state?.vehicles ?? [];
   const sceneState = useMemo(() => {
+    if (replaySceneState) return replaySceneState;
     if (!state) return null;
     return {
       ...state,
@@ -2914,8 +3199,9 @@ export function App() {
       vehicles,
       kpis: kpis ?? state.kpis
     };
-  }, [kpis, liveClockSec, state, vehicles]);
-  const statusTone = state?.status === 'running' ? 'ok' : state?.status === 'paused' ? 'warn' : 'idle';
+  }, [kpis, liveClockSec, replaySceneState, state, vehicles]);
+  const displayStatus = replaySceneState?.status ?? state?.status;
+  const statusTone = displayStatus === 'running' ? 'ok' : displayStatus === 'paused' ? 'warn' : 'idle';
 
   useEffect(() => {
     if (vehicles.length === 0) {
@@ -3023,8 +3309,48 @@ export function App() {
         window.clearTimeout(timer);
       }
       paramUpdateTimersRef.current.clear();
+      recordingPollTokenRef.current += 1;
+      if (replayFrameRef.current !== null) {
+        window.cancelAnimationFrame(replayFrameRef.current);
+        replayFrameRef.current = null;
+      }
     };
   }, []);
+
+  useEffect(() => {
+    if (!physicalRecording || !replay.active || !replay.playing) {
+      if (replayFrameRef.current !== null) {
+        window.cancelAnimationFrame(replayFrameRef.current);
+        replayFrameRef.current = null;
+      }
+      return;
+    }
+
+    let previousWallMs = performance.now();
+    const tick = (nowMs: number) => {
+      const deltaSec = Math.max(0, (nowMs - previousWallMs) / 1000);
+      previousWallMs = nowMs;
+      setReplay((current) => {
+        if (!current.active || !current.playing) {
+          return current;
+        }
+        const nextCursorSec = Math.min(physicalRecording.durationSec, current.cursorSec + deltaSec * current.speed);
+        return {
+          ...current,
+          cursorSec: nextCursorSec,
+          playing: nextCursorSec < physicalRecording.durationSec - 1e-6
+        };
+      });
+      replayFrameRef.current = window.requestAnimationFrame(tick);
+    };
+    replayFrameRef.current = window.requestAnimationFrame(tick);
+    return () => {
+      if (replayFrameRef.current !== null) {
+        window.cancelAnimationFrame(replayFrameRef.current);
+        replayFrameRef.current = null;
+      }
+    };
+  }, [physicalRecording, replay.active, replay.playing]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -3257,6 +3583,89 @@ export function App() {
     }
   }
 
+  async function recordPhysicalThreeHours(): Promise<void> {
+    const token = recordingPollTokenRef.current + 1;
+    recordingPollTokenRef.current = token;
+    const startedAt = performance.now();
+    setPhysicalRecording(null);
+    setReplay((current) => ({ ...current, active: false, playing: false, cursorSec: 0 }));
+    setCommandStatus({ label: `recording physical ${formatClock(THREE_HOURS_SEC)} at max speed...`, tone: 'idle' });
+    try {
+      const startResponse = await requestJson<PhysicalRecordingJobResponse>('/api/shuttle/physicalRecordingJobs', {
+        method: 'POST',
+        body: JSON.stringify({
+          durationSec: THREE_HOURS_SEC,
+          sampleIntervalSec: RECORDING_SAMPLE_INTERVAL_SEC,
+          resetFirst: true
+        })
+      });
+      let job = startResponse.job;
+      setPhysicalRecordingJob(job);
+
+      while (recordingPollTokenRef.current === token && (job.status === 'queued' || job.status === 'running')) {
+        setCommandStatus({
+          label: `recording ${formatClock(job.latestSec)} / ${formatClock(job.durationSec)} · ${formatNumber(job.progressPct, 0)}%`,
+          tone: 'idle'
+        });
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
+        const pollResponse = await requestJson<PhysicalRecordingJobResponse>(`/api/shuttle/physicalRecordingJobs/${job.id}`);
+        job = pollResponse.job;
+        setPhysicalRecordingJob(job);
+      }
+
+      if (recordingPollTokenRef.current !== token) {
+        return;
+      }
+      if (job.status !== 'completed' || !job.recordingId) {
+        throw new Error(job.error ?? 'Physical recording failed.');
+      }
+
+      setCommandStatus({ label: 'loading recorded frames...', tone: 'idle' });
+      const recordingResponse = await requestJson<PhysicalRecordingResponse>(`/api/shuttle/physicalRecordings/${job.recordingId}`);
+      setPhysicalRecording(recordingResponse.recording);
+      setReplay({ active: true, playing: false, cursorSec: 0, speed: 4 });
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      setCommandStatus({
+        label: `recorded ${formatClock(recordingResponse.recording.durationSec)} in ${elapsedMs} ms · ${formatNumber(recordingResponse.recording.summary.totalPph, 1)} PPH`,
+        tone: recordingResponse.recording.anomalyMarkers.length === 0 ? 'ok' : 'warn'
+      });
+    } catch (error) {
+      setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' });
+      setPhysicalRecordingJob((current) => current ? { ...current, status: 'failed', error: error instanceof Error ? error.message : String(error) } : current);
+    }
+  }
+
+  function toggleReplay(): void {
+    if (!physicalRecording) {
+      return;
+    }
+    setReplay((current) => {
+      const cursorAtEnd = current.cursorSec >= physicalRecording.durationSec - 1e-6;
+      return {
+        ...current,
+        active: true,
+        playing: !current.playing,
+        cursorSec: cursorAtEnd ? 0 : current.cursorSec
+      };
+    });
+  }
+
+  function stopReplay(): void {
+    setReplay((current) => ({ ...current, active: false, playing: false, cursorSec: 0 }));
+  }
+
+  function seekReplay(seconds: number): void {
+    if (!physicalRecording) {
+      return;
+    }
+    setReplay((current) => ({
+      ...current,
+      active: true,
+      playing: false,
+      cursorSec: Math.min(physicalRecording.durationSec, Math.max(0, seconds))
+    }));
+  }
+
   function cancelFastRun(): void {
     const control = fastRunControlRef.current;
     if (control) {
@@ -3398,19 +3807,41 @@ export function App() {
   const shuttleSetupDirty = shuttleDraftCount !== appliedShuttleCount;
   const initialOutboundSetupDirty = initialOutboundDraftColumns !== appliedInitialOutboundFullColumns;
   const setupDirty = regionSetupDirty || shuttleSetupDirty || initialOutboundSetupDirty;
-  const displayDurationSec = Math.max(state?.durationSec ?? 0, fastRun?.targetSec ?? 0);
+  const displayDurationSec = replaySceneState
+    ? replaySceneState.durationSec
+    : Math.max(state?.durationSec ?? 0, fastRun?.targetSec ?? 0);
 
-  const trafficHoldsCount = state?.traffic?.waitingVehicles?.length ?? 0;
-  const handlePlay = () => { void postCommand('/api/shuttle/resume'); };
+  const trafficHoldsCount = sceneState?.traffic?.waitingVehicles?.length ?? 0;
+  const handlePlay = () => {
+    if (replay.active && physicalRecording) {
+      toggleReplay();
+      return;
+    }
+    void postCommand('/api/shuttle/resume');
+  };
   const handlePause = () => {
+    if (replay.active && physicalRecording) {
+      toggleReplay();
+      return;
+    }
     if (fastRun?.active) {
       cancelFastRun();
       return;
     }
     void postCommand('/api/shuttle/pause');
   };
-  const handleReset = () => { void postCommand('/api/shuttle/reset', { seed: state?.seed }); };
+  const handleReset = () => {
+    if (replay.active && physicalRecording) {
+      stopReplay();
+      return;
+    }
+    void postCommand('/api/shuttle/reset', { seed: state?.seed });
+  };
   const handleScrubCommit = (targetSec: number) => {
+    if (replay.active && physicalRecording) {
+      seekReplay(Math.round(targetSec));
+      return;
+    }
     setRunToTargetSec(String(Math.round(targetSec)));
     void runToTime(Math.round(targetSec));
   };
@@ -3418,10 +3849,10 @@ export function App() {
   return (
     <div className="app-root">
       <TopBar
-        scenarioName={scenario?.name ?? 'Phase 0 Scenario'}
+        scenarioName={activeScenario?.name ?? 'Phase 0 Scenario'}
         liveClockSec={liveClockSec}
         durationSec={displayDurationSec}
-        status={state?.status}
+        status={displayStatus}
         controllerMode={controllerMode}
         collisionAvoidanceEnabled={collisionAvoidanceEnabled}
         playbackSpeed={playbackSpeed}
@@ -3540,7 +3971,7 @@ export function App() {
             <div className="workspace-tab-spacer" />
             <div className={`tab-status-chip tone-${statusTone}`}>
               <span className="status-dot" aria-hidden="true" />
-              <span>{state?.status ?? 'loading'}</span>
+              <span>{displayStatus ?? 'loading'}</span>
             </div>
           </nav>
 
@@ -3548,7 +3979,7 @@ export function App() {
             {workspaceTab === 'view' && (
               <section className="tab-panel view-panel" aria-label="2D and 3D simulation view">
                 <StreamingPane
-                  scenario={scenario}
+                  scenario={activeScenario}
                   state={sceneState}
                   layers={sceneLayers}
                   selectedVehicleId={selectedVehicleId}
@@ -3567,19 +3998,19 @@ export function App() {
 
             {workspaceTab === 'statistics' && (
               <section className="tab-panel statistics-panel" aria-label="Simulation statistics">
-                <KpiStrip scenario={scenario} kpis={kpis} />
+                <KpiStrip scenario={activeScenario} kpis={kpis} />
                 <DesSummaryPanel result={desResult} />
                 <PphTrendChart history={pphHistory} />
                 <LiftPphPanel state={sceneState} kpis={kpis} history={pphHistory} />
                 <CapacityTheoryPanel kpis={kpis} />
-                <ResourceUtilizationPanel scenario={scenario} state={state} />
+                <ResourceUtilizationPanel scenario={activeScenario} state={sceneState} />
                 <VehicleTimeStackedBarChart vehicles={vehicles} kpis={kpis} />
               </section>
             )}
 
             {workspaceTab === 'diagnostics' && (
               <section className="tab-panel diagnostics-panel" aria-label="Traffic and inventory diagnostics">
-                <TrafficDiagnosticsPanel state={state} />
+                <TrafficDiagnosticsPanel state={sceneState} />
                 <div className="main-grid">
                   <VehicleTable vehicles={vehicles} selectedVehicleId={selectedVehicleId} onSelectVehicle={setSelectedVehicleId} />
                   <details className="diagnostics-details" open>
@@ -3589,7 +4020,7 @@ export function App() {
                 </div>
                 <details className="workspace-details">
                   <summary>Inventory / FIFO details</summary>
-                  <FifoInventoryPanel scenario={scenario} state={state} />
+                  <FifoInventoryPanel scenario={activeScenario} state={sceneState} />
                 </details>
               </section>
             )}
@@ -3598,7 +4029,7 @@ export function App() {
           <TimelineScrubber
             liveClockSec={liveClockSec}
             durationSec={displayDurationSec}
-            status={state?.status}
+            status={displayStatus}
             fastRun={fastRun}
             commandStatus={commandStatus}
             runToTargetSec={runToTargetSec}
@@ -3612,6 +4043,17 @@ export function App() {
             }}
             onRunDesClick={(durationSec) => void runHeadlessDes(durationSec)}
             onCancelFastRun={cancelFastRun}
+          />
+          <RecordingReplayPanel
+            recording={physicalRecording}
+            job={physicalRecordingJob}
+            replay={replay}
+            setupDirty={setupDirty}
+            onRecordThreeHours={() => void recordPhysicalThreeHours()}
+            onToggleReplay={toggleReplay}
+            onStopReplay={stopReplay}
+            onSeek={seekReplay}
+            onSetReplaySpeed={(speed) => setReplay((current) => ({ ...current, speed }))}
           />
         </section>
       </main>

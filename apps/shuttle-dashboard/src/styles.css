@@ -680,6 +680,120 @@ html, body, #root {
   color: var(--danger);
 }
 
+.recording-replay-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px 20px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #0f141a;
+}
+
+.recording-head,
+.recording-controls,
+.recording-metrics {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.recording-head {
+  justify-content: space-between;
+}
+
+.recording-head > div {
+  display: grid;
+  gap: 2px;
+}
+
+.recording-eyebrow {
+  font-size: 10px;
+  color: var(--muted-2);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.recording-track {
+  position: relative;
+  height: 18px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line);
+}
+
+.recording-progress {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 5px;
+  background: linear-gradient(90deg, rgba(95, 194, 141, 0.34), rgba(98, 182, 200, 0.22));
+  pointer-events: none;
+}
+
+.recording-track input[type='range'] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.recording-time,
+.recording-status {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.recording-status.completed {
+  color: var(--primary-strong);
+}
+
+.recording-status.failed {
+  color: var(--danger);
+}
+
+.replay-speed-group {
+  display: inline-flex;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.replay-speed-group button {
+  min-height: 30px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+  background: #1b211c;
+  padding: 0 10px;
+  color: var(--muted);
+}
+
+.replay-speed-group button:first-child {
+  border-left: 0;
+}
+
+.replay-speed-group button.active {
+  color: var(--text);
+  background: rgba(95, 194, 141, 0.18);
+}
+
+.recording-metrics {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.recording-metrics span {
+  min-width: 90px;
+}
+
+.recording-metrics strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
 .brand-block {
   display: flex;
   align-items: center;

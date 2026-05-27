@@ -5,7 +5,12 @@ import cors from 'cors';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { WebSocketServer, type WebSocket } from 'ws';
 
-import { ShuttleCommandSchema, type ShuttleStreamMessage } from '@four-way-shuttle/schemas';
+import {
+  ShuttleCommandSchema,
+  type ShuttleSimState,
+  type ShuttleStreamMessage,
+  type VehicleState
+} from '@four-way-shuttle/schemas';
 import {
   ShuttleSimCore,
   createInboundOutboundDemoScenario,
@@ -25,6 +30,9 @@ const fullStateBroadcastIntervalMs = Number(process.env.SHUTTLE_FULL_STATE_TICK_
 const traceSnapshotCadenceSec = Number(process.env.SHUTTLE_TRACE_SNAPSHOT_SEC ?? 0);
 const maxTraceSnapshots = Number(process.env.SHUTTLE_TRACE_MAX_SNAPSHOTS ?? 1800);
 const longRunTraceSnapshotThresholdSec = Number(process.env.SHUTTLE_LONG_RUN_TRACE_SNAPSHOT_THRESHOLD_SEC ?? 1800);
+const maxPhysicalRecordingFrames = Number(process.env.SHUTTLE_PHYSICAL_RECORDING_MAX_FRAMES ?? 7200);
+const physicalRecordingJobChunkFrames = Number(process.env.SHUTTLE_PHYSICAL_RECORDING_CHUNK_FRAMES ?? 80);
+const maxRetainedPhysicalRecordings = Number(process.env.SHUTTLE_PHYSICAL_RECORDING_RETAIN ?? 3);
 
 type ReplayCommandRecordV1 = {
   sequence: number;
@@ -80,6 +88,88 @@ type ScenarioSetup = {
   outboundLiftCount: number;
   initialOutboundFullColumns: number;
   maxInitialOutboundFullColumns: number;
+};
+
+type PhysicalRecordingFrameV1 = Pick<
+  ShuttleSimState,
+  'simTimeSec' | 'status' | 'vehicles' | 'tasks' | 'loads' | 'reservations' | 'traffic' | 'kpis' | 'recentEvents' | 'error'
+>;
+
+type PhysicalRecordingMarkerV1 = {
+  sequence: number;
+  simTimeSec: number;
+  kind: 'deadlock' | 'livelock' | 'physical-violation';
+  note: string;
+  vehicleIds: string[];
+};
+
+type PhysicalRecordingV1 = {
+  schemaVersion: 'shuttle.physicalRecording.v1';
+  id: string;
+  createdAtIso: string;
+  completedAtIso: string;
+  scenarioHash: string;
+  scenario: ReturnType<ShuttleSimCore['getScenario']>;
+  durationSec: number;
+  sampleIntervalSec: number;
+  frameCount: number;
+  elapsedMs: number;
+  summary: {
+    finalSimTimeSec: number;
+    status: ShuttleSimState['status'];
+    completedInbound: number;
+    completedOutbound: number;
+    inboundPph: number;
+    outboundPph: number;
+    totalPph: number;
+    deadlocks: number;
+    livelocks: number;
+    physicalViolations: number;
+  };
+  anomalyMarkers: PhysicalRecordingMarkerV1[];
+  frames: PhysicalRecordingFrameV1[];
+};
+
+type PhysicalRecordingJobStatus = 'queued' | 'running' | 'completed' | 'failed';
+
+type PhysicalRecordingJobPublicV1 = {
+  id: string;
+  status: PhysicalRecordingJobStatus;
+  createdAtIso: string;
+  durationSec: number;
+  sampleIntervalSec: number;
+  latestSec: number;
+  progressPct: number;
+  framesRecorded: number;
+  elapsedMs: number;
+  scenarioHash: string;
+  recordingId: string | null;
+  summary: PhysicalRecordingV1['summary'] | null;
+  error: string | null;
+};
+
+type PhysicalRecordingJobInternal = {
+  id: string;
+  status: PhysicalRecordingJobStatus;
+  createdAtIso: string;
+  startedAtMs: number;
+  completedAtMs: number | null;
+  durationSec: number;
+  sampleIntervalSec: number;
+  latestSec: number;
+  nextSampleSec: number;
+  scenarioHash: string;
+  scenario: ReturnType<ShuttleSimCore['getScenario']>;
+  sim: ShuttleSimCore;
+  frames: PhysicalRecordingFrameV1[];
+  anomalyMarkers: PhysicalRecordingMarkerV1[];
+  markerSequence: number;
+  lastDeadlockCount: number;
+  lastLivelockCount: number;
+  lastPhysicalViolationCount: number;
+  summary: PhysicalRecordingV1['summary'] | null;
+  recordingId: string | null;
+  error: string | null;
 };
 
 function parsePlaybackSpeed(value: unknown): number | null {
@@ -158,6 +248,8 @@ let traceSnapshots: ReplaySnapshotRecordV1[] = [];
 let anomalyMarkers: ReplaySnapshotRecordV1[] = [];
 let lastTraceSnapshotSimTimeSec = -Infinity;
 let traceInitialSnapshot: ShuttleEngineSnapshotV1 | null = null;
+const physicalRecordings = new Map<string, PhysicalRecordingV1>();
+const physicalRecordingJobs = new Map<string, PhysicalRecordingJobInternal>();
 
 function inferTopLiftRegionCount(scenario: ReturnType<ShuttleSimCore['getScenario']>): number {
   const storageNodes = scenario.layout.nodes.filter((node) => node.type === 'storage');
@@ -217,6 +309,242 @@ function createInboundSetupScenario(regionCount: number, shuttleCount: number, i
       liftPairCount: regionCount
     }
   });
+}
+
+function normalizePhysicalRecordingOptions(input: {
+  durationSec: unknown;
+  sampleIntervalSec: unknown;
+}): { durationSec: number; sampleIntervalSec: number } | { error: string } {
+  const requestedDurationSec = input.durationSec === undefined ? 3 * 3600 : parseFiniteNonNegativeNumber(input.durationSec);
+  if (requestedDurationSec === null || requestedDurationSec <= 0) {
+    return { error: 'durationSec must be a finite positive number.' };
+  }
+  const requestedSampleIntervalSec = input.sampleIntervalSec === undefined ? 5 : parseFiniteNonNegativeNumber(input.sampleIntervalSec);
+  if (requestedSampleIntervalSec === null || requestedSampleIntervalSec <= 0) {
+    return { error: 'sampleIntervalSec must be a finite positive number.' };
+  }
+  const durationSec = Math.min(7 * 24 * 3600, requestedDurationSec);
+  const targetMaxFrames = Math.max(60, Math.floor(maxPhysicalRecordingFrames));
+  const minSampleForFrameCap = durationSec / targetMaxFrames;
+  const sampleIntervalSec = Math.max(0.5, requestedSampleIntervalSec, minSampleForFrameCap);
+  return {
+    durationSec: Math.round(durationSec * 1000) / 1000,
+    sampleIntervalSec: Math.round(sampleIntervalSec * 1000) / 1000
+  };
+}
+
+function physicalRecordingFrameFromState(state: ShuttleSimState): PhysicalRecordingFrameV1 {
+  return {
+    simTimeSec: state.simTimeSec,
+    status: state.status,
+    vehicles: state.vehicles.map((vehicle): VehicleState => ({ ...vehicle })),
+    tasks: state.tasks.filter((task) => task.state !== 'completed' && task.state !== 'failed'),
+    loads: state.loads.filter((load) => load.state !== 'delivered'),
+    reservations: state.reservations,
+    traffic: state.traffic,
+    kpis: state.kpis,
+    recentEvents: [],
+    error: state.error
+  };
+}
+
+function physicalRecordingSummaryFromState(state: ShuttleSimState): PhysicalRecordingV1['summary'] {
+  return {
+    finalSimTimeSec: state.simTimeSec,
+    status: state.status,
+    completedInbound: state.kpis.completedInbound,
+    completedOutbound: state.kpis.completedOutbound,
+    inboundPph: state.kpis.inboundPph,
+    outboundPph: state.kpis.outboundPph,
+    totalPph: state.kpis.totalPph,
+    deadlocks: state.kpis.deadlockCount,
+    livelocks: state.kpis.livelockCount,
+    physicalViolations: state.traffic.physicalViolationCount
+  };
+}
+
+function appendPhysicalRecordingAnomalies(job: PhysicalRecordingJobInternal, state: ShuttleSimState): void {
+  const marker = (
+    kind: PhysicalRecordingMarkerV1['kind'],
+    note: string,
+    vehicleIds: string[] = []
+  ) => {
+    job.anomalyMarkers.push({
+      sequence: job.markerSequence,
+      simTimeSec: state.simTimeSec,
+      kind,
+      note,
+      vehicleIds
+    });
+    job.markerSequence += 1;
+  };
+
+  if (state.kpis.deadlockCount > job.lastDeadlockCount) {
+    marker('deadlock', `deadlock count ${job.lastDeadlockCount} -> ${state.kpis.deadlockCount}`, state.traffic.deadlockCandidateVehicleIds);
+    job.lastDeadlockCount = state.kpis.deadlockCount;
+  }
+  if (state.kpis.livelockCount > job.lastLivelockCount) {
+    marker('livelock', `livelock count ${job.lastLivelockCount} -> ${state.kpis.livelockCount}`);
+    job.lastLivelockCount = state.kpis.livelockCount;
+  }
+  if (state.traffic.physicalViolationCount > job.lastPhysicalViolationCount) {
+    marker(
+      'physical-violation',
+      `physical violation count ${job.lastPhysicalViolationCount} -> ${state.traffic.physicalViolationCount}`,
+      state.vehicles.map((vehicle) => vehicle.id)
+    );
+    job.lastPhysicalViolationCount = state.traffic.physicalViolationCount;
+  }
+}
+
+function prunePhysicalRecordings(): void {
+  const excess = physicalRecordings.size - Math.max(1, Math.floor(maxRetainedPhysicalRecordings));
+  if (excess <= 0) {
+    return;
+  }
+  for (const id of [...physicalRecordings.keys()].slice(0, excess)) {
+    physicalRecordings.delete(id);
+  }
+}
+
+function publicPhysicalRecordingJob(job: PhysicalRecordingJobInternal): PhysicalRecordingJobPublicV1 {
+  const nowMs = job.completedAtMs ?? Date.now();
+  return {
+    id: job.id,
+    status: job.status,
+    createdAtIso: job.createdAtIso,
+    durationSec: job.durationSec,
+    sampleIntervalSec: job.sampleIntervalSec,
+    latestSec: job.latestSec,
+    progressPct: job.durationSec > 0 ? Math.min(100, Math.max(0, (job.latestSec / job.durationSec) * 100)) : 0,
+    framesRecorded: job.frames.length,
+    elapsedMs: Math.max(0, nowMs - job.startedAtMs),
+    scenarioHash: job.scenarioHash,
+    recordingId: job.recordingId,
+    summary: job.summary,
+    error: job.error
+  };
+}
+
+function completePhysicalRecordingJob(job: PhysicalRecordingJobInternal, finalState: ShuttleSimState): void {
+  job.status = 'completed';
+  job.completedAtMs = Date.now();
+  job.latestSec = finalState.simTimeSec;
+  job.summary = physicalRecordingSummaryFromState(finalState);
+  const lastFrame = job.frames.at(-1);
+  if (!lastFrame || Math.abs(lastFrame.simTimeSec - finalState.simTimeSec) > 1e-6) {
+    job.frames.push(physicalRecordingFrameFromState(finalState));
+  }
+  const recording: PhysicalRecordingV1 = {
+    schemaVersion: 'shuttle.physicalRecording.v1',
+    id: job.id,
+    createdAtIso: job.createdAtIso,
+    completedAtIso: new Date(job.completedAtMs).toISOString(),
+    scenarioHash: job.scenarioHash,
+    scenario: job.scenario,
+    durationSec: job.durationSec,
+    sampleIntervalSec: job.sampleIntervalSec,
+    frameCount: job.frames.length,
+    elapsedMs: job.completedAtMs - job.startedAtMs,
+    summary: job.summary,
+    anomalyMarkers: job.anomalyMarkers,
+    frames: job.frames
+  };
+  physicalRecordings.set(recording.id, recording);
+  prunePhysicalRecordings();
+  job.recordingId = recording.id;
+  job.sim.retainRecentEventLog(0);
+}
+
+function processPhysicalRecordingJob(jobId: string): void {
+  const job = physicalRecordingJobs.get(jobId);
+  if (!job || job.status !== 'running') {
+    return;
+  }
+
+  try {
+    const frameBudget = Math.max(1, Math.floor(physicalRecordingJobChunkFrames));
+    let framesThisChunk = 0;
+    while (framesThisChunk < frameBudget && job.latestSec < job.durationSec - 1e-9 && job.sim.getClock().status === 'running') {
+      const targetSec = Math.min(job.durationSec, job.nextSampleSec);
+      const currentSec = job.sim.getClock().simTimeSec;
+      if (targetSec > currentSec + 1e-9) {
+        job.sim.advanceByInPlace(targetSec - currentSec);
+      }
+      const state = job.sim.getState();
+      job.latestSec = state.simTimeSec;
+      appendPhysicalRecordingAnomalies(job, state);
+      job.frames.push(physicalRecordingFrameFromState(state));
+      job.sim.retainRecentEventLog(2000);
+      job.nextSampleSec = Math.min(job.durationSec, job.nextSampleSec + job.sampleIntervalSec);
+      if (state.status !== 'running' || state.simTimeSec >= job.durationSec - 1e-9) {
+        break;
+      }
+      framesThisChunk += 1;
+    }
+
+    const clock = job.sim.getClock();
+    if (clock.simTimeSec >= job.durationSec - 1e-9 || clock.status !== 'running') {
+      completePhysicalRecordingJob(job, job.sim.getState());
+      return;
+    }
+
+    setImmediate(() => processPhysicalRecordingJob(jobId));
+  } catch (error) {
+    job.status = 'failed';
+    job.completedAtMs = Date.now();
+    job.error = error instanceof Error ? error.message : String(error);
+  }
+}
+
+function startPhysicalRecordingJob(options: { durationSec: number; sampleIntervalSec: number; resetFirst: boolean }): PhysicalRecordingJobInternal {
+  const existingActiveJob = [...physicalRecordingJobs.values()].find((job) => job.status === 'queued' || job.status === 'running');
+  if (existingActiveJob) {
+    throw new Error(`Physical recording job ${existingActiveJob.id} is already ${existingActiveJob.status}.`);
+  }
+
+  const sourceScenario = sim.getScenario();
+  const scenario = {
+    ...sourceScenario,
+    durationSec: Math.max(options.durationSec, sourceScenario.durationSec)
+  };
+  const recordingSim = new ShuttleSimCore(scenario);
+  if (!options.resetFirst) {
+    recordingSim.restoreSnapshot(sim.createSnapshot());
+    recordingSim.setDurationSec(Math.max(options.durationSec, recordingSim.getClock().simTimeSec));
+  }
+  recordingSim.start();
+  const initialState = recordingSim.getState();
+  const job: PhysicalRecordingJobInternal = {
+    id: randomUUID(),
+    status: 'running',
+    createdAtIso: new Date().toISOString(),
+    startedAtMs: Date.now(),
+    completedAtMs: null,
+    durationSec: options.durationSec,
+    sampleIntervalSec: options.sampleIntervalSec,
+    latestSec: initialState.simTimeSec,
+    nextSampleSec: Math.min(options.durationSec, initialState.simTimeSec + options.sampleIntervalSec),
+    scenarioHash: hashScenario(scenario),
+    scenario,
+    sim: recordingSim,
+    frames: [physicalRecordingFrameFromState(initialState)],
+    anomalyMarkers: [],
+    markerSequence: 0,
+    lastDeadlockCount: initialState.kpis.deadlockCount,
+    lastLivelockCount: initialState.kpis.livelockCount,
+    lastPhysicalViolationCount: initialState.traffic.physicalViolationCount,
+    summary: null,
+    recordingId: null,
+    error: null
+  };
+  physicalRecordingJobs.set(job.id, job);
+  if (initialState.simTimeSec >= options.durationSec - 1e-9) {
+    completePhysicalRecordingJob(job, initialState);
+  } else {
+    setImmediate(() => processPhysicalRecordingJob(job.id));
+  }
+  return job;
 }
 
 function resetTrace(reason: 'initial' | 'command' = 'initial'): void {
@@ -515,6 +843,48 @@ app.post('/api/shuttle/runHeadlessDes', (request: Request, response: Response, n
   } catch (error) {
     next(error);
   }
+});
+
+app.post('/api/shuttle/physicalRecordingJobs', (request: Request, response: Response, next: NextFunction) => {
+  try {
+    const options = normalizePhysicalRecordingOptions({
+      durationSec: request.body?.durationSec,
+      sampleIntervalSec: request.body?.sampleIntervalSec
+    });
+    if ('error' in options) {
+      response.status(422).json({ ok: false, error: options.error });
+      return;
+    }
+
+    const job = startPhysicalRecordingJob({
+      durationSec: options.durationSec,
+      sampleIntervalSec: options.sampleIntervalSec,
+      resetFirst: request.body?.resetFirst !== false
+    });
+    response.json({ ok: true, job: publicPhysicalRecordingJob(job) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/shuttle/physicalRecordingJobs/:id', (request: Request, response: Response) => {
+  const id = String(request.params.id ?? '');
+  const job = physicalRecordingJobs.get(id);
+  if (!job) {
+    response.status(404).json({ ok: false, error: `Physical recording job ${id} was not found.` });
+    return;
+  }
+  response.json({ ok: true, job: publicPhysicalRecordingJob(job) });
+});
+
+app.get('/api/shuttle/physicalRecordings/:id', (request: Request, response: Response) => {
+  const id = String(request.params.id ?? '');
+  const recording = physicalRecordings.get(id);
+  if (!recording) {
+    response.status(404).json({ ok: false, error: `Physical recording ${id} was not found or is not complete yet.` });
+    return;
+  }
+  response.json({ ok: true, recording });
 });
 
 app.get('/api/shuttle/exportLog', (_request: Request, response: Response) => {
