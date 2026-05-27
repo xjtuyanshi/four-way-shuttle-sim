@@ -276,6 +276,19 @@ function trackCategoryForEdge(
   return Math.abs(to.x - from.x) >= Math.abs(to.z - from.z) ? 'crossAisle' : 'sideAisle';
 }
 
+function shouldRenderTrackBed(edge: ShuttleScenario['layout']['edges'][number]): boolean {
+  const conflictGroup = edge.conflictGroup ?? '';
+  if (!/^lift-\d{2}-(?:inbound|outbound)-/.test(conflictGroup)) {
+    return true;
+  }
+  return !(
+    /-buffer-throat$/.test(conflictGroup) ||
+    /-conveyor-(?:buffer|pickup|service-exit)$/.test(conflictGroup) ||
+    /-standby-queue-/.test(conflictGroup) ||
+    /-outbound-dropoff-clearance-/.test(conflictGroup)
+  );
+}
+
 function summarizeCalibrationReadiness(
   profile: ShuttleStaticSceneLayoutCalibrationProfile | null
 ): ShuttleStaticSceneCalibrationReadiness {
@@ -396,6 +409,9 @@ export function summarizeScenarioStaticSceneContract(scenario: ShuttleScenario):
 
   const trackBeds: ShuttleStaticSceneTrackBed[] = [];
   for (const edge of scenario.layout.edges) {
+    if (!shouldRenderTrackBed(edge)) {
+      continue;
+    }
     const from = nodesById.get(edge.from);
     const to = nodesById.get(edge.to);
     if (!from || !to) {
