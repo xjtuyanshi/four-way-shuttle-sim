@@ -389,10 +389,10 @@ function auditTaskCommonSense(current: ShuttleSimState): void {
     }
     const expectedGoal = expectedTaskGoalNodeId(current, vehicle, task);
     if (
-      vehicle.currentNodeId !== expectedGoal &&
+      !nodeMatchesExpectedTaskGoal(vehicle.currentNodeId, expectedGoal) &&
       vehicle.state !== 'lifting' &&
       vehicle.state !== 'lowering' &&
-      vehicle.plannedGoalNodeId !== expectedGoal
+      !nodeMatchesExpectedTaskGoal(vehicle.plannedGoalNodeId, expectedGoal)
     ) {
       addAnomaly(
         current.simTimeSec,
@@ -403,7 +403,7 @@ function auditTaskCommonSense(current: ShuttleSimState): void {
       );
     }
     if (
-      vehicle.currentNodeId !== expectedGoal &&
+      !nodeMatchesExpectedTaskGoal(vehicle.currentNodeId, expectedGoal) &&
       vehicle.state !== 'lifting' &&
       vehicle.state !== 'lowering' &&
       vehicle.plannedRouteNodeIds.length < 2
@@ -902,6 +902,30 @@ function expectedTaskGoalNodeId(current: ShuttleSimState, vehicle: VehicleState,
     return task.dropoffNodeId;
   }
   return inboundTaskHasEarlierPickupTask(current, task) ? inboundQueueNodeIdForTask(task) ?? task.pickupNodeId : task.pickupNodeId;
+}
+
+function nodeMatchesExpectedTaskGoal(nodeId: string | null | undefined, expectedGoalNodeId: string): boolean {
+  if (!nodeId || nodeId === expectedGoalNodeId) {
+    return Boolean(nodeId);
+  }
+  const actualQueue = queueParkingLiftNodeId(nodeId);
+  const expectedQueue = queueParkingLiftNodeId(expectedGoalNodeId);
+  const expectedBufferLift = inboundBufferLiftNodeId(expectedGoalNodeId);
+  return Boolean(
+    actualQueue &&
+    (
+      (expectedQueue && actualQueue === expectedQueue) ||
+      (expectedBufferLift && actualQueue === expectedBufferLift)
+    )
+  );
+}
+
+function queueParkingLiftNodeId(nodeId: string): string | null {
+  return /^parking-(lift-\d{2}-(?:inbound|outbound))-queue(?:-\d{2})?$/.exec(nodeId)?.[1] ?? null;
+}
+
+function inboundBufferLiftNodeId(nodeId: string): string | null {
+  return /^(lift-\d{2}-inbound)-buffer-\d{2}$/.exec(nodeId)?.[1] ?? null;
 }
 
 function inboundQueueNodeIdForTask(task: TaskStateRecord): string | null {

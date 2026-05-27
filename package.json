@@ -16,6 +16,8 @@
     "shuttle:validate:report": "corepack pnpm --filter shuttle-api validate:phase0 ../../output/shuttle/phase0-validation-report.json",
     "shuttle:audit:behavior": "tsx scripts/audit-shuttle-behavior.ts",
     "shuttle:audit:replay": "tsx scripts/audit-shuttle-replay-determinism.ts",
+    "shuttle:des": "tsx scripts/run-headless-des.ts",
+    "shuttle:physical-long": "tsx scripts/run-physical-long.ts",
     "shuttle:replay": "tsx scripts/replay-shuttle-run.ts",
     "shuttle:ws-smoke": "node scripts/smoke-shuttle-ws.mjs",
     "test:shuttle": "vitest run packages/shuttle-sim-core",

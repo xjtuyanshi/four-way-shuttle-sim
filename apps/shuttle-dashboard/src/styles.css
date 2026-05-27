@@ -615,6 +615,7 @@ html, body, #root {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 560px;
 }
 
 .timeline-jump label {
@@ -645,12 +646,38 @@ html, body, #root {
   padding: 0 12px;
 }
 
+.timeline-jump button.active-fast-run {
+  border-color: rgba(229, 189, 84, 0.6);
+  background: rgba(229, 189, 84, 0.16);
+  color: #f0d487;
+}
+
 .timeline-status {
   font-size: 11px;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   padding: 0 6px;
+}
+
+.timeline-command-status {
+  min-width: 210px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-command-status.tone-ok {
+  color: var(--primary-strong);
+}
+
+.timeline-command-status.tone-warn {
+  color: var(--warning);
+}
+
+.timeline-command-status.tone-error {
+  color: var(--danger);
 }
 
 .brand-block {
@@ -1207,6 +1234,7 @@ input[type="range"] {
   line-height: 1;
 }
 
+.des-summary-panel,
 .pph-trend-panel,
 .lift-pph-panel,
 .vehicle-time-panel {
@@ -1216,6 +1244,33 @@ input[type="range"] {
   padding: 12px;
   display: grid;
   gap: 10px;
+}
+
+.des-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.des-summary-grid > div {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 12px;
+  display: grid;
+  gap: 4px;
+  min-height: 78px;
+}
+
+.des-summary-grid span,
+.des-summary-grid small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.des-summary-grid strong {
+  font-size: 22px;
+  line-height: 1;
 }
 
 .panel-head.compact {

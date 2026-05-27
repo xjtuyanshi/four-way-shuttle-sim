@@ -11,6 +11,7 @@ import {
   createInboundOutboundDemoScenario,
   hashEventLog,
   hashScenario,
+  runHeadlessDes,
   type ShuttleEngineSnapshotV1
 } from '@four-way-shuttle/sim-core';
 
@@ -21,8 +22,9 @@ const port = Number(process.env.SHUTTLE_PORT ?? process.env.PORT ?? 8791);
 const tickMs = Number(process.env.SHUTTLE_TICK_MS ?? 100);
 const streamBroadcastIntervalMs = Number(process.env.SHUTTLE_STREAM_TICK_MS ?? 250);
 const fullStateBroadcastIntervalMs = Number(process.env.SHUTTLE_FULL_STATE_TICK_MS ?? 1000);
-const traceSnapshotCadenceSec = Number(process.env.SHUTTLE_TRACE_SNAPSHOT_SEC ?? 1);
+const traceSnapshotCadenceSec = Number(process.env.SHUTTLE_TRACE_SNAPSHOT_SEC ?? 0);
 const maxTraceSnapshots = Number(process.env.SHUTTLE_TRACE_MAX_SNAPSHOTS ?? 1800);
+const longRunTraceSnapshotThresholdSec = Number(process.env.SHUTTLE_LONG_RUN_TRACE_SNAPSHOT_THRESHOLD_SEC ?? 1800);
 
 type ReplayCommandRecordV1 = {
   sequence: number;
@@ -88,7 +90,7 @@ function parsePlaybackSpeed(value: unknown): number | null {
     return null;
   }
   const speed = Number(value);
-  return Number.isFinite(speed) && speed > 0 && speed <= 20 ? speed : null;
+  return Number.isFinite(speed) && speed > 0 && speed <= 100 ? speed : null;
 }
 
 let playbackSpeed = parsePlaybackSpeed(process.env.SHUTTLE_SPEED) ?? 1;
@@ -254,6 +256,9 @@ function recordTraceSnapshot(reason: ReplaySnapshotRecordV1['reason'], options: 
 }
 
 function maybeRecordPeriodicTraceSnapshot(): void {
+  if (!Number.isFinite(traceSnapshotCadenceSec) || traceSnapshotCadenceSec <= 0) {
+    return;
+  }
   const snapshot = sim.createSnapshot();
   if (snapshot.simTimeSec - lastTraceSnapshotSimTimeSec >= traceSnapshotCadenceSec - 1e-9) {
     const record: ReplaySnapshotRecordV1 = {
@@ -277,21 +282,25 @@ function recordTraceCommand(
   type: ReplayCommandRecordV1['type'],
   payload: unknown,
   result: unknown,
-  receivedAtSimTimeSec: number
+  receivedAtSimTimeSec: number,
+  options: { captureSnapshot?: boolean } = {}
 ): void {
-  const snapshot = sim.createSnapshot();
+  const captureSnapshot = options.captureSnapshot !== false;
+  const snapshot = captureSnapshot ? sim.createSnapshot() : null;
   traceCommands.push({
     sequence: traceCommandSequence,
     wallClockMs: Date.now(),
     receivedAtSimTimeSec,
-    appliedTickIndex: snapshot.tickIndex,
+    appliedTickIndex: snapshot?.tickIndex ?? sim.getClock().tickIndex,
     type,
     payload,
     result,
-    stateHashAfter: snapshot.stateHash
+    stateHashAfter: snapshot?.stateHash ?? 'not-captured'
   });
   traceCommandSequence += 1;
-  recordTraceSnapshot('command');
+  if (captureSnapshot) {
+    recordTraceSnapshot('command');
+  }
 }
 
 function exportRunTrace(): RunTraceV1 {
@@ -413,7 +422,7 @@ app.post('/api/shuttle/playbackSpeed', (request: Request, response: Response) =>
   const receivedAtSimTimeSec = sim.getClock().simTimeSec;
   const speed = parsePlaybackSpeed(request.body?.speed);
   if (speed === null) {
-    response.status(422).json({ ok: false, error: 'Playback speed must be greater than 0 and at most 20.' });
+    response.status(422).json({ ok: false, error: 'Playback speed must be greater than 0 and at most 100.' });
     return;
   }
   playbackSpeed = speed;
@@ -431,8 +440,11 @@ app.post('/api/shuttle/runToTime', (request: Request, response: Response, next: 
     }
 
     const startedAtMs = Date.now();
+    if (requestedTargetSec > sim.getScenario().durationSec) {
+      sim.setDurationSec(requestedTargetSec);
+    }
     const scenario = sim.getScenario();
-    const targetSimTimeSec = Math.min(requestedTargetSec, scenario.durationSec);
+    const targetSimTimeSec = requestedTargetSec;
     const resetFirst = request.body?.resetFirst === true || targetSimTimeSec + 1e-9 < sim.getClock().simTimeSec;
     if (resetFirst) {
       sim.reset(scenario.seed);
@@ -467,9 +479,39 @@ app.post('/api/shuttle/runToTime', (request: Request, response: Response, next: 
       elapsedMs: traceResult.elapsedMs,
       state
     };
-    recordTraceCommand('runToTime', { targetSimTimeSec, resetFirst }, traceResult, receivedAtSimTimeSec);
+    recordTraceCommand(
+      'runToTime',
+      { targetSimTimeSec, resetFirst },
+      traceResult,
+      receivedAtSimTimeSec,
+      { captureSnapshot: targetSimTimeSec <= longRunTraceSnapshotThresholdSec }
+    );
     broadcastState({ full: true });
     response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/shuttle/runHeadlessDes', (request: Request, response: Response, next: NextFunction) => {
+  try {
+    const requestedDurationSec = parseFiniteNonNegativeNumber(request.body?.durationSec);
+    const sampleIntervalSec = parseFiniteNonNegativeNumber(request.body?.sampleIntervalSec);
+    const maxQueuedTasks = parseFiniteNonNegativeNumber(request.body?.maxQueuedTasks);
+    const liftBufferCapacity = parseFiniteNonNegativeNumber(request.body?.liftBufferCapacity);
+    const durationSec = requestedDurationSec ?? sim.getScenario().durationSec;
+    const scenario = {
+      ...sim.getScenario(),
+      durationSec
+    };
+    const result = runHeadlessDes({
+      scenario,
+      durationSec,
+      sampleIntervalSec: sampleIntervalSec ?? undefined,
+      maxQueuedTasks: maxQueuedTasks === null ? undefined : Math.max(1, Math.round(maxQueuedTasks)),
+      liftBufferCapacity: liftBufferCapacity === null ? undefined : Math.max(1, Math.round(liftBufferCapacity))
+    });
+    response.json({ ok: true, result });
   } catch (error) {
     next(error);
   }

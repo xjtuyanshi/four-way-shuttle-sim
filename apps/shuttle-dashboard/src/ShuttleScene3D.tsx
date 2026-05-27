@@ -71,11 +71,19 @@ type VehicleObjectUserData = {
   labelText: string;
 };
 
+type VisualClock = {
+  latestSimTime: number | null;
+  simTime: number | null;
+  wallMs: number | null;
+};
+
 const FLOOR_Y = 0;
 const VEHICLE_BASE_Y = 0.08;
 const CAD_CANVAS_WIDTH = 2048;
 const CAD_CANVAS_HEIGHT = 1536;
 const TARGET_RENDER_FPS = 60;
+const MAX_VISUAL_SNAPSHOTS = 48;
+const VISUAL_INTERPOLATION_DELAY_WALL_SEC = 0.45;
 const CAD_STORAGE_FILL = 'rgba(103, 72, 176, 0.2)';
 const CAD_STORAGE_STROKE = 'rgba(176, 111, 255, 0.86)';
 const CAD_AISLE_FILL = 'rgba(231, 190, 44, 0.22)';
@@ -1749,7 +1757,101 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
   applyCameraView(runtime, cameraView);
 }
 
-type VehicleSnapshot = { simTime: number; wallMs: number; vehicles: Map<string, { x: number; z: number; yaw: number }> };
+type VehiclePoseSnapshot = { x: number; z: number; yaw: number };
+type VehicleSnapshot = { simTime: number; wallMs: number; vehicles: Map<string, VehiclePoseSnapshot> };
+
+function appendVehicleSnapshot(snapshots: VehicleSnapshot[], snapshot: VehicleSnapshot): VehicleSnapshot[] {
+  const latest = snapshots.at(-1);
+  if (!latest || snapshot.simTime < latest.simTime - 1e-9) {
+    return [snapshot];
+  }
+  if (Math.abs(snapshot.simTime - latest.simTime) < 1e-9) {
+    return [...snapshots.slice(0, -1), snapshot];
+  }
+  return [...snapshots, snapshot].slice(-MAX_VISUAL_SNAPSHOTS);
+}
+
+function visualInterpolationDelaySimSec(playbackSpeed: number): number {
+  return Math.min(6, Math.max(0.25, playbackSpeed * VISUAL_INTERPOLATION_DELAY_WALL_SEC));
+}
+
+function visualRenderSimTime(
+  snapshots: VehicleSnapshot[],
+  playbackSpeed: number,
+  running: boolean,
+  nowMs: number,
+  clock: VisualClock
+): number {
+  const latest = snapshots.at(-1);
+  const oldest = snapshots[0];
+  if (!latest || !oldest) return 0;
+  const estimatedServerNowSec = latest.simTime + Math.max(0, (nowMs - latest.wallMs) / 1000) * playbackSpeed;
+  const targetTimeSec = Math.min(
+    latest.simTime,
+    Math.max(oldest.simTime, estimatedServerNowSec - visualInterpolationDelaySimSec(playbackSpeed))
+  );
+
+  if (
+    !running ||
+    snapshots.length < 2 ||
+    clock.simTime === null ||
+    clock.wallMs === null ||
+    clock.latestSimTime === null ||
+    latest.simTime < clock.latestSimTime - 1e-9 ||
+    clock.simTime < oldest.simTime - 1e-9 ||
+    clock.simTime > latest.simTime + 1e-9
+  ) {
+    clock.simTime = running ? targetTimeSec : latest.simTime;
+    clock.wallMs = nowMs;
+    clock.latestSimTime = latest.simTime;
+    return clock.simTime;
+  }
+
+  const elapsedWallSec = Math.max(0, (nowMs - clock.wallMs) / 1000);
+  const nominalNextSec = clock.simTime + elapsedWallSec * playbackSpeed;
+  const monotonicTargetSec = targetTimeSec < clock.simTime ? clock.simTime : targetTimeSec;
+  const nextSec = Math.min(latest.simTime, Math.max(oldest.simTime, Math.min(nominalNextSec, monotonicTargetSec)));
+  clock.simTime = nextSec;
+  clock.wallMs = nowMs;
+  clock.latestSimTime = latest.simTime;
+  return nextSec;
+}
+
+function sampleVehiclePosesForFrame(
+  snapshots: VehicleSnapshot[],
+  playbackSpeed: number,
+  running: boolean,
+  nowMs: number,
+  clock: VisualClock
+): Map<string, VehiclePoseSnapshot> {
+  const latest = snapshots.at(-1);
+  if (!latest) return new Map();
+  if (!running || snapshots.length < 2) return latest.vehicles;
+
+  const renderTime = visualRenderSimTime(snapshots, playbackSpeed, running, nowMs, clock);
+  let afterIndex = snapshots.findIndex((snapshot) => snapshot.simTime >= renderTime - 1e-9);
+  if (afterIndex < 0) afterIndex = snapshots.length - 1;
+  const before = snapshots[Math.max(0, afterIndex - 1)] ?? latest;
+  const after = snapshots[afterIndex] ?? latest;
+  const snapshotDtSec = after.simTime - before.simTime;
+  if (snapshotDtSec <= 0) return latest.vehicles;
+
+  const alpha = Math.min(1, Math.max(0, (renderTime - before.simTime) / snapshotDtSec));
+  const sampled = new Map<string, VehiclePoseSnapshot>();
+  for (const [vehicleId, pose] of after.vehicles.entries()) {
+    const previous = before.vehicles.get(vehicleId);
+    if (!previous) {
+      sampled.set(vehicleId, pose);
+      continue;
+    }
+    sampled.set(vehicleId, {
+      x: previous.x + (pose.x - previous.x) * alpha,
+      z: previous.z + (pose.z - previous.z) * alpha,
+      yaw: previous.yaw + normalizeAngle(pose.yaw - previous.yaw) * alpha
+    });
+  }
+  return sampled;
+}
 
 export function ShuttleScene3D({
   scenario,
@@ -1775,7 +1877,8 @@ export function ShuttleScene3D({
   const cameraViewRef = useRef<ShuttleSceneCameraView>(cameraView);
   const onCameraViewChangeRef = useRef(onCameraViewChange);
   const onRendererInfoRef = useRef(onRendererInfo);
-  const snapshotsRef = useRef<{ prev: VehicleSnapshot | null; curr: VehicleSnapshot | null }>({ prev: null, curr: null });
+  const snapshotsRef = useRef<VehicleSnapshot[]>([]);
+  const visualClockRef = useRef<VisualClock>({ latestSimTime: null, simTime: null, wallMs: null });
   const playbackSpeedRef = useRef<number>(playbackSpeed ?? 1);
   const runningRef = useRef<boolean>(false);
 
@@ -1920,7 +2023,6 @@ export function ShuttleScene3D({
     renderer.domElement.addEventListener('pointercancel', onPointerUp);
     renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
 
-    const extrapolatedTarget = new THREE.Vector3();
     const render = (nowMs: number) => {
       runtime.frameId = window.requestAnimationFrame(render);
       if (nowMs - runtime.lastFrameMs < 1000 / TARGET_RENDER_FPS) {
@@ -1929,43 +2031,20 @@ export function ShuttleScene3D({
       const dtSec = Math.min(0.05, Math.max(0.001, (nowMs - runtime.lastFrameMs) / 1000));
       runtime.lastFrameMs = nowMs;
       const fallbackPositionAlpha = 1 - Math.exp(-dtSec * 28);
-      const yawAlpha = 1 - Math.exp(-dtSec * 14);
-      const { prev, curr } = snapshotsRef.current;
+      const fallbackYawAlpha = 1 - Math.exp(-dtSec * 14);
       const running = runningRef.current;
       const speed = playbackSpeedRef.current;
-      let snapshotDtSec = 0;
-      let projectionSec = 0;
-      let extrapolating = false;
-      if (running && prev && curr) {
-        snapshotDtSec = curr.simTime - prev.simTime;
-        if (snapshotDtSec > 0) {
-          const wallElapsedSec = (performance.now() - curr.wallMs) / 1000;
-          projectionSec = Math.max(0, Math.min(0.6, wallElapsedSec * speed));
-          extrapolating = projectionSec > 0;
-        }
-      }
+      const sampledPoses = sampleVehiclePosesForFrame(snapshotsRef.current, speed, running, nowMs, visualClockRef.current);
       for (const [vehicleId, object] of runtime.vehicleObjects.entries()) {
         const data = vehicleUserData(object);
-        let useExtrapolated = false;
-        extrapolatedTarget.copy(data.targetPosition);
-        if (extrapolating && prev && curr) {
-          const previous = prev.vehicles.get(vehicleId);
-          const current = curr.vehicles.get(vehicleId);
-          if (previous && current) {
-            const dx = (current.x - previous.x) / snapshotDtSec;
-            const dz = (current.z - previous.z) / snapshotDtSec;
-            if (dx * dx + dz * dz > 1e-6) {
-              extrapolatedTarget.set(current.x + dx * projectionSec, 0, current.z + dz * projectionSec);
-              useExtrapolated = true;
-            }
-          }
-        }
-        if (useExtrapolated) {
-          object.position.copy(extrapolatedTarget);
+        const sampledPose = sampledPoses.get(vehicleId);
+        if (sampledPose) {
+          object.position.set(sampledPose.x, 0, sampledPose.z);
+          object.rotation.y = sampledPose.yaw;
         } else {
-          object.position.lerp(extrapolatedTarget, fallbackPositionAlpha);
+          object.position.lerp(data.targetPosition, fallbackPositionAlpha);
+          object.rotation.y += normalizeAngle(data.targetYaw - object.rotation.y) * fallbackYawAlpha;
         }
-        object.rotation.y += normalizeAngle(data.targetYaw - object.rotation.y) * yawAlpha;
       }
       renderer.render(scene, camera);
     };
@@ -2014,13 +2093,7 @@ export function ShuttleScene3D({
         wallMs: performance.now(),
         vehicles: new Map(visualState.vehicles.map((vehicle) => [vehicle.id, { x: vehicle.x, z: vehicle.z, yaw: vehicle.yaw }]))
       };
-      const cur = snapshotsRef.current.curr;
-      if (!cur || cur.simTime !== newSnap.simTime) {
-        snapshotsRef.current.prev = cur;
-        snapshotsRef.current.curr = newSnap;
-      } else {
-        snapshotsRef.current.curr = newSnap;
-      }
+      snapshotsRef.current = appendVehicleSnapshot(snapshotsRef.current, newSnap);
     }
     runningRef.current = visualState?.status === 'running';
   }, [scenario, state, layers, selectedVehicleId]);

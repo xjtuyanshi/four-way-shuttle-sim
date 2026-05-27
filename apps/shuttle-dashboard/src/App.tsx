@@ -12,6 +12,7 @@ import {
   summarizeScenarioStaticSceneContract,
   type ShuttleStaticSceneCalibrationReadiness
 } from '@four-way-shuttle/sim-core/static-scene';
+import type { HeadlessDesResult } from '@four-way-shuttle/sim-core';
 import type { ShuttleSceneCameraView, ShuttleSceneRendererInfo } from './ShuttleScene3D.js';
 import { flowRgba, resolveLoadFlowRole, resolveVehicleTaskFlowRole, FLOW_VISUAL_COLORS } from './flowColors.js';
 import { createStorageCellRects, createTrackAreaRects } from './layoutVisuals.js';
@@ -65,6 +66,11 @@ type RunToTimeResponse = {
   state: ShuttleSimState;
 };
 
+type HeadlessDesResponse = {
+  ok: boolean;
+  result: HeadlessDesResult;
+};
+
 export type ScenarioSetup = {
   regionCount: number;
   minRegionCount: number;
@@ -103,10 +109,21 @@ type PphHistorySample = {
   liftPph: Record<string, number>;
 };
 
+type FastRunProgress = {
+  active: boolean;
+  targetSec: number;
+  latestSec: number;
+  startedAtMs: number;
+  elapsedMs: number;
+  chunksCompleted: number;
+};
+
 type MapViewMode = '3d' | 'lite' | '2d';
 type WorkspaceTab = 'view' | 'statistics' | 'diagnostics';
 
 const MAX_PPH_HISTORY_SAMPLES = 240;
+const SIX_HOURS_SEC = 6 * 60 * 60;
+const FAST_RUN_CHUNK_SEC = 10;
 
 type BottleneckBreakdown = Record<string, number>;
 
@@ -364,7 +381,7 @@ const CONTROLLED_PARAMS = [
   }
 ] as const;
 
-const PLAYBACK_SPEEDS = [1, 2, 4, 10] as const;
+const PLAYBACK_SPEEDS = [1, 2, 4, 10, 100] as const;
 const WORKSPACE_TABS: Array<{ id: WorkspaceTab; label: string }> = [
   { id: 'view', label: '2D / 3D View' },
   { id: 'statistics', label: 'Statistics' },
@@ -744,6 +761,52 @@ function KpiStrip({ scenario, kpis }: { scenario: ShuttleScenario | null; kpis: 
           {label === 'Requested total PPH' ? <small>inbound + outbound task pressure</small> : null}
         </div>
       ))}
+    </section>
+  );
+}
+
+function DesSummaryPanel({ result }: { result: HeadlessDesResult | null }) {
+  const durationHours = result ? result.durationSec / 3600 : 0;
+  const items = [
+    {
+      label: 'Capacity horizon',
+      value: result ? `${formatNumber(durationHours, durationHours >= 24 ? 0 : 1)}h` : '--',
+      detail: result ? `${formatNumber(result.wallClockMs, 0)} ms wall clock, ${formatNumber(result.processedEvents, 0)} events` : 'capacity DES, not physical traffic'
+    },
+    {
+      label: 'Capacity PPH',
+      value: result ? formatNumber(result.totalPph, 1) : '--',
+      detail: result ? `in ${formatNumber(result.inboundPph, 1)} / out ${formatNumber(result.outboundPph, 1)}` : 'excludes avoidance and deadlock risk'
+    },
+    {
+      label: 'Capacity queues',
+      value: result ? `${result.activeTasks}/${result.queuedTasks}` : '--',
+      detail: result ? `active / queued, skipped ${formatNumber(result.skippedInbound + result.skippedOutbound, 0)} demand ticks` : 'skipped means not backlogged'
+    },
+    {
+      label: 'Capacity storage',
+      value: result ? `${formatNumber(result.storageUtilization * 100, 1)}%` : '--',
+      detail: result ? `${result.storedLoads}/${result.storageCapacity} stored, anomalies ${result.anomalyMarkers.length}` : 'long-run inventory balance'
+    }
+  ];
+
+  return (
+    <section className="des-summary-panel" aria-label="Headless DES summary">
+      <div className="panel-head compact">
+        <div>
+          <h2>Capacity DES</h2>
+          <p>Fast capacity estimate for long horizons. It does not validate grid traffic, avoidance, queue behavior, or animation.</p>
+        </div>
+      </div>
+      <div className="des-summary-grid">
+        {items.map((item) => (
+          <div key={item.label}>
+            <span>{item.label}</span>
+            <strong>{item.value}</strong>
+            <small>{item.detail}</small>
+          </div>
+        ))}
+      </div>
     </section>
   );
 }
@@ -1352,28 +1415,101 @@ type LiteMapSnapshot = {
   vehicles: Map<string, VehicleState>;
 };
 
-function interpolateVehiclesForFrame(
-  prev: LiteMapSnapshot | null,
-  curr: LiteMapSnapshot | null,
+type VisualClock = {
+  latestSimTime: number | null;
+  simTime: number | null;
+  wallMs: number | null;
+};
+
+const MAX_VISUAL_SNAPSHOTS = 48;
+const VISUAL_INTERPOLATION_DELAY_WALL_SEC = 0.45;
+
+function appendLiteMapSnapshot(snapshots: LiteMapSnapshot[], snapshot: LiteMapSnapshot): LiteMapSnapshot[] {
+  const latest = snapshots.at(-1);
+  if (!latest || snapshot.simTime < latest.simTime - 1e-9) {
+    return [snapshot];
+  }
+  if (Math.abs(snapshot.simTime - latest.simTime) < 1e-9) {
+    return [...snapshots.slice(0, -1), snapshot];
+  }
+  return [...snapshots, snapshot].slice(-MAX_VISUAL_SNAPSHOTS);
+}
+
+function visualInterpolationDelaySimSec(playbackSpeed: number): number {
+  return Math.min(6, Math.max(0.25, playbackSpeed * VISUAL_INTERPOLATION_DELAY_WALL_SEC));
+}
+
+function visualRenderSimTime(
+  snapshots: LiteMapSnapshot[],
   playbackSpeed: number,
-  running: boolean
+  running: boolean,
+  nowMs: number,
+  clock: VisualClock
+): number {
+  const latest = snapshots.at(-1);
+  const oldest = snapshots[0];
+  if (!latest || !oldest) return 0;
+  const estimatedServerNowSec = latest.simTime + Math.max(0, (nowMs - latest.wallMs) / 1000) * playbackSpeed;
+  const targetTimeSec = Math.min(
+    latest.simTime,
+    Math.max(oldest.simTime, estimatedServerNowSec - visualInterpolationDelaySimSec(playbackSpeed))
+  );
+
+  if (
+    !running ||
+    snapshots.length < 2 ||
+    clock.simTime === null ||
+    clock.wallMs === null ||
+    clock.latestSimTime === null ||
+    latest.simTime < clock.latestSimTime - 1e-9 ||
+    clock.simTime < oldest.simTime - 1e-9 ||
+    clock.simTime > latest.simTime + 1e-9
+  ) {
+    clock.simTime = running ? targetTimeSec : latest.simTime;
+    clock.wallMs = nowMs;
+    clock.latestSimTime = latest.simTime;
+    return clock.simTime;
+  }
+
+  const elapsedWallSec = Math.max(0, (nowMs - clock.wallMs) / 1000);
+  const nominalNextSec = clock.simTime + elapsedWallSec * playbackSpeed;
+  const monotonicTargetSec = targetTimeSec < clock.simTime ? clock.simTime : targetTimeSec;
+  const nextSec = Math.min(latest.simTime, Math.max(oldest.simTime, Math.min(nominalNextSec, monotonicTargetSec)));
+  clock.simTime = nextSec;
+  clock.wallMs = nowMs;
+  clock.latestSimTime = latest.simTime;
+  return nextSec;
+}
+
+function interpolateVehiclesForFrame(
+  snapshots: LiteMapSnapshot[],
+  playbackSpeed: number,
+  running: boolean,
+  nowMs: number,
+  clock: VisualClock
 ): VehicleState[] {
-  if (!curr) return [];
-  const list = Array.from(curr.vehicles.values());
-  if (!prev || !running) return list;
-  const snapshotDtSec = curr.simTime - prev.simTime;
+  const latest = snapshots.at(-1);
+  if (!latest) return [];
+  const list = Array.from(latest.vehicles.values());
+  if (!running || snapshots.length < 2) return list;
+
+  const renderTime = visualRenderSimTime(snapshots, playbackSpeed, running, nowMs, clock);
+  let afterIndex = snapshots.findIndex((snapshot) => snapshot.simTime >= renderTime - 1e-9);
+  if (afterIndex < 0) afterIndex = snapshots.length - 1;
+  const before = snapshots[Math.max(0, afterIndex - 1)] ?? latest;
+  const after = snapshots[afterIndex] ?? latest;
+  const snapshotDtSec = after.simTime - before.simTime;
   if (snapshotDtSec <= 0) return list;
-  const wallElapsedSec = (performance.now() - curr.wallMs) / 1000;
-  const projectionSec = Math.max(0, Math.min(0.6, wallElapsedSec * playbackSpeed));
-  if (projectionSec < 1e-4) return list;
-  return list.map((vehicle) => {
-    const previous = prev.vehicles.get(vehicle.id);
+
+  const alpha = Math.min(1, Math.max(0, (renderTime - before.simTime) / snapshotDtSec));
+  return Array.from(after.vehicles.values()).map((vehicle) => {
+    const previous = before.vehicles.get(vehicle.id);
     if (!previous) return vehicle;
-    const dx = (vehicle.x - previous.x) / snapshotDtSec;
-    const dz = (vehicle.z - previous.z) / snapshotDtSec;
-    const stepLenSq = dx * dx + dz * dz;
-    if (stepLenSq < 1e-6) return vehicle;
-    return { ...vehicle, x: vehicle.x + dx * projectionSec, z: vehicle.z + dz * projectionSec };
+    return {
+      ...vehicle,
+      x: previous.x + (vehicle.x - previous.x) * alpha,
+      z: previous.z + (vehicle.z - previous.z) * alpha
+    };
   });
 }
 
@@ -1393,10 +1529,8 @@ function CanvasLiteMap({
   onSelectVehicle: (vehicleId: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const snapshotsRef = useRef<{ prev: LiteMapSnapshot | null; curr: LiteMapSnapshot | null }>({
-    prev: null,
-    curr: null
-  });
+  const snapshotsRef = useRef<LiteMapSnapshot[]>([]);
+  const visualClockRef = useRef<VisualClock>({ latestSimTime: null, simTime: null, wallMs: null });
   const renderInputRef = useRef<{
     state: ShuttleSimState | null;
     layers: SceneLayers;
@@ -1436,13 +1570,7 @@ function CanvasLiteMap({
         wallMs: performance.now(),
         vehicles: new Map(state.vehicles.map((vehicle) => [vehicle.id, vehicle]))
       };
-      const current = snapshotsRef.current.curr;
-      if (!current || current.simTime !== snap.simTime) {
-        snapshotsRef.current.prev = current;
-        snapshotsRef.current.curr = snap;
-      } else {
-        snapshotsRef.current.curr = snap;
-      }
+      snapshotsRef.current = appendLiteMapSnapshot(snapshotsRef.current, snap);
     }
   }, [layers, playbackSpeed, selectedVehicleId, state]);
 
@@ -1620,12 +1748,14 @@ function CanvasLiteMap({
         }
       }
 
+      const nowMs = performance.now();
       const running = state?.status === 'running';
       const renderVehicles = interpolateVehiclesForFrame(
-        snapshotsRef.current.prev,
-        snapshotsRef.current.curr,
+        snapshotsRef.current,
         playbackSpeed,
-        running
+        running,
+        nowMs,
+        visualClockRef.current
       );
 
       if (layers.routes) {
@@ -2422,6 +2552,7 @@ function TopBar({
   controllerMode,
   collisionAvoidanceEnabled,
   playbackSpeed,
+  fastRun,
   setupDirty,
   isPending,
   kpis,
@@ -2438,6 +2569,7 @@ function TopBar({
   controllerMode: string;
   collisionAvoidanceEnabled: boolean;
   playbackSpeed: number;
+  fastRun: FastRunProgress | null;
   setupDirty: boolean;
   isPending: boolean;
   kpis: KpiSnapshot | null;
@@ -2451,7 +2583,10 @@ function TopBar({
   const paused = status === 'paused';
   const idle = status === 'idle' || status === undefined;
   const progressPct = durationSec > 0 ? Math.min(100, Math.max(0, (liveClockSec / durationSec) * 100)) : 0;
-  const statusTone: 'ok' | 'warn' | 'idle' | 'danger' = running ? 'ok' : paused ? 'warn' : idle ? 'idle' : 'danger';
+  const fastRunPct = fastRun && fastRun.targetSec > 0
+    ? Math.min(100, Math.max(0, (fastRun.latestSec / fastRun.targetSec) * 100))
+    : 0;
+  const statusTone: 'ok' | 'warn' | 'idle' | 'danger' = fastRun?.active || running ? 'ok' : paused ? 'warn' : idle ? 'idle' : 'danger';
   const totalPph = kpis?.totalPph ?? 0;
   const inboundPph = kpis?.inboundPph ?? 0;
   const outboundPph = kpis?.outboundPph ?? 0;
@@ -2509,7 +2644,7 @@ function TopBar({
         </div>
         <div className={`clock-status status-${statusTone}`}>
           <span className="status-dot" aria-hidden="true" />
-          <span>{running ? 'Running' : paused ? 'Paused' : idle ? 'Idle' : status}</span>
+          <span>{fastRun?.active ? `Fast ${formatNumber(fastRunPct, 0)}%` : running ? 'Running' : paused ? 'Paused' : idle ? 'Idle' : status}</span>
           <span className="status-divider">·</span>
           <span>{controllerMode}</span>
           {isPending && <><span className="status-divider">·</span><span>rendering</span></>}
@@ -2556,20 +2691,30 @@ function TimelineScrubber({
   liveClockSec,
   durationSec,
   status,
+  fastRun,
+  commandStatus,
   runToTargetSec,
   setupDirty,
   onScrubCommit,
   onSetTargetText,
-  onJumpClick
+  onJumpClick,
+  onRunSixHoursClick,
+  onRunDesClick,
+  onCancelFastRun
 }: {
   liveClockSec: number;
   durationSec: number;
   status: ShuttleSimState['status'] | undefined;
+  fastRun: FastRunProgress | null;
+  commandStatus: CommandStatus;
   runToTargetSec: string;
   setupDirty: boolean;
   onScrubCommit: (targetSec: number) => void;
   onSetTargetText: (text: string) => void;
   onJumpClick: () => void;
+  onRunSixHoursClick: () => void;
+  onRunDesClick: (durationSec: number) => void;
+  onCancelFastRun: () => void;
 }) {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -2577,6 +2722,12 @@ function TimelineScrubber({
   const safeDur = durationSec > 0 ? durationSec : 1;
   const progressPct = Math.min(100, Math.max(0, (liveClockSec / safeDur) * 100));
   const hoverSec = hoverPct === null ? null : Math.round((hoverPct / 100) * safeDur);
+  const fastRunPct = fastRun && fastRun.targetSec > 0
+    ? Math.min(100, Math.max(0, (fastRun.latestSec / fastRun.targetSec) * 100))
+    : 0;
+  const statusLabel = fastRun
+    ? `${fastRun.active ? 'fast' : 'fast paused'} ${formatClock(fastRun.latestSec)} / ${formatClock(fastRun.targetSec)} · ${formatNumber(fastRunPct, 0)}%`
+    : commandStatus.label;
 
   const pctFromEvent = (event: { clientX: number }) => {
     const track = trackRef.current;
@@ -2651,9 +2802,26 @@ function TimelineScrubber({
             placeholder="sec"
           />
         </label>
-        <button type="button" onClick={onJumpClick} disabled={setupDirty}>Go</button>
+        <button type="button" onClick={onJumpClick} disabled={setupDirty || Boolean(fastRun?.active)}>Go</button>
+        <button
+          type="button"
+          onClick={fastRun?.active ? onCancelFastRun : onRunSixHoursClick}
+          disabled={setupDirty}
+          className={fastRun?.active ? 'active-fast-run' : ''}
+        >
+          {fastRun?.active ? 'Pause Fast Run' : 'Run 6h Fast'}
+        </button>
+        <button type="button" onClick={() => onRunDesClick(SIX_HOURS_SEC)} disabled={setupDirty || Boolean(fastRun?.active)}>
+          Capacity 6h
+        </button>
+        <button type="button" onClick={() => onRunDesClick(7 * 24 * 3600)} disabled={setupDirty || Boolean(fastRun?.active)}>
+          Capacity 7d
+        </button>
         <span className={`timeline-status ${status ?? ''}`}>
           {status ?? '--'}
+        </span>
+        <span className={`timeline-command-status tone-${fastRun?.active ? 'ok' : commandStatus.tone}`}>
+          {statusLabel}
         </span>
       </div>
     </div>
@@ -2671,6 +2839,8 @@ export function App() {
   const [validating, setValidating] = useState(false);
   const [commandStatus, setCommandStatus] = useState<CommandStatus>({ label: 'ready', tone: 'idle' });
   const [playbackSpeed, setPlaybackSpeedState] = useState(1);
+  const [fastRun, setFastRun] = useState<FastRunProgress | null>(null);
+  const [desResult, setDesResult] = useState<HeadlessDesResult | null>(null);
   const [runToTargetSec, setRunToTargetSec] = useState('2400');
   const [paramDraftValues, setParamDraftValues] = useState<Map<string, number>>(() => new Map());
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
@@ -2690,6 +2860,8 @@ export function App() {
   const [isPending, startTransition] = useTransition();
   const reconnectAttemptRef = useRef(0);
   const playbackSpeedChangedRef = useRef(false);
+  const fastRunControlRef = useRef<{ token: number; cancelled: boolean; controller: AbortController | null } | null>(null);
+  const fastRunTokenRef = useRef(0);
   const paramUpdateTimersRef = useRef<Map<string, number>>(new Map());
   const pendingLiveStreamRef = useRef<LiveStreamSnapshot | null>(null);
   const liveStreamFrameRef = useRef<number | null>(null);
@@ -2842,6 +3014,11 @@ export function App() {
 
   useEffect(() => {
     return () => {
+      const fastRunControl = fastRunControlRef.current;
+      if (fastRunControl) {
+        fastRunControl.cancelled = true;
+        fastRunControl.controller?.abort();
+      }
       for (const timer of paramUpdateTimersRef.current.values()) {
         window.clearTimeout(timer);
       }
@@ -3042,7 +3219,55 @@ export function App() {
     }
   }
 
-  async function runToTime(explicitTargetSec?: number): Promise<void> {
+  function applyRunToTimeResponse(response: RunToTimeResponse): void {
+    setState(response.state);
+    commitLiveStreamFromState(response.state);
+    setEvents(response.state.recentEvents);
+  }
+
+  async function requestRunToTime(targetSimTimeSec: number, signal?: AbortSignal): Promise<RunToTimeResponse> {
+    return requestJson<RunToTimeResponse>('/api/shuttle/runToTime', {
+      method: 'POST',
+      body: JSON.stringify({ targetSimTimeSec }),
+      signal
+    });
+  }
+
+  async function runHeadlessDes(durationSec: number): Promise<void> {
+    const startedAt = performance.now();
+    const sampleIntervalSec = durationSec >= 24 * 3600 ? 24 * 3600 : Math.max(60, Math.round(durationSec / 24));
+      setCommandStatus({ label: `running capacity DES to ${formatClock(durationSec)}...`, tone: 'idle' });
+    try {
+      const response = await requestJson<HeadlessDesResponse>('/api/shuttle/runHeadlessDes', {
+        method: 'POST',
+        body: JSON.stringify({
+          durationSec,
+          sampleIntervalSec
+        })
+      });
+      setDesResult(response.result);
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      setCommandStatus({
+        label: `capacity ${formatClock(durationSec)}: ${formatNumber(response.result.totalPph, 1)} PPH in ${elapsedMs} ms`,
+        tone: response.result.anomalyMarkers.length === 0 ? 'ok' : 'warn'
+      });
+      setWorkspaceTab('statistics');
+    } catch (error) {
+      setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' });
+    }
+  }
+
+  function cancelFastRun(): void {
+    const control = fastRunControlRef.current;
+    if (control) {
+      control.cancelled = true;
+      control.controller?.abort();
+    }
+    setFastRun((current) => current ? { ...current, active: false, elapsedMs: Math.round(performance.now() - current.startedAtMs) } : current);
+    setCommandStatus({ label: 'fast run pause requested', tone: 'warn' });
+  }
+
+  async function runToTime(explicitTargetSec?: number, options: { progressive?: boolean } = {}): Promise<void> {
     const targetSimTimeSec = explicitTargetSec !== undefined ? explicitTargetSec : Number(runToTargetSec);
     if (!Number.isFinite(targetSimTimeSec) || targetSimTimeSec < 0) {
       setCommandStatus({ label: 'enter a non-negative second', tone: 'error' });
@@ -3050,19 +3275,87 @@ export function App() {
     }
 
     const startedAt = performance.now();
+    const currentSec = liveClockSec;
+    const shouldRunProgressively = options.progressive === true && targetSimTimeSec > currentSec + FAST_RUN_CHUNK_SEC;
+    if (shouldRunProgressively) {
+      const token = fastRunTokenRef.current + 1;
+      fastRunTokenRef.current = token;
+      const control = { token, cancelled: false, controller: null as AbortController | null };
+      fastRunControlRef.current = control;
+      setFastRun({
+        active: true,
+        targetSec: targetSimTimeSec,
+        latestSec: currentSec,
+        startedAtMs: startedAt,
+        elapsedMs: 0,
+        chunksCompleted: 0
+      });
+      setCommandStatus({ label: `fast run ${formatClock(currentSec)} / ${formatClock(targetSimTimeSec)}`, tone: 'idle' });
+      let latestSec = currentSec;
+      let chunksCompleted = 0;
+      try {
+        while (!control.cancelled && latestSec < targetSimTimeSec - 1e-9) {
+          const chunkTargetSec = Math.min(targetSimTimeSec, Math.max(latestSec + FAST_RUN_CHUNK_SEC, latestSec + 1));
+          const controller = new AbortController();
+          control.controller = controller;
+          const response = await requestRunToTime(chunkTargetSec, controller.signal);
+          if (control.cancelled || fastRunControlRef.current?.token !== token) {
+            break;
+          }
+          applyRunToTimeResponse(response);
+          latestSec = response.state.simTimeSec;
+          chunksCompleted += 1;
+          const elapsedMs = Math.round(performance.now() - startedAt);
+          setFastRun({
+            active: true,
+            targetSec: targetSimTimeSec,
+            latestSec,
+            startedAtMs: startedAt,
+            elapsedMs,
+            chunksCompleted
+          });
+          const pct = targetSimTimeSec > 0 ? (latestSec / targetSimTimeSec) * 100 : 100;
+          setCommandStatus({
+            label: `fast run ${formatClock(latestSec)} / ${formatClock(targetSimTimeSec)} · ${formatNumber(pct, 0)}%`,
+            tone: 'idle'
+          });
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+        }
+        const elapsedMs = Math.round(performance.now() - startedAt);
+        if (control.cancelled) {
+          setFastRun((current) => current ? { ...current, active: false, latestSec, elapsedMs, chunksCompleted } : null);
+          await postCommand('/api/shuttle/pause');
+          setCommandStatus({ label: `fast run paused at ${formatClock(latestSec)}`, tone: 'warn' });
+          return;
+        }
+        setFastRun(null);
+        setCommandStatus({ label: `fast run reached ${formatClock(latestSec)} in ${elapsedMs} ms`, tone: 'ok' });
+      } catch (error) {
+        const elapsedMs = Math.round(performance.now() - startedAt);
+        if (control.cancelled || (error instanceof Error && error.name === 'AbortError')) {
+          setFastRun((current) => current ? { ...current, active: false, latestSec, elapsedMs, chunksCompleted } : null);
+          await postCommand('/api/shuttle/pause');
+          setCommandStatus({ label: `fast run paused at ${formatClock(latestSec)}`, tone: 'warn' });
+          return;
+        }
+        setFastRun((current) => current ? { ...current, active: false, elapsedMs, chunksCompleted } : null);
+        setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' });
+      } finally {
+        if (fastRunControlRef.current?.token === token) {
+          fastRunControlRef.current = null;
+        }
+      }
+      return;
+    }
+
     setCommandStatus({ label: `fast-forwarding to ${formatNumber(targetSimTimeSec, 1)}s...`, tone: 'idle' });
     try {
-      const response = await requestJson<RunToTimeResponse>('/api/shuttle/runToTime', {
-        method: 'POST',
-        body: JSON.stringify({ targetSimTimeSec })
-      });
-      setState(response.state);
-      commitLiveStreamFromState(response.state);
-      setEvents(response.state.recentEvents);
+      const response = await requestRunToTime(targetSimTimeSec);
+      applyRunToTimeResponse(response);
       const elapsedMs = Math.round(performance.now() - startedAt);
       const prefix = response.resetFirst ? 'reset + jumped' : 'jumped';
       setCommandStatus({
-        label: `${prefix} to ${formatNumber(response.state.simTimeSec, 1)}s in ${elapsedMs} ms`,
+        label: `${prefix} to ${formatClock(response.state.simTimeSec)} in ${elapsedMs} ms`,
         tone: 'ok'
       });
     } catch (error) {
@@ -3105,10 +3398,17 @@ export function App() {
   const shuttleSetupDirty = shuttleDraftCount !== appliedShuttleCount;
   const initialOutboundSetupDirty = initialOutboundDraftColumns !== appliedInitialOutboundFullColumns;
   const setupDirty = regionSetupDirty || shuttleSetupDirty || initialOutboundSetupDirty;
+  const displayDurationSec = Math.max(state?.durationSec ?? 0, fastRun?.targetSec ?? 0);
 
   const trafficHoldsCount = state?.traffic?.waitingVehicles?.length ?? 0;
   const handlePlay = () => { void postCommand('/api/shuttle/resume'); };
-  const handlePause = () => { void postCommand('/api/shuttle/pause'); };
+  const handlePause = () => {
+    if (fastRun?.active) {
+      cancelFastRun();
+      return;
+    }
+    void postCommand('/api/shuttle/pause');
+  };
   const handleReset = () => { void postCommand('/api/shuttle/reset', { seed: state?.seed }); };
   const handleScrubCommit = (targetSec: number) => {
     setRunToTargetSec(String(Math.round(targetSec)));
@@ -3120,11 +3420,12 @@ export function App() {
       <TopBar
         scenarioName={scenario?.name ?? 'Phase 0 Scenario'}
         liveClockSec={liveClockSec}
-        durationSec={state?.durationSec ?? 0}
+        durationSec={displayDurationSec}
         status={state?.status}
         controllerMode={controllerMode}
         collisionAvoidanceEnabled={collisionAvoidanceEnabled}
         playbackSpeed={playbackSpeed}
+        fastRun={fastRun}
         setupDirty={setupDirty}
         isPending={isPending}
         kpis={kpis}
@@ -3267,6 +3568,7 @@ export function App() {
             {workspaceTab === 'statistics' && (
               <section className="tab-panel statistics-panel" aria-label="Simulation statistics">
                 <KpiStrip scenario={scenario} kpis={kpis} />
+                <DesSummaryPanel result={desResult} />
                 <PphTrendChart history={pphHistory} />
                 <LiftPphPanel state={sceneState} kpis={kpis} history={pphHistory} />
                 <CapacityTheoryPanel kpis={kpis} />
@@ -3295,13 +3597,21 @@ export function App() {
 
           <TimelineScrubber
             liveClockSec={liveClockSec}
-            durationSec={state?.durationSec ?? 0}
+            durationSec={displayDurationSec}
             status={state?.status}
+            fastRun={fastRun}
+            commandStatus={commandStatus}
             runToTargetSec={runToTargetSec}
             setupDirty={setupDirty}
             onScrubCommit={handleScrubCommit}
             onSetTargetText={setRunToTargetSec}
             onJumpClick={() => void runToTime()}
+            onRunSixHoursClick={() => {
+              setRunToTargetSec(String(SIX_HOURS_SEC));
+              void runToTime(SIX_HOURS_SEC, { progressive: true });
+            }}
+            onRunDesClick={(durationSec) => void runHeadlessDes(durationSec)}
+            onCancelFastRun={cancelFastRun}
           />
         </section>
       </main>
