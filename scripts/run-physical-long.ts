@@ -17,6 +17,12 @@ type PhysicalSample = {
   inboundPph: number;
   outboundPph: number;
   totalPph: number;
+  windowInboundPph: number;
+  windowOutboundPph: number;
+  windowTotalPph: number;
+  pphWindowSec: number;
+  demandOutboundPph: number;
+  demandTotalPph: number;
   activeTasks: number;
   queuedTasks: number;
   waitingVehicles: number;
@@ -42,7 +48,6 @@ type VehicleTrace = {
   sinceSec: number;
   lastMovingSec: number;
   idleSinceSec: number | null;
-  blockedSinceSec: number | null;
 };
 
 const durationSec = durationArg();
@@ -95,6 +100,7 @@ let checkpointSequence = 0;
 let lastDeadlocks = 0;
 let lastLivelocks = 0;
 let lastPhysicalViolations = 0;
+let zeroThroughputWithWorkSinceSec: number | null = null;
 
 sim.start();
 recordCheckpoint('initial');
@@ -160,11 +166,19 @@ const result = {
   pph: {
     inbound: finalState.kpis.inboundPph,
     outbound: finalState.kpis.outboundPph,
-    total: finalState.kpis.totalPph
+    total: finalState.kpis.totalPph,
+    windowInbound: finalState.kpis.windowInboundPph,
+    windowOutbound: finalState.kpis.windowOutboundPph,
+    windowTotal: finalState.kpis.windowTotalPph,
+    windowSec: finalState.kpis.pphWindowSec,
+    demandOutbound: finalState.kpis.demandOutboundPph,
+    demandTotal: finalState.kpis.demandTotalPph
   },
   completed: {
     inbound: finalState.kpis.completedInbound,
-    outbound: finalState.kpis.completedOutbound
+    outbound: finalState.kpis.completedOutbound,
+    seededOutbound: finalState.kpis.completedSeededOutbound,
+    demandOutbound: finalState.kpis.completedDemandOutbound
   },
   finalTasks: {
     active: finalState.kpis.activeTasks,
@@ -217,6 +231,8 @@ console.log(JSON.stringify({
   wallClockMs: result.wallClockMs,
   finalSimTimeSec: result.finalSimTimeSec,
   totalPph: result.pph.total,
+  windowTotalPph: result.pph.windowTotal,
+  demandTotalPph: result.pph.demandTotal,
   deadlocks: result.traffic.deadlocks,
   livelocks: result.traffic.livelocks,
   physicalViolations: result.traffic.physicalViolations,
@@ -243,6 +259,12 @@ function createSample(state: ShuttleSimState): PhysicalSample {
     inboundPph: round(state.kpis.inboundPph, 3),
     outboundPph: round(state.kpis.outboundPph, 3),
     totalPph: round(state.kpis.totalPph, 3),
+    windowInboundPph: round(state.kpis.windowInboundPph, 3),
+    windowOutboundPph: round(state.kpis.windowOutboundPph, 3),
+    windowTotalPph: round(state.kpis.windowTotalPph, 3),
+    pphWindowSec: round(state.kpis.pphWindowSec, 3),
+    demandOutboundPph: round(state.kpis.demandOutboundPph, 3),
+    demandTotalPph: round(state.kpis.demandTotalPph, 3),
     activeTasks: state.kpis.activeTasks,
     queuedTasks: state.kpis.queuedTasks,
     waitingVehicles: state.traffic.waitingVehicles.length,
@@ -276,6 +298,21 @@ function auditState(state: ShuttleSimState): void {
   if (state.status === 'faulted') {
     addAnomaly(state.simTimeSec, 'critical', 'sim-faulted', state.error ?? 'unknown fault');
   }
+  const hasOpenWork = state.kpis.activeTasks + state.kpis.queuedTasks > 0 ||
+    state.vehicles.some((vehicle) => vehicle.taskId !== null || vehicle.state === 'waiting-blocked');
+  if (hasOpenWork && state.kpis.windowTotalPph <= 1e-9 && state.simTimeSec >= state.kpis.pphWindowSec) {
+    zeroThroughputWithWorkSinceSec ??= state.simTimeSec;
+    if (state.simTimeSec - zeroThroughputWithWorkSinceSec >= 1800) {
+      addAnomaly(
+        state.simTimeSec,
+        'critical',
+        'throughput-zero-over-1800s-with-work',
+        `windowTotalPph=0 for ${round(state.simTimeSec - zeroThroughputWithWorkSinceSec, 1)}s while active=${state.kpis.activeTasks} queued=${state.kpis.queuedTasks}`
+      );
+    }
+  } else {
+    zeroThroughputWithWorkSinceSec = null;
+  }
 
   for (const vehicle of state.vehicles) {
     auditVehicle(state, vehicle);
@@ -296,8 +333,7 @@ function auditVehicle(state: ShuttleSimState, vehicle: VehicleState): void {
     signature,
     sinceSec: state.simTimeSec,
     lastMovingSec: state.simTimeSec,
-    idleSinceSec: null,
-    blockedSinceSec: null
+    idleSinceSec: null
   };
 
   if (trace.signature !== signature) {
@@ -310,21 +346,18 @@ function auditVehicle(state: ShuttleSimState, vehicle: VehicleState): void {
   trace.idleSinceSec = vehicle.state === 'idle'
     ? trace.idleSinceSec ?? state.simTimeSec
     : null;
-  trace.blockedSinceSec = vehicle.state === 'waiting-blocked'
-    ? trace.blockedSinceSec ?? state.simTimeSec
-    : null;
 
   if (
-    trace.blockedSinceSec !== null &&
-    state.simTimeSec - trace.blockedSinceSec >= 300
+    vehicle.state === 'waiting-blocked' &&
+    vehicle.waitingSinceSec !== null &&
+    state.simTimeSec - vehicle.waitingSinceSec >= 300
   ) {
     addAnomaly(
       state.simTimeSec,
       'critical',
       `vehicle-blocked-over-300s:${vehicle.id}`,
-      `${vehicle.id} blocked ${round(state.simTimeSec - trace.blockedSinceSec, 1)}s at ${vehicle.currentNodeId} -> ${vehicle.targetNodeId ?? '?'} reason=${vehicle.waitReason ?? '?'} blocker=${vehicle.blockingVehicleId ?? '?'}`
+      `${vehicle.id} blocked ${round(state.simTimeSec - vehicle.waitingSinceSec, 1)}s at ${vehicle.currentNodeId} -> ${vehicle.targetNodeId ?? '?'} reason=${vehicle.waitReason ?? '?'} blocker=${vehicle.blockingVehicleId ?? '?'}`
     );
-    trace.blockedSinceSec = state.simTimeSec;
   }
 
   if (
@@ -398,6 +431,7 @@ function compactCheckpointState(state: ShuttleSimState) {
       z: vehicle.z,
       speedMps: vehicle.speedMps,
       waitReason: vehicle.waitReason,
+      waitingSinceSec: vehicle.waitingSinceSec,
       blockingVehicleId: vehicle.blockingVehicleId,
       routeNodeIds: vehicle.routeNodeIds,
       plannedGoalNodeId: vehicle.plannedGoalNodeId
