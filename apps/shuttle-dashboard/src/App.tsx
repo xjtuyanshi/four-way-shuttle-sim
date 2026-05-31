@@ -424,6 +424,14 @@ const CONTROLLED_PARAMS = [
     unit: 's'
   },
   {
+    label: 'Turn time',
+    path: '/physicsParams/switchDirectionSec',
+    min: 0,
+    max: 2,
+    step: 0.05,
+    unit: 's'
+  },
+  {
     label: 'Lift approach',
     path: '/trafficPolicy/liftApproachCapacity',
     min: 1,
@@ -562,6 +570,19 @@ function formatVehicleState(state: VehicleState['state']): string {
   return labels[state] ?? state;
 }
 
+function formatVehicleOperationalLabel(vehicle: VehicleState): string {
+  if (!vehicle.taskId && vehicle.localRouteReason === 'outbound-lift-clearance') {
+    return 'clearing lift';
+  }
+  if (!vehicle.taskId && vehicle.localRouteReason === 'post-dropoff-column-exit') {
+    return 'leaving storage';
+  }
+  if (!vehicle.taskId && vehicle.plannedGoalNodeId && vehicle.plannedGoalNodeId !== vehicle.currentNodeId) {
+    return 'clearance move';
+  }
+  return formatVehicleState(vehicle.state);
+}
+
 function getPointerValue(source: unknown, pointer: string): unknown {
   const parts = pointer.split('/').slice(1);
   let cursor = source;
@@ -625,13 +646,26 @@ function mergeEvents(previous: EventLogEntry[], next: EventLogEntry[]): EventLog
 }
 
 function createPphHistorySample(simTimeSec: number, kpis: KpiSnapshot): PphHistorySample {
+  const outboundPph = displayOutboundPph(kpis);
   return {
     simTimeSec,
-    inboundPph: kpis.inboundPph,
-    outboundPph: kpis.outboundPph,
-    totalPph: kpis.totalPph,
+    inboundPph: displayInboundPph(kpis),
+    outboundPph,
+    totalPph: displayTotalPph(kpis),
     liftPph: Object.fromEntries(Object.entries(kpis.liftPph ?? {}).map(([nodeId, value]) => [nodeId, value.pph]))
   };
+}
+
+function displayInboundPph(kpis: KpiSnapshot): number {
+  return kpis.pphWindowSec > 0 ? kpis.windowInboundPph : kpis.inboundPph;
+}
+
+function displayOutboundPph(kpis: KpiSnapshot): number {
+  return kpis.pphWindowSec > 0 ? kpis.windowOutboundPph : kpis.outboundPph;
+}
+
+function displayTotalPph(kpis: KpiSnapshot): number {
+  return kpis.pphWindowSec > 0 ? kpis.windowTotalPph : kpis.totalPph;
 }
 
 function appendPphHistorySample(previous: PphHistorySample[], sample: PphHistorySample): PphHistorySample[] {
@@ -684,15 +718,17 @@ function physicalRecordingFramePair(
   return { before, after, alpha: Math.min(1, Math.max(0, (cursorSec - before.simTimeSec) / span)) };
 }
 
-function vehicleHasSameMotionLeg(left: VehicleState, right: VehicleState): boolean {
-  return (
-    left.id === right.id &&
-    left.currentEdgeId === right.currentEdgeId &&
-    left.currentNodeId === right.currentNodeId &&
-    left.targetNodeId === right.targetNodeId &&
-    left.taskId === right.taskId &&
-    left.loaded === right.loaded
-  );
+const MAX_VISUAL_INTERPOLATION_STEP_M = 3;
+
+function vehicleCanInterpolateVisual(left: VehicleState, right: VehicleState): boolean {
+  if (left.id !== right.id) {
+    return false;
+  }
+  const distanceM = Math.hypot(right.x - left.x, right.z - left.z);
+  if (!Number.isFinite(distanceM) || distanceM > MAX_VISUAL_INTERPOLATION_STEP_M) {
+    return false;
+  }
+  return true;
 }
 
 function physicalRecordingStateAt(
@@ -709,7 +745,7 @@ function physicalRecordingStateAt(
   const beforeVehicleById = new Map(before.vehicles.map((vehicle) => [vehicle.id, vehicle]));
   const vehicles = after.vehicles.map((vehicle) => {
     const previous = beforeVehicleById.get(vehicle.id);
-    if (!previous || alpha <= 0 || !vehicleHasSameMotionLeg(previous, vehicle)) {
+    if (!previous || alpha <= 0 || !vehicleCanInterpolateVisual(previous, vehicle)) {
       return vehicle;
     }
     return {
@@ -812,6 +848,167 @@ function isAxisAlignedSegment(from: { x: number; z: number }, to: { x: number; z
   return Math.abs(from.x - to.x) <= tolerance || Math.abs(from.z - to.z) <= tolerance;
 }
 
+function edgeTraversalKey(fromNodeId: string, toNodeId: string): string {
+  return `${fromNodeId}>${toNodeId}`;
+}
+
+function createEdgeTraversalKeys(edges: ShuttleScenario['layout']['edges']): Set<string> {
+  const keys = new Set<string>();
+  for (const edge of edges) {
+    keys.add(edgeTraversalKey(edge.from, edge.to));
+    if (edge.directionMode === 'twoWay') {
+      keys.add(edgeTraversalKey(edge.to, edge.from));
+    }
+  }
+  return keys;
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function snapPointToAxisAlignedLeg(
+  point: { x: number; z: number },
+  from: { x: number; z: number },
+  to: { x: number; z: number }
+): { x: number; z: number } {
+  const minX = Math.min(from.x, to.x);
+  const maxX = Math.max(from.x, to.x);
+  const minZ = Math.min(from.z, to.z);
+  const maxZ = Math.max(from.z, to.z);
+  if (Math.abs(from.x - to.x) <= Math.abs(from.z - to.z)) {
+    return { x: from.x, z: clampNumber(point.z, minZ, maxZ) };
+  }
+  return { x: clampNumber(point.x, minX, maxX), z: from.z };
+}
+
+function routeRenderStartPoint(
+  vehicle: VehicleState,
+  nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>
+): { x: number; z: number } {
+  const currentNode = nodeMap.get(vehicle.currentNodeId);
+  const targetNode = vehicle.targetNodeId ? nodeMap.get(vehicle.targetNodeId) : null;
+  if (vehicle.currentEdgeId && currentNode && targetNode) {
+    return snapPointToAxisAlignedLeg(vehicle, currentNode, targetNode);
+  }
+  if (!vehicle.currentEdgeId && currentNode) {
+    return { x: currentNode.x, z: currentNode.z };
+  }
+  return { x: vehicle.x, z: vehicle.z };
+}
+
+function isLiftRouteDisplaySnapNode(nodeId: string): boolean {
+  return /^lift-\d{2}-(?:inbound|outbound)-(?:buffer-access|queue-access|queue-\d{2}-(?:access|entry-access|service-exit))$/.test(nodeId);
+}
+
+function isTopLiftDisplayRailNode(nodeId: string): boolean {
+  return /^column-top-[ab]-c\d+$/.test(nodeId) || /^(?:module-\d+|module-boundary-\d+)-spine-top-[ab]$/.test(nodeId);
+}
+
+function liftRouteDisplaySnapLevel(nodeId: string): 'top-a' | 'top-b' | null {
+  if (/^lift-\d{2}-inbound-/.test(nodeId)) {
+    return 'top-b';
+  }
+  if (/^lift-\d{2}-outbound-/.test(nodeId)) {
+    return 'top-a';
+  }
+  return null;
+}
+
+function isTopLiftDisplayRailLevelNode(nodeId: string, level: 'top-a' | 'top-b'): boolean {
+  return new RegExp(`^column-${level}-c\\d+$`).test(nodeId) ||
+    new RegExp(`^(?:module-\\d+|module-boundary-\\d+)-spine-${level}$`).test(nodeId);
+}
+
+function routeDisplayPointForNode(
+  nodeId: string,
+  fallback: { x: number; z: number },
+  nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>
+): { x: number; z: number } {
+  if (!isLiftRouteDisplaySnapNode(nodeId)) {
+    return fallback;
+  }
+  let nearest: ShuttleScenario['layout']['nodes'][number] | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  const preferredLevel = liftRouteDisplaySnapLevel(nodeId);
+  for (const node of nodeMap.values()) {
+    if (preferredLevel ? !isTopLiftDisplayRailLevelNode(node.id, preferredLevel) : !isTopLiftDisplayRailNode(node.id)) {
+      continue;
+    }
+    const distance = Math.hypot(node.x - fallback.x, node.z - fallback.z);
+    if (distance < nearestDistance) {
+      nearest = node;
+      nearestDistance = distance;
+    }
+  }
+  return nearest ? { x: nearest.x, z: nearest.z } : fallback;
+}
+
+function routeDisplayPointForVehicle(
+  vehicle: VehicleState,
+  nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>
+): { x: number; z: number } {
+  const rawPoint = { x: vehicle.x, z: vehicle.z };
+  const currentNode = nodeMap.get(vehicle.currentNodeId);
+  const targetNode = vehicle.targetNodeId ? nodeMap.get(vehicle.targetNodeId) : null;
+  if (
+    vehicle.currentEdgeId &&
+    currentNode &&
+    targetNode &&
+    (isLiftRouteDisplaySnapNode(currentNode.id) || isLiftRouteDisplaySnapNode(targetNode.id))
+  ) {
+    const dx = targetNode.x - currentNode.x;
+    const dz = targetNode.z - currentNode.z;
+    const lengthSq = dx * dx + dz * dz;
+    const progress = lengthSq <= 1e-9
+      ? 0
+      : clampNumber(((rawPoint.x - currentNode.x) * dx + (rawPoint.z - currentNode.z) * dz) / lengthSq, 0, 1);
+    const displayFrom = routeDisplayPointForNode(currentNode.id, { x: currentNode.x, z: currentNode.z }, nodeMap);
+    const displayTo = routeDisplayPointForNode(targetNode.id, { x: targetNode.x, z: targetNode.z }, nodeMap);
+    return {
+      x: displayFrom.x + (displayTo.x - displayFrom.x) * progress,
+      z: displayFrom.z + (displayTo.z - displayFrom.z) * progress
+    };
+  }
+  return routeDisplayPointForNode(vehicle.currentNodeId, rawPoint, nodeMap);
+}
+
+function routeRenderSegments(
+  vehicle: VehicleState,
+  nodeIds: string[],
+  nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>,
+  edgeTraversalKeys: Set<string>
+): Array<{ from: { x: number; z: number }; to: { x: number; z: number }; fromNodeId: string; toNodeId: string }> {
+  if (nodeIds.length < 2) {
+    return [];
+  }
+  const segments: Array<{ from: { x: number; z: number }; to: { x: number; z: number }; fromNodeId: string; toNodeId: string }> = [];
+  let fromNodeId = nodeIds[0]!;
+  let graphFromPoint = routeRenderStartPoint(vehicle, nodeMap);
+  let displayFromPoint = routeDisplayPointForVehicle(vehicle, nodeMap);
+  for (const toNodeId of nodeIds.slice(1)) {
+    const toNode = nodeMap.get(toNodeId);
+    if (!toNode) {
+      fromNodeId = toNodeId;
+      continue;
+    }
+    const graphToPoint = { x: toNode.x, z: toNode.z };
+    const displayToPoint = routeDisplayPointForNode(toNodeId, graphToPoint, nodeMap);
+    if (
+      edgeTraversalKeys.has(edgeTraversalKey(fromNodeId, toNodeId)) &&
+      isAxisAlignedSegment(graphFromPoint, graphToPoint) &&
+      isAxisAlignedSegment(displayFromPoint, displayToPoint) &&
+      Math.hypot(displayToPoint.x - displayFromPoint.x, displayToPoint.z - displayFromPoint.z) > 1e-6
+    ) {
+      segments.push({ from: displayFromPoint, to: displayToPoint, fromNodeId, toNodeId });
+    }
+    fromNodeId = toNodeId;
+    graphFromPoint = graphToPoint;
+    displayFromPoint = displayToPoint;
+  }
+  return segments;
+}
+
 function isModuleBoundaryEdge(edge: ShuttleScenario['layout']['edges'][number]): boolean {
   return edge.from.startsWith('module-boundary-') || edge.to.startsWith('module-boundary-');
 }
@@ -912,10 +1109,13 @@ function KpiStrip({ scenario, kpis }: { scenario: ShuttleScenario | null; kpis: 
   const requestedTotalPph = scenario
     ? scenario.taskGeneration.inboundRatePerHour + scenario.taskGeneration.outboundRatePerHour
     : null;
+  const seedNote = kpis && kpis.completedSeededOutbound > 0
+    ? `${formatNumber(kpis.pphWindowSec, 0)}s rolling; ${kpis.completedSeededOutbound} seeded out raw`
+    : null;
   const items = [
-    ['Achieved total PPH', kpis ? formatNumber(kpis.totalPph, 1) : '--'],
-    ['Achieved inbound PPH', kpis ? formatNumber(kpis.inboundPph, 1) : '--'],
-    ['Achieved outbound PPH', kpis ? formatNumber(kpis.outboundPph, 1) : '--'],
+    ['Achieved total PPH', kpis ? formatNumber(displayTotalPph(kpis), 1) : '--'],
+    ['Achieved inbound PPH', kpis ? formatNumber(displayInboundPph(kpis), 1) : '--'],
+    ['Achieved outbound PPH', kpis ? formatNumber(displayOutboundPph(kpis), 1) : '--'],
     ['Requested total PPH', requestedTotalPph !== null ? formatNumber(requestedTotalPph, 0) : '--'],
     ['Active / queued', kpis ? `${kpis.activeTasks} / ${kpis.queuedTasks}` : '--'],
     ['Task assign wait', kpis ? `${formatNumber(kpis.averageTaskWaitSec, 1)}s` : '--'],
@@ -929,6 +1129,7 @@ function KpiStrip({ scenario, kpis }: { scenario: ShuttleScenario | null; kpis: 
         <div className="metric" key={label}>
           <span>{label}</span>
           <strong>{value}</strong>
+          {label === 'Achieved outbound PPH' && seedNote ? <small>{seedNote}</small> : null}
           {label === 'Requested total PPH' ? <small>inbound + outbound task pressure</small> : null}
         </div>
       ))}
@@ -1337,7 +1538,7 @@ function VehicleTable({
                 onClick={() => onSelectVehicle(vehicle.id)}
               >
                 <td>{vehicle.id}</td>
-                <td><span className={`state-pill ${vehicle.state}`}>{formatVehicleState(vehicle.state)}</span></td>
+                <td><span className={`state-pill ${vehicle.state}`}>{formatVehicleOperationalLabel(vehicle)}</span></td>
                 <td>{vehicle.currentNodeId}</td>
                 <td>{vehicle.targetNodeId ?? '--'}</td>
                 <td>{vehicle.plannedGoalNodeId ?? '--'}</td>
@@ -1463,6 +1664,7 @@ function AuthoritativeMap({
       nodes,
       nodeMap,
       edges: scenario?.layout.edges ?? [],
+      edgeTraversalKeys: createEdgeTraversalKeys(scenario?.layout.edges ?? []),
       aisleRects: staticScene ? createTrackAreaRects(staticScene, ['sideAisle', 'crossAisle', 'parkingConnector']) : [],
       connectorRects: staticScene ? createTrackAreaRects(staticScene, ['inboundConnector', 'outboundConnector']) : [],
       storageCellRects: staticScene ? createStorageCellRects(staticScene) : [],
@@ -1477,22 +1679,14 @@ function AuthoritativeMap({
   const activeTasks = state?.tasks.filter((task) => task.vehicleId && task.state !== 'completed' && task.state !== 'failed') ?? [];
   const vehicleById = new Map((state?.vehicles ?? []).map((vehicle) => [vehicle.id, vehicle]));
   const routeSegments = (vehicle: VehicleState, nodeIds: string[], kind: 'planned' | 'local') => {
-    if (nodeIds.length < 2) {
-      return [];
-    }
-    const points = [
-      { x: vehicle.x, z: vehicle.z },
-      ...nodeIds.slice(1).map((nodeId) => geometry.nodeMap.get(nodeId)).filter((node): node is ShuttleScenario['layout']['nodes'][number] => Boolean(node))
-    ];
-    return points.slice(1)
-      .map((to, index) => ({
+    return routeRenderSegments(vehicle, nodeIds, geometry.nodeMap, geometry.edgeTraversalKeys)
+      .map((segment, index) => ({
         key: `${vehicle.id}-${kind}-${index}`,
         vehicle,
         kind,
-        from: points[index]!,
-        to
-      }))
-      .filter((segment) => isAxisAlignedSegment(segment.from, segment.to));
+        from: segment.from,
+        to: segment.to
+      }));
   };
 
   return (
@@ -1571,7 +1765,7 @@ function AuthoritativeMap({
             ...geometry.project(vehicle),
             transform: 'translate(-50%, -50%)'
           }}
-          title={`${vehicle.id} ${vehicle.loaded ? 'loaded' : vehicle.taskId ? 'to pickup' : 'available'} ${vehicle.currentNodeId}`}
+          title={`${vehicle.id} ${vehicle.loaded ? 'loaded' : vehicle.taskId ? 'to pickup' : formatVehicleOperationalLabel(vehicle)} ${vehicle.currentNodeId}`}
         >
           {vehicleDisplayNumber(vehicle.id)}
         </button>
@@ -1676,10 +1870,12 @@ function interpolateVehiclesForFrame(
   return Array.from(after.vehicles.values()).map((vehicle) => {
     const previous = before.vehicles.get(vehicle.id);
     if (!previous) return vehicle;
+    if (!vehicleCanInterpolateVisual(previous, vehicle)) return vehicle;
     return {
       ...vehicle,
       x: previous.x + (vehicle.x - previous.x) * alpha,
-      z: previous.z + (vehicle.z - previous.z) * alpha
+      z: previous.z + (vehicle.z - previous.z) * alpha,
+      yaw: lerpAngleRad(previous.yaw, vehicle.yaw, alpha)
     };
   });
 }
@@ -1720,6 +1916,7 @@ function CanvasLiteMap({
     return {
       nodes,
       edges: scenario?.layout.edges ?? [],
+      edgeTraversalKeys: createEdgeTraversalKeys(scenario?.layout.edges ?? []),
       nodeMap: new Map(nodes.map((node) => [node.id, node])),
       aisleRects: staticScene ? createTrackAreaRects(staticScene, ['sideAisle', 'crossAisle', 'parkingConnector']) : [],
       connectorRects: staticScene ? createTrackAreaRects(staticScene, ['inboundConnector', 'outboundConnector']) : [],
@@ -1824,24 +2021,16 @@ function CanvasLiteMap({
 
       const drawRoute = (vehicle: VehicleState, nodeIds: string[], color: string, lineWidth: number, alpha: number) => {
         if (nodeIds.length < 2) return;
-        const points = [
-          { x: vehicle.x, z: vehicle.z },
-          ...nodeIds.slice(1).map((nodeId) => geometry.nodeMap.get(nodeId)).filter((node): node is ShuttleScenario['layout']['nodes'][number] => Boolean(node))
-        ];
-        if (points.length < 2) return;
+        const segments = routeRenderSegments(vehicle, nodeIds, geometry.nodeMap, geometry.edgeTraversalKeys);
+        if (segments.length === 0) return;
         context.globalAlpha = alpha;
         context.strokeStyle = color;
         context.lineWidth = lineWidth;
         context.lineCap = 'round';
         context.lineJoin = 'round';
-        for (let index = 1; index < points.length; index += 1) {
-          const from = points[index - 1]!;
-          const to = points[index]!;
-          if (!isAxisAlignedSegment(from, to)) {
-            continue;
-          }
-          const start = project(from);
-          const end = project(to);
+        for (const segment of segments) {
+          const start = project(segment.from);
+          const end = project(segment.to);
           context.beginPath();
           context.moveTo(start.x, start.y);
           context.lineTo(end.x, end.y);
@@ -1935,8 +2124,8 @@ function CanvasLiteMap({
           const plannedNodes = remainingRouteNodeIds(vehicle, vehicle.plannedRouteNodeIds);
           const taskRole = state ? resolveVehicleTaskFlowRole(state, vehicle) : null;
           const color = taskRole ? FLOW_VISUAL_COLORS[taskRole].hex : '#7c5ed8';
-          drawRoute(vehicle, plannedNodes, color, selected ? 4.8 : 3, selected ? 0.98 : 0.76);
-          drawRoute(vehicle, vehicle.localRouteNodeIds, '#d29b22', selected ? 5.5 : 4.2, selected ? 1 : 0.86);
+          drawRoute(vehicle, plannedNodes, color, selected ? 3.8 : 3, selected ? 0.96 : 0.76);
+          drawRoute(vehicle, vehicle.localRouteNodeIds, '#d29b22', selected ? 4.8 : 4.2, selected ? 0.96 : 0.86);
         }
       }
 
@@ -1965,6 +2154,12 @@ function CanvasLiteMap({
       for (const vehicle of renderVehicles) {
         const point = project(vehicle);
         const selected = selectedVehicleId === vehicle.id;
+        const pxPerMeter = Math.min(
+          (width - padding * 2) / geometry.width,
+          (height - padding * 2) / geometry.depth
+        );
+        const vehicleWidthPx = clampNumber((scenario?.vehicles.widthM ?? 1.03) * pxPerMeter, 15, 20);
+        const vehicleHeightPx = vehicleWidthPx;
         context.fillStyle = vehicle.state === 'waiting-blocked'
           ? '#b7892c'
           : vehicle.loaded
@@ -1975,17 +2170,30 @@ function CanvasLiteMap({
                 ? '#66717b'
                 : '#7c5ed8';
         context.strokeStyle = selected ? '#111820' : vehicle.loaded ? '#dff6e8' : '#e7f2ff';
-        context.lineWidth = selected ? 3 : 1.6;
+        context.lineWidth = selected ? 2 : 1.5;
         context.shadowColor = 'rgba(20, 28, 34, 0.18)';
-        context.shadowBlur = selected ? 10 : 5;
+        context.shadowBlur = selected ? 5 : 4;
         context.shadowOffsetY = 1.5;
+        context.save();
+        context.translate(point.x, point.y);
+        context.rotate(-vehicle.yaw);
         context.beginPath();
-        context.roundRect(point.x - 12, point.y - 9, 24, 18, 3);
+        context.roundRect(-vehicleWidthPx / 2, -vehicleHeightPx / 2, vehicleWidthPx, vehicleHeightPx, 3);
         context.fill();
         context.shadowColor = 'transparent';
         context.stroke();
+        context.fillStyle = vehicle.loaded ? '#dff6e8' : '#e7f2ff';
+        context.globalAlpha = 0.94;
+        context.beginPath();
+        context.moveTo(vehicleWidthPx / 2 - 3, 0);
+        context.lineTo(vehicleWidthPx / 2 - 9, -4);
+        context.lineTo(vehicleWidthPx / 2 - 9, 4);
+        context.closePath();
+        context.fill();
+        context.restore();
+        context.shadowColor = 'transparent';
         context.fillStyle = '#f8fbff';
-        context.font = '800 11px system-ui, sans-serif';
+        context.font = '800 10px system-ui, sans-serif';
         context.textAlign = 'center';
         context.textBaseline = 'middle';
         context.fillText(vehicleDisplayNumber(vehicle.id), point.x, point.y + 0.5);
@@ -2136,7 +2344,7 @@ function StreamingPane({
           <span className="route-legend" aria-label="Route legend">
             <span><i className="planned-empty" />To pickup</span>
             <span><i className="planned-loaded" />Loaded</span>
-            <span><i className="planned-taskless" />No task</span>
+            <span><i className="planned-taskless" />Clearance</span>
             <span><i className="local" />Local</span>
             <span><i className="goal" />Goal</span>
             <span><i className="pickup" />Pickup</span>
@@ -2758,9 +2966,9 @@ function TopBar({
     ? Math.min(100, Math.max(0, (fastRun.latestSec / fastRun.targetSec) * 100))
     : 0;
   const statusTone: 'ok' | 'warn' | 'idle' | 'danger' = fastRun?.active || running ? 'ok' : paused ? 'warn' : idle ? 'idle' : 'danger';
-  const totalPph = kpis?.totalPph ?? 0;
-  const inboundPph = kpis?.inboundPph ?? 0;
-  const outboundPph = kpis?.outboundPph ?? 0;
+  const totalPph = kpis ? displayTotalPph(kpis) : 0;
+  const inboundPph = kpis ? displayInboundPph(kpis) : 0;
+  const outboundPph = kpis ? displayOutboundPph(kpis) : 0;
   const queued = kpis?.queuedTasks ?? 0;
   const utilization = kpis ? average(Object.values(kpis.vehicleUtilization)) * 100 : 0;
   const breakdowns = kpis ? Object.values(kpis.vehicleUtilizationBreakdown) : [];

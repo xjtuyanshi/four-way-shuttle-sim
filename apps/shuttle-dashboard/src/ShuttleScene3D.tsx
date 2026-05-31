@@ -25,6 +25,7 @@ type SceneRuntime = {
   vehicleGroup: THREE.Group;
   nodeById: Map<string, ShuttleNode>;
   edgeById: Map<string, ShuttleEdge>;
+  edgeTraversalKeys: Set<string>;
   vehicleObjects: Map<string, THREE.Group>;
   loadOverlayKey: string;
   reservationOverlayKey: string;
@@ -1147,6 +1148,25 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   topPanel.receiveShadow = true;
   group.add(topPanel);
 
+  const headingShape = new THREE.Shape();
+  headingShape.moveTo(scenario.vehicles.lengthM * 0.28, 0);
+  headingShape.lineTo(-scenario.vehicles.lengthM * 0.16, scenario.vehicles.widthM * 0.16);
+  headingShape.lineTo(-scenario.vehicles.lengthM * 0.1, 0);
+  headingShape.lineTo(-scenario.vehicles.lengthM * 0.16, -scenario.vehicles.widthM * 0.16);
+  headingShape.closePath();
+  const headingArrow = new THREE.Mesh(
+    new THREE.ShapeGeometry(headingShape),
+    new THREE.MeshBasicMaterial({
+      color: 0xf4f9fa,
+      transparent: true,
+      opacity: 0.94,
+      side: THREE.DoubleSide
+    })
+  );
+  headingArrow.rotation.x = -Math.PI / 2;
+  headingArrow.position.y = VEHICLE_BASE_Y + scenario.vehicles.heightM * 1.02;
+  group.add(headingArrow);
+
   for (const z of [-scenario.vehicles.widthM * 0.43, scenario.vehicles.widthM * 0.43]) {
     const statusRail = new THREE.Mesh(
       new THREE.BoxGeometry(scenario.vehicles.lengthM * 0.74, 0.052, 0.052),
@@ -1262,7 +1282,7 @@ function applyVehicleVisualStatus(
   data.ringMaterial.color.setHex(ringColor);
 }
 
-function applyVehicleState(group: THREE.Group, state: ShuttleSimState, vehicle: VehicleState, layers: ShuttleSceneLayers, selected: boolean): void {
+function applyVehicleState(runtime: SceneRuntime, group: THREE.Group, state: ShuttleSimState, vehicle: VehicleState, layers: ShuttleSceneLayers, selected: boolean): void {
   const data = vehicleUserData(group);
   const labelText = vehicleDisplayNumber(vehicle.id);
   if (data.labelText !== labelText) {
@@ -1396,6 +1416,8 @@ function routeOverlayKey(
       vehicle.currentNodeId,
       vehicle.currentEdgeId ?? '',
       vehicle.targetNodeId ?? '',
+      Math.round(vehicle.x * 100),
+      Math.round(vehicle.z * 100),
       vehicle.plannedGoalNodeId ?? '',
       vehicle.plannedRouteNodeIds.join('>'),
       vehicle.localRouteReason ?? '',
@@ -1410,23 +1432,159 @@ function routeOverlayKey(
   return `${routeKey}::selected:${selectedVehicleId ?? ''}::tasks:${pickupAssignmentKey}`;
 }
 
-function routePointsForNodeIds(
+function edgeTraversalKey(fromNodeId: string, toNodeId: string): string {
+  return `${fromNodeId}>${toNodeId}`;
+}
+
+function createEdgeTraversalKeys(edges: ShuttleEdge[]): Set<string> {
+  const keys = new Set<string>();
+  for (const edge of edges) {
+    keys.add(edgeTraversalKey(edge.from, edge.to));
+    if (edge.directionMode === 'twoWay') {
+      keys.add(edgeTraversalKey(edge.to, edge.from));
+    }
+  }
+  return keys;
+}
+
+function isLiftRouteDisplaySnapNode(nodeId: string): boolean {
+  return /^lift-\d{2}-(?:inbound|outbound)-(?:buffer-access|queue-access|queue-\d{2}-(?:access|entry-access|service-exit))$/.test(nodeId);
+}
+
+function isTopLiftDisplayRailNode(nodeId: string): boolean {
+  return /^column-top-[ab]-c\d+$/.test(nodeId) || /^(?:module-\d+|module-boundary-\d+)-spine-top-[ab]$/.test(nodeId);
+}
+
+function liftRouteDisplaySnapLevel(nodeId: string): 'top-a' | 'top-b' | null {
+  if (/^lift-\d{2}-inbound-/.test(nodeId)) {
+    return 'top-b';
+  }
+  if (/^lift-\d{2}-outbound-/.test(nodeId)) {
+    return 'top-a';
+  }
+  return null;
+}
+
+function isTopLiftDisplayRailLevelNode(nodeId: string, level: 'top-a' | 'top-b'): boolean {
+  return new RegExp(`^column-${level}-c\\d+$`).test(nodeId) ||
+    new RegExp(`^(?:module-\\d+|module-boundary-\\d+)-spine-${level}$`).test(nodeId);
+}
+
+function routeDisplayPointForNode(
+  runtime: SceneRuntime,
+  nodeId: string,
+  fallback: { x: number; z: number }
+): { x: number; z: number } {
+  if (!isLiftRouteDisplaySnapNode(nodeId)) {
+    return fallback;
+  }
+  let nearest: ShuttleNode | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  const preferredLevel = liftRouteDisplaySnapLevel(nodeId);
+  for (const node of runtime.nodeById.values()) {
+    if (preferredLevel ? !isTopLiftDisplayRailLevelNode(node.id, preferredLevel) : !isTopLiftDisplayRailNode(node.id)) {
+      continue;
+    }
+    const distance = Math.hypot(node.x - fallback.x, node.z - fallback.z);
+    if (distance < nearestDistance) {
+      nearest = node;
+      nearestDistance = distance;
+    }
+  }
+  return nearest ? { x: nearest.x, z: nearest.z } : fallback;
+}
+
+function routeDisplayPointForVehicle(runtime: SceneRuntime, vehicle: VehicleState): { x: number; z: number } {
+  const rawPoint = { x: vehicle.x, z: vehicle.z };
+  const currentNode = runtime.nodeById.get(vehicle.currentNodeId);
+  const targetNode = vehicle.targetNodeId ? runtime.nodeById.get(vehicle.targetNodeId) : null;
+  if (
+    vehicle.currentEdgeId &&
+    currentNode &&
+    targetNode &&
+    (isLiftRouteDisplaySnapNode(currentNode.id) || isLiftRouteDisplaySnapNode(targetNode.id))
+  ) {
+    const dx = targetNode.x - currentNode.x;
+    const dz = targetNode.z - currentNode.z;
+    const lengthSq = dx * dx + dz * dz;
+    const progress = lengthSq <= 1e-9
+      ? 0
+      : clamp(((rawPoint.x - currentNode.x) * dx + (rawPoint.z - currentNode.z) * dz) / lengthSq, 0, 1);
+    const displayFrom = routeDisplayPointForNode(runtime, currentNode.id, { x: currentNode.x, z: currentNode.z });
+    const displayTo = routeDisplayPointForNode(runtime, targetNode.id, { x: targetNode.x, z: targetNode.z });
+    return {
+      x: displayFrom.x + (displayTo.x - displayFrom.x) * progress,
+      z: displayFrom.z + (displayTo.z - displayFrom.z) * progress
+    };
+  }
+  return routeDisplayPointForNode(runtime, vehicle.currentNodeId, rawPoint);
+}
+
+function routeSegmentsForNodeIds(
   runtime: SceneRuntime,
   vehicle: VehicleState,
   nodeIds: string[]
-): Array<{ x: number; z: number }> {
+): Array<{ from: { x: number; z: number }; to: { x: number; z: number } }> {
   if (nodeIds.length < 2) {
     return [];
   }
-  return [
-    { x: vehicle.x, z: vehicle.z },
-    ...nodeIds.slice(1).map((nodeId) => runtime.nodeById.get(nodeId)).filter((node): node is ShuttleNode => Boolean(node))
-  ];
+  const segments: Array<{ from: { x: number; z: number }; to: { x: number; z: number } }> = [];
+  let fromNodeId = nodeIds[0]!;
+  let graphFromPoint = routeRenderStartPoint(runtime, vehicle);
+  let displayFromPoint = routeDisplayPointForVehicle(runtime, vehicle);
+  for (const toNodeId of nodeIds.slice(1)) {
+    const toNode = runtime.nodeById.get(toNodeId);
+    if (!toNode) {
+      fromNodeId = toNodeId;
+      continue;
+    }
+    const graphToPoint = { x: toNode.x, z: toNode.z };
+    const displayToPoint = routeDisplayPointForNode(runtime, toNodeId, graphToPoint);
+    if (
+      runtime.edgeTraversalKeys.has(edgeTraversalKey(fromNodeId, toNodeId)) &&
+      isAxisAlignedRouteSegment(graphFromPoint, graphToPoint) &&
+      isAxisAlignedRouteSegment(displayFromPoint, displayToPoint) &&
+      Math.hypot(displayToPoint.x - displayFromPoint.x, displayToPoint.z - displayFromPoint.z) > 1e-6
+    ) {
+      segments.push({ from: displayFromPoint, to: displayToPoint });
+    }
+    fromNodeId = toNodeId;
+    graphFromPoint = graphToPoint;
+    displayFromPoint = displayToPoint;
+  }
+  return segments;
 }
 
 function isAxisAlignedRouteSegment(from: { x: number; z: number }, to: { x: number; z: number }): boolean {
   const tolerance = 1e-6;
   return Math.abs(from.x - to.x) <= tolerance || Math.abs(from.z - to.z) <= tolerance;
+}
+
+function snapPointToAxisAlignedLeg(
+  point: { x: number; z: number },
+  from: { x: number; z: number },
+  to: { x: number; z: number }
+): { x: number; z: number } {
+  const minX = Math.min(from.x, to.x);
+  const maxX = Math.max(from.x, to.x);
+  const minZ = Math.min(from.z, to.z);
+  const maxZ = Math.max(from.z, to.z);
+  if (Math.abs(from.x - to.x) <= Math.abs(from.z - to.z)) {
+    return { x: from.x, z: clamp(point.z, minZ, maxZ) };
+  }
+  return { x: clamp(point.x, minX, maxX), z: from.z };
+}
+
+function routeRenderStartPoint(runtime: SceneRuntime, vehicle: VehicleState): { x: number; z: number } {
+  const currentNode = runtime.nodeById.get(vehicle.currentNodeId);
+  const targetNode = vehicle.targetNodeId ? runtime.nodeById.get(vehicle.targetNodeId) : null;
+  if (vehicle.currentEdgeId && currentNode && targetNode) {
+    return snapPointToAxisAlignedLeg(vehicle, currentNode, targetNode);
+  }
+  if (!vehicle.currentEdgeId && currentNode) {
+    return { x: currentNode.x, z: currentNode.z };
+  }
+  return { x: vehicle.x, z: vehicle.z };
 }
 
 function remainingRouteNodeIds(vehicle: VehicleState, preferredNodeIds: string[]): string[] {
@@ -1453,15 +1611,11 @@ function remainingRouteNodeIds(vehicle: VehicleState, preferredNodeIds: string[]
 
 function addRoutePath(
   group: THREE.Group,
-  points: Array<{ x: number; z: number }>,
+  segments: Array<{ from: { x: number; z: number }; to: { x: number; z: number } }>,
   options: { color: number; radius: number; opacity: number; y: number; arrows: boolean; arrowScale: number }
 ): void {
-  for (let index = 1; index < points.length; index += 1) {
-    const from = points[index - 1]!;
-    const to = points[index]!;
-    if (!isAxisAlignedRouteSegment(from, to)) {
-      continue;
-    }
+  for (let index = 0; index < segments.length; index += 1) {
+    const { from, to } = segments[index]!;
     const routeMaterial = new THREE.MeshBasicMaterial({
       color: options.color,
       transparent: true,
@@ -1480,7 +1634,7 @@ function addRoutePath(
       routeSegment.renderOrder = 130;
       group.add(routeSegment);
     }
-    if (options.arrows && index % 3 === 0) {
+    if (options.arrows && (index + 1) % 3 === 0) {
       const arrow = createRouteArrow(from, to, options.color, options.y + 0.05, options.arrowScale);
       if (arrow) {
         group.add(arrow);
@@ -1511,13 +1665,14 @@ function updateDynamicScene(
     let object = runtime.vehicleObjects.get(vehicle.id);
     if (!object) {
       object = createVehicleObject(scenario);
-      object.position.set(vehicle.x, 0, vehicle.z);
+      const displayPoint = routeDisplayPointForVehicle(runtime, vehicle);
+      object.position.set(displayPoint.x, 0, displayPoint.z);
       object.rotation.y = 0;
       runtime.vehicleObjects.set(vehicle.id, object);
       runtime.vehicleGroup.add(object);
     }
     if (state) {
-      applyVehicleState(object, state, vehicle, layers, selectedVehicleId === vehicle.id);
+      applyVehicleState(runtime, object, state, vehicle, layers, selectedVehicleId === vehicle.id);
     }
   }
 
@@ -1602,9 +1757,9 @@ function updateDynamicScene(
       const selected = selectedVehicleId === vehicle.id;
       const routeColor = state ? vehicleRouteColor(state, vehicle) : 0x8d78ff;
       const plannedRouteNodes = remainingRouteNodeIds(vehicle, vehicle.plannedRouteNodeIds);
-      const plannedRoutePoints = routePointsForNodeIds(runtime, vehicle, plannedRouteNodes);
-      if (plannedRoutePoints.length >= 2) {
-        addRoutePath(runtime.routeGroup, plannedRoutePoints, {
+      const plannedRouteSegments = routeSegmentsForNodeIds(runtime, vehicle, plannedRouteNodes);
+      if (plannedRouteSegments.length > 0) {
+        addRoutePath(runtime.routeGroup, plannedRouteSegments, {
           color: routeColor,
           radius: selected ? 0.065 : 0.04,
           opacity: selected ? 0.92 : 0.72,
@@ -1614,9 +1769,9 @@ function updateDynamicScene(
         });
       }
 
-      const localRoutePoints = routePointsForNodeIds(runtime, vehicle, vehicle.localRouteNodeIds);
-      if (localRoutePoints.length >= 2) {
-        addRoutePath(runtime.routeGroup, localRoutePoints, {
+      const localRouteSegments = routeSegmentsForNodeIds(runtime, vehicle, vehicle.localRouteNodeIds);
+      if (localRouteSegments.length > 0) {
+        addRoutePath(runtime.routeGroup, localRouteSegments, {
           color: 0xe2b84b,
           radius: selected ? 0.074 : 0.044,
           opacity: selected ? 0.96 : 0.74,
@@ -1651,6 +1806,7 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
   runtime.vehicleObjects.clear();
   runtime.nodeById = new Map(visualScenario.layout.nodes.map((node) => [node.id, node]));
   runtime.edgeById = new Map(visualScenario.layout.edges.map((edge) => [edge.id, edge]));
+  runtime.edgeTraversalKeys = createEdgeTraversalKeys(visualScenario.layout.edges);
   const liftPadById = new Map(visualStaticScene.liftPads.map((pad) => [pad.id, pad]));
   const parkingPadById = new Map(visualStaticScene.parkingPads.map((pad) => [pad.id, pad]));
 
@@ -1757,8 +1913,21 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
   applyCameraView(runtime, cameraView);
 }
 
-type VehiclePoseSnapshot = { x: number; z: number; yaw: number };
+type VehiclePoseSnapshot = Pick<
+  VehicleState,
+  'x' | 'z' | 'yaw' | 'currentEdgeId' | 'currentNodeId' | 'targetNodeId' | 'taskId' | 'loaded'
+>;
 type VehicleSnapshot = { simTime: number; wallMs: number; vehicles: Map<string, VehiclePoseSnapshot> };
+
+function poseHasSameMotionLeg(left: VehiclePoseSnapshot, right: VehiclePoseSnapshot): boolean {
+  return (
+    left.currentEdgeId === right.currentEdgeId &&
+    left.currentNodeId === right.currentNodeId &&
+    left.targetNodeId === right.targetNodeId &&
+    left.taskId === right.taskId &&
+    left.loaded === right.loaded
+  );
+}
 
 function appendVehicleSnapshot(snapshots: VehicleSnapshot[], snapshot: VehicleSnapshot): VehicleSnapshot[] {
   const latest = snapshots.at(-1);
@@ -1844,7 +2013,12 @@ function sampleVehiclePosesForFrame(
       sampled.set(vehicleId, pose);
       continue;
     }
+    if (!poseHasSameMotionLeg(previous, pose)) {
+      sampled.set(vehicleId, pose);
+      continue;
+    }
     sampled.set(vehicleId, {
+      ...pose,
       x: previous.x + (pose.x - previous.x) * alpha,
       z: previous.z + (pose.z - previous.z) * alpha,
       yaw: previous.yaw + normalizeAngle(pose.yaw - previous.yaw) * alpha
@@ -1967,6 +2141,7 @@ export function ShuttleScene3D({
       vehicleGroup,
       nodeById: new Map(),
       edgeById: new Map(),
+      edgeTraversalKeys: new Set(),
       vehicleObjects: new Map(),
       loadOverlayKey: '',
       reservationOverlayKey: '',
@@ -2091,7 +2266,19 @@ export function ShuttleScene3D({
       const newSnap: VehicleSnapshot = {
         simTime: visualState.simTimeSec,
         wallMs: performance.now(),
-        vehicles: new Map(visualState.vehicles.map((vehicle) => [vehicle.id, { x: vehicle.x, z: vehicle.z, yaw: vehicle.yaw }]))
+        vehicles: new Map(visualState.vehicles.map((vehicle) => [
+          vehicle.id,
+          {
+            x: vehicle.x,
+            z: vehicle.z,
+            yaw: vehicle.yaw,
+            currentEdgeId: vehicle.currentEdgeId,
+            currentNodeId: vehicle.currentNodeId,
+            targetNodeId: vehicle.targetNodeId,
+            taskId: vehicle.taskId,
+            loaded: vehicle.loaded
+          }
+        ]))
       };
       snapshotsRef.current = appendVehicleSnapshot(snapshotsRef.current, newSnap);
     }
