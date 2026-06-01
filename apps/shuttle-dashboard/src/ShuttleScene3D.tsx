@@ -85,9 +85,9 @@ const CAD_CANVAS_HEIGHT = 1536;
 const TARGET_RENDER_FPS = 60;
 const MAX_VISUAL_SNAPSHOTS = 48;
 const VISUAL_INTERPOLATION_DELAY_WALL_SEC = 0.45;
-const CAD_STORAGE_FILL = 'rgba(103, 72, 176, 0.2)';
-const CAD_STORAGE_STROKE = 'rgba(176, 111, 255, 0.86)';
-const CAD_AISLE_FILL = 'rgba(231, 190, 44, 0.22)';
+const CAD_STORAGE_FILL = 'rgba(115, 98, 208, 0.16)';
+const CAD_STORAGE_STROKE = 'rgba(177, 138, 255, 0.66)';
+const CAD_AISLE_FILL = 'rgba(220, 178, 58, 0.14)';
 const CAD_BLOCKED_FILL = 'rgba(101, 118, 111, 0.26)';
 const CAD_BLOCKED_STROKE = 'rgba(151, 183, 167, 0.88)';
 const TEXTURE_ASSETS = {
@@ -418,10 +418,10 @@ function createCadFloorTexture(
     ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
   };
 
-  ctx.fillStyle = '#0f151c';
+  ctx.fillStyle = '#18222b';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  ctx.strokeStyle = 'rgba(75, 88, 101, 0.22)';
+  ctx.strokeStyle = 'rgba(126, 145, 160, 0.2)';
   ctx.lineWidth = 2;
   ctx.strokeRect(inset, inset, plotWidth, plotHeight);
 
@@ -430,7 +430,7 @@ function createCadFloorTexture(
   }
 
   for (const rect of createTrackAreaRects(staticScene, ['inboundConnector', 'outboundConnector'])) {
-    fillMeterRect(rect, rect.category === 'inboundConnector' ? 'rgba(79, 143, 203, 0.22)' : 'rgba(226, 184, 75, 0.24)');
+    fillMeterRect(rect, rect.category === 'inboundConnector' ? 'rgba(79, 143, 203, 0.16)' : 'rgba(226, 184, 75, 0.18)');
   }
 
   for (const storageField of getStorageFields(staticScene)) {
@@ -447,7 +447,7 @@ function createCadFloorTexture(
   }
 
   for (const rect of createStorageCellRects(staticScene)) {
-    drawMeterRect(rect, 'rgba(157, 108, 255, 0.22)', 'rgba(184, 142, 255, 0.72)');
+    drawMeterRect(rect, 'rgba(157, 108, 255, 0.16)', 'rgba(184, 142, 255, 0.54)');
   }
 
   for (const cell of staticScene.blockedCells) {
@@ -462,9 +462,9 @@ function createCadFloorTexture(
   for (const pad of [...staticScene.liftPads, ...staticScene.parkingPads]) {
     const rect = rectForMeterBox(pad.xM, pad.zM, pad.lengthXM, pad.lengthZM);
     ctx.fillStyle = pad.category === 'inboundLift'
-      ? 'rgba(79, 143, 203, 0.32)'
+      ? 'rgba(79, 143, 203, 0.24)'
       : pad.category === 'outboundLift'
-        ? 'rgba(109, 168, 214, 0.32)'
+        ? 'rgba(109, 168, 214, 0.24)'
         : 'rgba(122, 135, 148, 0.26)';
     ctx.strokeStyle = pad.category === 'parking' ? '#7a8794' : '#9fb9c8';
     ctx.lineWidth = 2;
@@ -493,7 +493,7 @@ function createPresentationMat(bounds: LayoutBounds): THREE.Mesh {
   const mat = new THREE.Mesh(
     new THREE.PlaneGeometry(bounds.width + 4, bounds.depth + 4),
     texturedMaterial(TEXTURE_ASSETS.fabric, {
-      color: 0x1a252e,
+      color: 0x202b33,
       repeat: { x: Math.max(2, bounds.width / 3.2), y: Math.max(2, bounds.depth / 3.2) },
       roughness: 0.94,
       metalness: 0.01,
@@ -756,45 +756,81 @@ function nodeColor(node: ShuttleNode): number {
 function createPalletLoadObject(widthM: number, depthM: number, crateColor = FLOW_VISUAL_COLORS.inbound.three): THREE.Group {
   const group = new THREE.Group();
 
-  const pallet = new THREE.Mesh(new THREE.BoxGeometry(widthM, 0.08, depthM), material(0x6f777d, 0.82, 0.08));
-  pallet.position.y = 0.04;
-  pallet.castShadow = true;
-  pallet.receiveShadow = true;
-  group.add(pallet);
+  const woodMaterial = material(0xb28a5a, 0.76, 0.04);
+  const stringerMaterial = material(0x7c5d3c, 0.82, 0.03);
+  for (const z of [-depthM * 0.31, 0, depthM * 0.31]) {
+    const slat = new THREE.Mesh(new THREE.BoxGeometry(widthM * 0.94, 0.045, depthM * 0.16), woodMaterial);
+    slat.position.set(0, 0.055, z);
+    slat.castShadow = true;
+    slat.receiveShadow = true;
+    group.add(slat);
+  }
+  for (const x of [-widthM * 0.28, widthM * 0.28]) {
+    const stringer = new THREE.Mesh(new THREE.BoxGeometry(widthM * 0.12, 0.06, depthM * 0.86), stringerMaterial);
+    stringer.position.set(x, 0.025, 0);
+    stringer.castShadow = true;
+    stringer.receiveShadow = true;
+    group.add(stringer);
+  }
 
-  const crateMaterial = material(crateColor, 0.68, 0.02);
+  const crateMaterial = material(crateColor, 0.66, 0.025);
+  const crateEdgeMaterial = material(0xf2f0dc, 0.58, 0.02);
+  const strapMaterial = material(0x26323b, 0.62, 0.06);
   group.userData.crateMaterial = crateMaterial;
-  const crateGeometry = new THREE.BoxGeometry(widthM * 0.42, 0.28, depthM * 0.4);
+  const crateGeometry = new THREE.BoxGeometry(widthM * 0.42, 0.26, depthM * 0.36);
   for (const [x, z] of [
-    [-widthM * 0.22, -depthM * 0.18],
-    [widthM * 0.22, -depthM * 0.18],
-    [0, depthM * 0.2]
+    [-widthM * 0.22, -depthM * 0.2],
+    [widthM * 0.22, -depthM * 0.2],
+    [-widthM * 0.22, depthM * 0.2],
+    [widthM * 0.22, depthM * 0.2]
   ] satisfies Array<[number, number]>) {
     const crate = new THREE.Mesh(crateGeometry, crateMaterial);
-    crate.position.set(x, 0.22, z);
+    crate.position.set(x, 0.245, z);
     crate.castShadow = true;
     crate.receiveShadow = true;
     group.add(crate);
+
+    const label = new THREE.Mesh(new THREE.BoxGeometry(widthM * 0.11, 0.006, depthM * 0.13), crateEdgeMaterial);
+    label.position.set(x + widthM * 0.09, 0.379, z - depthM * 0.06);
+    label.castShadow = false;
+    group.add(label);
   }
+
+  const crossStrap = new THREE.Mesh(new THREE.BoxGeometry(widthM * 0.94, 0.022, depthM * 0.045), strapMaterial);
+  crossStrap.position.y = 0.392;
+  crossStrap.castShadow = true;
+  group.add(crossStrap);
+  const lengthStrap = new THREE.Mesh(new THREE.BoxGeometry(widthM * 0.045, 0.024, depthM * 0.86), strapMaterial);
+  lengthStrap.position.y = 0.398;
+  lengthStrap.castShadow = true;
+  group.add(lengthStrap);
 
   return group;
 }
 
 function createConveyorLoadObject(widthM: number, depthM: number, crateColor = FLOW_VISUAL_COLORS.inbound.three): THREE.Group {
   const group = new THREE.Group();
-  const pallet = new THREE.Mesh(new THREE.BoxGeometry(widthM, 0.06, depthM), material(0x78838a, 0.78, 0.1));
-  pallet.position.y = 0.03;
-  pallet.castShadow = true;
-  pallet.receiveShadow = true;
-  group.add(pallet);
+  const palletMaterial = material(0xb28a5a, 0.76, 0.04);
+  for (const z of [-depthM * 0.28, 0, depthM * 0.28]) {
+    const slat = new THREE.Mesh(new THREE.BoxGeometry(widthM * 0.92, 0.042, depthM * 0.14), palletMaterial);
+    slat.position.set(0, 0.035, z);
+    slat.castShadow = true;
+    slat.receiveShadow = true;
+    group.add(slat);
+  }
 
-  const carton = new THREE.Mesh(new THREE.BoxGeometry(widthM * 0.74, 0.24, depthM * 0.7), material(crateColor, 0.64, 0.04));
-  carton.position.y = 0.18;
+  const cartonMaterial = material(crateColor, 0.64, 0.035);
+  const carton = new THREE.Mesh(new THREE.BoxGeometry(widthM * 0.76, 0.25, depthM * 0.68), cartonMaterial);
+  carton.position.y = 0.19;
   carton.castShadow = true;
   carton.receiveShadow = true;
   group.add(carton);
 
-  const strapMaterial = material(0xf4f7f8, 0.5, 0.04);
+  const label = new THREE.Mesh(new THREE.BoxGeometry(widthM * 0.18, 0.006, depthM * 0.18), material(0xf2f0dc, 0.58, 0.02));
+  label.position.set(widthM * 0.17, 0.319, -depthM * 0.14);
+  group.add(label);
+
+  const strapMaterial = material(0x26323b, 0.62, 0.06);
   const longitudinalStrap = new THREE.Mesh(new THREE.BoxGeometry(widthM * 0.8, 0.018, 0.032), strapMaterial);
   longitudinalStrap.position.y = 0.312;
   group.add(longitudinalStrap);
@@ -802,7 +838,7 @@ function createConveyorLoadObject(widthM: number, depthM: number, crateColor = F
   crossStrap.position.y = 0.318;
   group.add(crossStrap);
 
-  group.userData.crateMaterial = carton.material;
+  group.userData.crateMaterial = cartonMaterial;
   return group;
 }
 
@@ -882,6 +918,15 @@ function createBlockedCellMarker(cell: ShuttleStaticSceneBlockedCell): THREE.Gro
   return group;
 }
 
+function liftWorkcellNodeRole(nodeId: string): LoadFlowRole | null {
+  const match = /^lift-\d{2}-(inbound|outbound)(?:$|-)/.exec(nodeId);
+  return match ? match[1] as LoadFlowRole : null;
+}
+
+function isLiftServiceExitNode(nodeId: string): boolean {
+  return /^lift-\d{2}-(?:inbound|outbound)-queue-\d{2}-service-exit$/.test(nodeId);
+}
+
 function createConveyor(node: ShuttleNode, color: number, beltMaterial: THREE.Material, frameMaterial: THREE.Material): THREE.Group {
   const group = new THREE.Group();
   group.position.set(node.x, 0, node.z);
@@ -922,6 +967,52 @@ function createConveyor(node: ShuttleNode, color: number, beltMaterial: THREE.Ma
   return group;
 }
 
+function createLiftServiceDock(
+  node: ShuttleNode,
+  role: LoadFlowRole,
+  beltMaterial: THREE.Material,
+  frameMaterial: THREE.Material
+): THREE.Group {
+  const group = new THREE.Group();
+  group.position.set(node.x, 0, node.z);
+
+  const accent = FLOW_VISUAL_COLORS[role].three;
+  const base = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.05, 0.68), frameMaterial);
+  base.position.y = 0.085;
+  base.castShadow = true;
+  base.receiveShadow = true;
+  group.add(base);
+
+  const belt = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.034, 0.54), beltMaterial);
+  belt.position.y = 0.152;
+  belt.castShadow = true;
+  belt.receiveShadow = true;
+  group.add(belt);
+
+  const railMaterial = material(0xa9b8c0, 0.44, 0.26);
+  for (const x of [-0.34, 0.34]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.11, 0.64), railMaterial);
+    rail.position.set(x, 0.225, 0);
+    rail.castShadow = true;
+    group.add(rail);
+  }
+
+  const transferLip = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.04, 0.08), material(accent, 0.5, 0.18));
+  transferLip.position.set(0, 0.245, role === 'inbound' ? -0.32 : 0.32);
+  transferLip.castShadow = true;
+  group.add(transferLip);
+
+  const statusLight = new THREE.Mesh(
+    new THREE.BoxGeometry(0.18, 0.026, 0.18),
+    new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.92 })
+  );
+  statusLight.position.set(role === 'inbound' ? 0.25 : -0.25, 0.288, 0);
+  statusLight.renderOrder = 80;
+  group.add(statusLight);
+
+  return group;
+}
+
 function createLiftBlackboxPort(node: ShuttleNode, pad?: ShuttleStaticScenePad): THREE.Group {
   const group = new THREE.Group();
   group.position.set(node.x, 0, node.z);
@@ -948,6 +1039,26 @@ function createLiftBlackboxPort(node: ShuttleNode, pad?: ShuttleStaticScenePad):
   liftCar.castShadow = true;
   liftCar.receiveShadow = true;
   group.add(liftCar);
+
+  const glassMaterial = new THREE.MeshStandardMaterial({
+    color: 0xc8ecff,
+    roughness: 0.2,
+    metalness: 0.02,
+    transparent: true,
+    opacity: 0.18
+  });
+  for (const x of [-padLengthX * 0.36, padLengthX * 0.36]) {
+    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.42, padLengthZ * 0.58), glassMaterial);
+    guard.position.set(x, 0.38, 0);
+    guard.castShadow = true;
+    group.add(guard);
+  }
+
+  const serviceApron = new THREE.Mesh(new THREE.BoxGeometry(padLengthX * 0.62, 0.032, padLengthZ * 0.22), material(roleAccent, 0.5, 0.16));
+  serviceApron.position.set(isInbound ? padLengthX * 0.18 : -padLengthX * 0.18, 0.17, isInbound ? -padLengthZ * 0.32 : padLengthZ * 0.32);
+  serviceApron.castShadow = true;
+  serviceApron.receiveShadow = true;
+  group.add(serviceApron);
 
   const guideMaterial = material(0x8fa1ad, 0.42, 0.22);
   for (const z of [-padLengthZ * 0.42, padLengthZ * 0.42]) {
@@ -987,6 +1098,28 @@ function createLiftBlackboxPort(node: ShuttleNode, pad?: ShuttleStaticScenePad):
       cap.castShadow = true;
       group.add(cap);
     }
+  }
+
+  const beamMaterial = material(0xc7d4da, 0.42, 0.26);
+  for (const z of [-padLengthZ * 0.46, padLengthZ * 0.46]) {
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(padLengthX * 1.02, 0.065, 0.06), beamMaterial);
+    beam.position.set(0, 0.69, z);
+    beam.castShadow = true;
+    group.add(beam);
+  }
+  for (const x of [-padLengthX * 0.5, padLengthX * 0.5]) {
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.065, padLengthZ * 0.92), beamMaterial);
+    beam.position.set(x, 0.69, 0);
+    beam.castShadow = true;
+    group.add(beam);
+  }
+
+  const forkMaterial = material(0xf0c84d, 0.48, 0.12);
+  for (const z of [-padLengthZ * 0.18, padLengthZ * 0.18]) {
+    const fork = new THREE.Mesh(new THREE.BoxGeometry(padLengthX * 0.54, 0.035, 0.038), forkMaterial);
+    fork.position.set(isInbound ? padLengthX * 0.08 : -padLengthX * 0.08, 0.325, z);
+    fork.castShadow = true;
+    group.add(fork);
   }
 
   const portPlate = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.22, padLengthZ * 0.68), material(roleAccent, 0.54, 0.16));
@@ -1111,9 +1244,11 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
     depthWrite: false,
     side: THREE.DoubleSide
   });
+  const visualLengthM = scenario.vehicles.widthM * 0.96;
+  const visualWidthM = scenario.vehicles.widthM * 0.96;
 
   const chassis = new THREE.Mesh(
-    new THREE.BoxGeometry(scenario.vehicles.lengthM * 0.98, scenario.vehicles.heightM * 0.34, scenario.vehicles.widthM * 0.92),
+    new THREE.BoxGeometry(visualLengthM * 0.98, scenario.vehicles.heightM * 0.34, visualWidthM * 0.92),
     chassisMaterial
   );
   chassis.position.y = VEHICLE_BASE_Y + scenario.vehicles.heightM * 0.22;
@@ -1122,7 +1257,7 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   group.add(chassis);
 
   const undertray = new THREE.Mesh(
-    new THREE.BoxGeometry(scenario.vehicles.lengthM * 0.78, scenario.vehicles.heightM * 0.1, scenario.vehicles.widthM * 0.66),
+    new THREE.BoxGeometry(visualLengthM * 0.78, scenario.vehicles.heightM * 0.1, visualWidthM * 0.66),
     deckMaterial
   );
   undertray.position.y = VEHICLE_BASE_Y + scenario.vehicles.heightM * 0.44;
@@ -1131,7 +1266,7 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   group.add(undertray);
 
   const body = new THREE.Mesh(
-    new THREE.BoxGeometry(scenario.vehicles.lengthM * 0.84, scenario.vehicles.heightM * 0.56, scenario.vehicles.widthM * 0.78),
+    new THREE.BoxGeometry(visualLengthM * 0.84, scenario.vehicles.heightM * 0.56, visualWidthM * 0.78),
     bodyMaterial
   );
   body.position.y = VEHICLE_BASE_Y + scenario.vehicles.heightM * 0.62;
@@ -1140,7 +1275,7 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   group.add(body);
 
   const topPanel = new THREE.Mesh(
-    new THREE.BoxGeometry(scenario.vehicles.lengthM * 0.52, 0.035, scenario.vehicles.widthM * 0.46),
+    new THREE.BoxGeometry(visualLengthM * 0.52, 0.035, visualWidthM * 0.46),
     deckMaterial
   );
   topPanel.position.y = VEHICLE_BASE_Y + scenario.vehicles.heightM * 0.93;
@@ -1149,10 +1284,10 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   group.add(topPanel);
 
   const headingShape = new THREE.Shape();
-  headingShape.moveTo(scenario.vehicles.lengthM * 0.28, 0);
-  headingShape.lineTo(-scenario.vehicles.lengthM * 0.16, scenario.vehicles.widthM * 0.16);
-  headingShape.lineTo(-scenario.vehicles.lengthM * 0.1, 0);
-  headingShape.lineTo(-scenario.vehicles.lengthM * 0.16, -scenario.vehicles.widthM * 0.16);
+  headingShape.moveTo(visualLengthM * 0.28, 0);
+  headingShape.lineTo(-visualLengthM * 0.16, visualWidthM * 0.16);
+  headingShape.lineTo(-visualLengthM * 0.1, 0);
+  headingShape.lineTo(-visualLengthM * 0.16, -visualWidthM * 0.16);
   headingShape.closePath();
   const headingArrow = new THREE.Mesh(
     new THREE.ShapeGeometry(headingShape),
@@ -1167,9 +1302,9 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   headingArrow.position.y = VEHICLE_BASE_Y + scenario.vehicles.heightM * 1.02;
   group.add(headingArrow);
 
-  for (const z of [-scenario.vehicles.widthM * 0.43, scenario.vehicles.widthM * 0.43]) {
+  for (const z of [-visualWidthM * 0.43, visualWidthM * 0.43]) {
     const statusRail = new THREE.Mesh(
-      new THREE.BoxGeometry(scenario.vehicles.lengthM * 0.74, 0.052, 0.052),
+      new THREE.BoxGeometry(visualLengthM * 0.74, 0.052, 0.052),
       accentMaterial
     );
     statusRail.position.set(0, VEHICLE_BASE_Y + scenario.vehicles.heightM * 0.72, z);
@@ -1178,23 +1313,23 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   }
 
   const beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.045, 20), beaconMaterial);
-  beacon.position.set(-scenario.vehicles.lengthM * 0.24, VEHICLE_BASE_Y + scenario.vehicles.heightM * 1.03, 0);
+  beacon.position.set(-visualLengthM * 0.24, VEHICLE_BASE_Y + scenario.vehicles.heightM * 1.03, 0);
   beacon.castShadow = true;
   group.add(beacon);
 
   const noseMaterial = material(0xf4f9fa, 0.36, 0.16);
   const nose = new THREE.Mesh(
-    new THREE.BoxGeometry(0.18, scenario.vehicles.heightM * 0.44, scenario.vehicles.widthM * 0.46),
+    new THREE.BoxGeometry(0.16, scenario.vehicles.heightM * 0.44, visualWidthM * 0.46),
     noseMaterial
   );
-  nose.position.set(scenario.vehicles.lengthM * 0.49, VEHICLE_BASE_Y + scenario.vehicles.heightM * 0.62, 0);
+  nose.position.set(visualLengthM * 0.49, VEHICLE_BASE_Y + scenario.vehicles.heightM * 0.62, 0);
   nose.castShadow = true;
   group.add(nose);
 
   const lightMaterial = new THREE.MeshBasicMaterial({ color: 0x82c7ff, transparent: true, opacity: 0.86 });
-  for (const z of [-scenario.vehicles.widthM * 0.36, scenario.vehicles.widthM * 0.36]) {
+  for (const z of [-visualWidthM * 0.36, visualWidthM * 0.36]) {
     const light = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.035, 0.16), lightMaterial);
-    light.position.set(scenario.vehicles.lengthM * 0.52, VEHICLE_BASE_Y + scenario.vehicles.heightM * 0.73, z);
+    light.position.set(visualLengthM * 0.52, VEHICLE_BASE_Y + scenario.vehicles.heightM * 0.73, z);
     group.add(light);
   }
 
@@ -1205,9 +1340,9 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
     metalness: 0.34,
     normalScale: 0.12
   });
-  for (const z of [-scenario.vehicles.widthM * 0.24, scenario.vehicles.widthM * 0.24]) {
+  for (const z of [-visualWidthM * 0.24, visualWidthM * 0.24]) {
     const fork = new THREE.Mesh(
-      new THREE.BoxGeometry(scenario.vehicles.lengthM * 0.76, 0.035, 0.045),
+      new THREE.BoxGeometry(visualLengthM * 0.76, 0.035, 0.045),
       forkMaterial
     );
     fork.position.set(0.02, VEHICLE_BASE_Y + scenario.vehicles.heightM + 0.025, z);
@@ -1216,8 +1351,8 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   }
 
   const wheelMaterial = material(0x26323b, 0.68, 0.18);
-  for (const x of [-scenario.vehicles.lengthM * 0.34, scenario.vehicles.lengthM * 0.34]) {
-    for (const z of [-scenario.vehicles.widthM * 0.48, scenario.vehicles.widthM * 0.48]) {
+  for (const x of [-visualLengthM * 0.34, visualLengthM * 0.34]) {
+    for (const z of [-visualWidthM * 0.48, visualWidthM * 0.48]) {
       const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.105, 0.105, 0.07, 18), wheelMaterial);
       wheel.rotation.x = Math.PI / 2;
       wheel.position.set(x, VEHICLE_BASE_Y + 0.08, z);
@@ -1234,7 +1369,7 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   safetyRing.position.y = FLOOR_Y + 0.018;
   group.add(safetyRing);
 
-  const loadedMesh = createPalletLoadObject(scenario.vehicles.lengthM * 0.72, scenario.vehicles.widthM * 0.78);
+  const loadedMesh = createPalletLoadObject(visualLengthM * 0.74, visualWidthM * 0.78);
   loadedMesh.position.y = VEHICLE_BASE_Y + scenario.vehicles.heightM + 0.05;
   loadedMesh.visible = false;
   group.add(loadedMesh);
@@ -1368,7 +1503,7 @@ function vehicleRouteColor(state: ShuttleSimState, vehicle: VehicleState): numbe
 }
 
 function createLoadMesh(state: ShuttleSimState, load: LoadStateRecord, node: ShuttleNode, index: number): THREE.Group {
-  const conveyorLoad = node.type === 'inbound' || node.type === 'outbound' || node.type === 'lift-blackbox';
+  const conveyorLoad = node.type === 'inbound' || node.type === 'outbound' || node.type === 'lift-blackbox' || isLiftServiceExitNode(node.id);
   const loadRole = resolveLoadFlowRole(state, load);
   const loadMesh = conveyorLoad
     ? createConveyorLoadObject(0.68, 0.58, FLOW_VISUAL_COLORS[loadRole].three)
@@ -1889,6 +2024,11 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
       runtime.staticGroup.add(createLiftBlackboxPort(node, liftPadById.get(node.id)));
       continue;
     }
+    const serviceDockRole = isLiftServiceExitNode(node.id) ? liftWorkcellNodeRole(node.id) : null;
+    if (serviceDockRole) {
+      runtime.staticGroup.add(createLiftServiceDock(node, serviceDockRole, conveyorBeltMaterial, conveyorFrameMaterial));
+      continue;
+    }
     if (node.type === 'parking') {
       runtime.staticGroup.add(createParkingPad(node, parkingPadById.get(node.id)));
       continue;
@@ -2014,7 +2154,7 @@ function sampleVehiclePosesForFrame(
       continue;
     }
     if (!poseHasSameMotionLeg(previous, pose)) {
-      sampled.set(vehicleId, pose);
+      sampled.set(vehicleId, alpha >= 1 ? pose : previous);
       continue;
     }
     sampled.set(vehicleId, {
@@ -2079,10 +2219,10 @@ export function ShuttleScene3D({
     }
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0c141a);
-    scene.fog = new THREE.Fog(0x0c141a, 42, 112);
+    scene.background = new THREE.Color(0x101922);
+    scene.fog = new THREE.Fog(0x101922, 42, 112);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;

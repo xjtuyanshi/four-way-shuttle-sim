@@ -132,6 +132,16 @@ type PhysicalRecordingJobResponse = {
   job: PhysicalRecordingJob;
 };
 
+type LiteLiftDockRect = {
+  id: string;
+  role: 'inbound' | 'outbound';
+  label: string;
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+};
+
 type PhysicalRecordingResponse = {
   ok: boolean;
   recording: PhysicalRecording;
@@ -722,6 +732,9 @@ const MAX_VISUAL_INTERPOLATION_STEP_M = 3;
 
 function vehicleCanInterpolateVisual(left: VehicleState, right: VehicleState): boolean {
   if (left.id !== right.id) {
+    return false;
+  }
+  if (left.loaded !== right.loaded || left.taskId !== right.taskId) {
     return false;
   }
   const distanceM = Math.hypot(right.x - left.x, right.z - left.z);
@@ -1601,6 +1614,50 @@ function vehicleDisplayNumber(vehicleId: string): string {
   return Number.isFinite(ordinal) && ordinal > 0 ? String(ordinal) : vehicleId.replace(/^SH-?/i, '');
 }
 
+function liftWorkcellNodeRole(nodeId: string): 'inbound' | 'outbound' | null {
+  const match = /^lift-\d{2}-(inbound|outbound)(?:$|-)/.exec(nodeId);
+  return match ? match[1] as 'inbound' | 'outbound' : null;
+}
+
+function liftWorkcellId(nodeId: string): string | null {
+  const match = /^(lift-\d{2}-(?:inbound|outbound))(?:$|-)/.exec(nodeId);
+  return match?.[1] ?? null;
+}
+
+function isLiftServiceExitNode(nodeId: string): boolean {
+  return /^lift-\d{2}-(?:inbound|outbound)-queue-\d{2}-service-exit$/.test(nodeId);
+}
+
+function createLiteLiftDockRects(nodes: ShuttleScenario['layout']['nodes']): LiteLiftDockRect[] {
+  const groups = new Map<string, { role: 'inbound' | 'outbound'; nodes: ShuttleScenario['layout']['nodes'] }>();
+  for (const node of nodes) {
+    const role = liftWorkcellNodeRole(node.id);
+    const id = liftWorkcellId(node.id);
+    if (!role || !id) continue;
+    if (node.type !== 'lift-blackbox' && node.type !== 'inbound' && node.type !== 'outbound' && !node.id.startsWith(`${id}-`)) {
+      continue;
+    }
+    const group = groups.get(id) ?? { role, nodes: [] };
+    group.nodes.push(node);
+    groups.set(id, group);
+  }
+  return [...groups.entries()]
+    .map(([id, group]) => {
+      const xs = group.nodes.map((node) => node.x);
+      const zs = group.nodes.map((node) => node.z);
+      return {
+        id,
+        role: group.role,
+        label: group.role === 'inbound' ? 'IN' : 'OUT',
+        minX: Math.min(...xs) - 0.58,
+        maxX: Math.max(...xs) + 0.58,
+        minZ: Math.min(...zs) - 0.46,
+        maxZ: Math.max(...zs) + 0.46
+      };
+    })
+    .sort((left, right) => left.minX - right.minX || left.minZ - right.minZ);
+}
+
 function AuthoritativeMap({
   scenario,
   state,
@@ -1751,7 +1808,7 @@ function AuthoritativeMap({
         }
         return (
           <span className={`map-task-badge pickup flow-${task.kind}`} key={task.id} style={geometry.project(pickupNode)}>
-            {vehicleDisplayNumber(vehicle.id)}
+            P{vehicleDisplayNumber(vehicle.id)}
           </span>
         );
       })}
@@ -1870,7 +1927,7 @@ function interpolateVehiclesForFrame(
   return Array.from(after.vehicles.values()).map((vehicle) => {
     const previous = before.vehicles.get(vehicle.id);
     if (!previous) return vehicle;
-    if (!vehicleCanInterpolateVisual(previous, vehicle)) return vehicle;
+    if (!vehicleCanInterpolateVisual(previous, vehicle)) return alpha >= 1 ? vehicle : previous;
     return {
       ...vehicle,
       x: previous.x + (vehicle.x - previous.x) * alpha,
@@ -1886,6 +1943,7 @@ function CanvasLiteMap({
   layers,
   selectedVehicleId,
   playbackSpeed,
+  debugMode = false,
   onSelectVehicle
 }: {
   scenario: ShuttleScenario | null;
@@ -1893,6 +1951,7 @@ function CanvasLiteMap({
   layers: SceneLayers;
   selectedVehicleId: string | null;
   playbackSpeed: number;
+  debugMode?: boolean;
   onSelectVehicle: (vehicleId: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -1903,7 +1962,8 @@ function CanvasLiteMap({
     layers: SceneLayers;
     selectedVehicleId: string | null;
     playbackSpeed: number;
-  }>({ state: null, layers, selectedVehicleId, playbackSpeed });
+    debugMode: boolean;
+  }>({ state: null, layers, selectedVehicleId, playbackSpeed, debugMode });
   const geometry = useMemo(() => {
     const nodes = scenario?.layout.nodes ?? [];
     const staticScene = scenario ? summarizeScenarioStaticSceneContract(scenario) : null;
@@ -1918,6 +1978,7 @@ function CanvasLiteMap({
       edges: scenario?.layout.edges ?? [],
       edgeTraversalKeys: createEdgeTraversalKeys(scenario?.layout.edges ?? []),
       nodeMap: new Map(nodes.map((node) => [node.id, node])),
+      liftDockRects: createLiteLiftDockRects(nodes),
       aisleRects: staticScene ? createTrackAreaRects(staticScene, ['sideAisle', 'crossAisle', 'parkingConnector']) : [],
       connectorRects: staticScene ? createTrackAreaRects(staticScene, ['inboundConnector', 'outboundConnector']) : [],
       storageCellRects: staticScene ? createStorageCellRects(staticScene) : [],
@@ -1931,7 +1992,7 @@ function CanvasLiteMap({
   }, [scenario]);
 
   useEffect(() => {
-    renderInputRef.current = { state, layers, selectedVehicleId, playbackSpeed };
+    renderInputRef.current = { state, layers, selectedVehicleId, playbackSpeed, debugMode };
     if (state) {
       const snap: LiteMapSnapshot = {
         simTime: state.simTimeSec,
@@ -1940,14 +2001,14 @@ function CanvasLiteMap({
       };
       snapshotsRef.current = appendLiteMapSnapshot(snapshotsRef.current, snap);
     }
-  }, [layers, playbackSpeed, selectedVehicleId, state]);
+  }, [debugMode, layers, playbackSpeed, selectedVehicleId, state]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const draw = () => {
-      const { state, layers, selectedVehicleId, playbackSpeed } = renderInputRef.current;
+      const { state, layers, selectedVehicleId, playbackSpeed, debugMode } = renderInputRef.current;
       const rect = canvas.getBoundingClientRect();
       const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
       const width = Math.max(1, rect.width);
@@ -1959,8 +2020,23 @@ function CanvasLiteMap({
       if (!context) return;
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
       context.clearRect(0, 0, width, height);
-      context.fillStyle = '#f5f7f8';
+      context.fillStyle = '#101922';
       context.fillRect(0, 0, width, height);
+      context.strokeStyle = 'rgba(178, 205, 223, 0.055)';
+      context.lineWidth = 1;
+      const guideStepPx = 32;
+      for (let x = padding; x <= width - padding; x += guideStepPx) {
+        context.beginPath();
+        context.moveTo(x, padding);
+        context.lineTo(x, height - padding);
+        context.stroke();
+      }
+      for (let y = padding; y <= height - padding; y += guideStepPx) {
+        context.beginPath();
+        context.moveTo(padding, y);
+        context.lineTo(width - padding, y);
+        context.stroke();
+      }
 
       const project = (point: { x: number; z: number }) => ({
         x: padding + ((point.x - geometry.minX) / geometry.width) * (width - padding * 2),
@@ -2005,6 +2081,75 @@ function CanvasLiteMap({
         context.globalAlpha = 1;
       };
 
+      const drawLiftDockRect = (dock: LiteLiftDockRect) => {
+        const rect = projectRect(dock);
+        const accent = dock.role === 'inbound' ? FLOW_VISUAL_COLORS.inbound.hex : FLOW_VISUAL_COLORS.outbound.hex;
+        context.save();
+        context.shadowColor = flowRgba(dock.role, 0.18);
+        context.shadowBlur = 12;
+        context.fillStyle = 'rgba(16, 23, 30, 0.9)';
+        context.strokeStyle = flowRgba(dock.role, 0.5);
+        context.lineWidth = 1;
+        context.beginPath();
+        context.roundRect(rect.left, rect.top, rect.width, rect.height, 5);
+        context.fill();
+        context.stroke();
+        context.shadowBlur = 0;
+        const stripeWidth = Math.max(3, Math.min(6, rect.width * 0.12));
+        context.fillStyle = accent;
+        context.globalAlpha = 0.78;
+        context.beginPath();
+        context.roundRect(
+          dock.role === 'inbound' ? rect.left + rect.width - stripeWidth - 2 : rect.left + 2,
+          rect.top + 3,
+          stripeWidth,
+          Math.max(4, rect.height - 6),
+          2
+        );
+        context.fill();
+        context.globalAlpha = 1;
+        context.fillStyle = flowRgba(dock.role, 0.18);
+        context.beginPath();
+        context.roundRect(rect.left + 5, rect.top + 5, Math.max(4, rect.width - 10), Math.max(4, rect.height - 10), 4);
+        context.fill();
+        context.fillStyle = dock.role === 'outbound' ? '#f8ecd0' : '#dff4ff';
+        context.font = '800 8px system-ui, sans-serif';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(dock.label, rect.left + rect.width / 2, rect.top + rect.height / 2);
+        context.restore();
+      };
+
+      const drawLiftEquipmentNode = (node: ShuttleScenario['layout']['nodes'][number]) => {
+        const role = liftWorkcellNodeRole(node.id);
+        if (!role) return;
+        const point = project(node);
+        context.save();
+        if (node.type === 'lift-blackbox') {
+          const widthPx = 14;
+          const heightPx = 12;
+          context.fillStyle = 'rgba(226, 235, 241, 0.9)';
+          context.strokeStyle = flowRgba(role, 0.78);
+          context.lineWidth = 1.2;
+          context.beginPath();
+          context.roundRect(point.x - widthPx / 2, point.y - heightPx / 2, widthPx, heightPx, 3);
+          context.fill();
+          context.stroke();
+          context.fillStyle = flowRgba(role, 0.88);
+          context.fillRect(point.x - widthPx / 2 + 2, point.y - 1.2, widthPx - 4, 2.4);
+        } else if (node.type === 'inbound' || node.type === 'outbound' || isLiftServiceExitNode(node.id)) {
+          const slotSize = isLiftServiceExitNode(node.id) ? 6.2 : 5.4;
+          context.fillStyle = flowRgba(role, isLiftServiceExitNode(node.id) ? 0.72 : 0.52);
+          context.strokeStyle = 'rgba(235, 245, 250, 0.78)';
+          context.lineWidth = 0.9;
+          context.beginPath();
+          context.roundRect(point.x - slotSize / 2, point.y - slotSize / 2, slotSize, slotSize, 1.8);
+          context.fill();
+          context.stroke();
+        }
+        context.restore();
+      };
+
       const drawLine = (from: { x: number; z: number }, to: { x: number; z: number }, color: string, lineWidth: number, alpha = 1) => {
         const a = project(from);
         const b = project(to);
@@ -2039,6 +2184,59 @@ function CanvasLiteMap({
         context.globalAlpha = 1;
       };
 
+      const drawPickupTargetBadge = (point: { x: number; y: number }, taskKind: 'inbound' | 'outbound', vehicleId: string) => {
+        const label = `P${vehicleDisplayNumber(vehicleId)}`;
+        const badgeWidth = 22;
+        const badgeHeight = 14;
+        const badgeX = point.x + 13;
+        const badgeY = point.y - 23;
+        const roleColor = FLOW_VISUAL_COLORS[taskKind].hex;
+        context.save();
+        context.strokeStyle = flowRgba(taskKind, 0.46);
+        context.lineWidth = 1.2;
+        context.beginPath();
+        context.moveTo(point.x, point.y);
+        context.lineTo(badgeX, badgeY + badgeHeight / 2);
+        context.stroke();
+        context.fillStyle = flowRgba(taskKind, 0.9);
+        context.strokeStyle = '#ffffff';
+        context.lineWidth = 1.4;
+        context.beginPath();
+        context.roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 4);
+        context.fill();
+        context.stroke();
+        context.fillStyle = taskKind === 'outbound' ? '#15120b' : '#f8fbff';
+        context.font = '800 9px system-ui, sans-serif';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(label, badgeX + badgeWidth / 2, badgeY + badgeHeight / 2 + 0.2);
+        context.fillStyle = roleColor;
+        context.beginPath();
+        context.arc(point.x, point.y, 2.8, 0, Math.PI * 2);
+        context.fill();
+        context.restore();
+      };
+
+      const drawVehicleIdBadge = (point: { x: number; y: number }, vehicle: VehicleState, selected: boolean) => {
+        const label = vehicleDisplayNumber(vehicle.id);
+        const badgeX = point.x + 10;
+        const badgeY = point.y - 12;
+        context.save();
+        context.fillStyle = selected ? '#111820' : 'rgba(17, 24, 32, 0.86)';
+        context.strokeStyle = 'rgba(255, 255, 255, 0.92)';
+        context.lineWidth = 1.2;
+        context.beginPath();
+        context.roundRect(badgeX - 6, badgeY - 6, 12, 12, 4);
+        context.fill();
+        context.stroke();
+        context.fillStyle = '#f8fbff';
+        context.font = '800 8.5px system-ui, sans-serif';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(label, badgeX, badgeY + 0.2);
+        context.restore();
+      };
+
       const reservedEdgeIds = new Set(
         layers.traffic
           ? (state?.reservations ?? []).filter((reservation) => reservation.resourceType === 'edge').map((reservation) => reservation.resourceId)
@@ -2046,16 +2244,40 @@ function CanvasLiteMap({
       );
 
       for (const rect of geometry.aisleRects) {
-        fillMeterRect(rect, '#d6aa2f', 0.2);
+        fillMeterRect(rect, '#d6aa2f', 0.15);
       }
 
       for (const rect of geometry.connectorRects) {
         const color = rect.category === 'inboundConnector' ? FLOW_VISUAL_COLORS.inbound.hex : FLOW_VISUAL_COLORS.outbound.hex;
-        fillMeterRect(rect, color, 0.16);
+        fillMeterRect(rect, color, 0.15);
+      }
+
+      for (const dock of geometry.liftDockRects) {
+        drawLiftDockRect(dock);
       }
 
       for (const rect of geometry.storageCellRects) {
-        drawMeterRect(rect, '#8d78ff', '#b59aff', 0.22, 0.62);
+        drawMeterRect(rect, '#8d78ff', '#b59aff', 0.22, 0.55);
+      }
+
+      if (debugMode) {
+        for (const edge of geometry.edges) {
+          const from = geometry.nodeMap.get(edge.from);
+          const to = geometry.nodeMap.get(edge.to);
+          if (!from || !to) continue;
+          drawLine(from, to, edge.directionMode === 'oneWay' ? '#bfa65a' : '#8fa0aa', edge.directionMode === 'oneWay' ? 1.2 : 0.8, edge.directionMode === 'oneWay' ? 0.42 : 0.28);
+        }
+        context.globalAlpha = 0.58;
+        context.fillStyle = '#355a70';
+        for (const node of geometry.nodes) {
+          if (node.type === 'storage') continue;
+          const point = project(node);
+          const size = node.noStop ? 3 : 4;
+          context.beginPath();
+          context.roundRect(point.x - size / 2, point.y - size / 2, size, size, 1);
+          context.fill();
+        }
+        context.globalAlpha = 1;
       }
 
       for (const edge of geometry.edges) {
@@ -2087,6 +2309,10 @@ function CanvasLiteMap({
           }
         }
         context.globalAlpha = 1;
+      }
+
+      for (const node of geometry.nodes) {
+        drawLiftEquipmentNode(node);
       }
 
       if (layers.loads && state) {
@@ -2129,6 +2355,31 @@ function CanvasLiteMap({
         }
       }
 
+      if (layers.traffic && state) {
+        const vehicleByIdForTraffic = new Map(renderVehicles.map((vehicle) => [vehicle.id, vehicle]));
+        for (const waitingVehicle of state.traffic.waitingVehicles) {
+          const currentNode = geometry.nodeMap.get(waitingVehicle.currentNodeId);
+          const targetNode = waitingVehicle.targetNodeId ? geometry.nodeMap.get(waitingVehicle.targetNodeId) : null;
+          if (currentNode && targetNode) {
+            drawLine(currentNode, targetNode, '#d65a4a', 3.4, 0.9);
+          }
+          const currentPoint = currentNode ? project(currentNode) : null;
+          if (currentPoint) {
+            context.strokeStyle = '#d65a4a';
+            context.lineWidth = 2;
+            context.globalAlpha = 0.92;
+            context.beginPath();
+            context.arc(currentPoint.x, currentPoint.y, 9, 0, Math.PI * 2);
+            context.stroke();
+            context.globalAlpha = 1;
+          }
+          const blocker = waitingVehicle.blockingVehicleId ? vehicleByIdForTraffic.get(waitingVehicle.blockingVehicleId) : null;
+          if (currentNode && blocker) {
+            drawLine(currentNode, blocker, '#b7892c', 1.8, 0.72);
+          }
+        }
+      }
+
       const activeTasks = state?.tasks.filter((task) => task.vehicleId && task.state !== 'completed' && task.state !== 'failed') ?? [];
       const vehicleById = new Map(renderVehicles.map((vehicle) => [vehicle.id, vehicle]));
       for (const task of activeTasks) {
@@ -2137,18 +2388,7 @@ function CanvasLiteMap({
         if (!vehicle || !pickupNode || vehicle.loaded) continue;
         if (pickupNode.type === 'inbound' || pickupNode.type === 'outbound' || pickupNode.type === 'lift-blackbox') continue;
         const point = project(pickupNode);
-        context.fillStyle = flowRgba(task.kind, 0.92);
-        context.strokeStyle = '#ffffff';
-        context.lineWidth = 1.5;
-        context.beginPath();
-        context.arc(point.x, point.y - 12, 8, 0, Math.PI * 2);
-        context.fill();
-        context.stroke();
-        context.fillStyle = '#f8fbff';
-        context.font = '700 10px system-ui, sans-serif';
-        context.textAlign = 'center';
-        context.textBaseline = 'middle';
-        context.fillText(vehicleDisplayNumber(vehicle.id), point.x, point.y - 12);
+        drawPickupTargetBadge(point, task.kind, vehicle.id);
       }
 
       for (const vehicle of renderVehicles) {
@@ -2160,16 +2400,36 @@ function CanvasLiteMap({
         );
         const vehicleWidthPx = clampNumber((scenario?.vehicles.widthM ?? 1.03) * pxPerMeter, 15, 20);
         const vehicleHeightPx = vehicleWidthPx;
+        if (layers.physics) {
+          const safetyRadiusPx = clampNumber(
+            ((scenario?.vehicles.safetyRadiusM ?? 0.4) + (scenario?.trafficPolicy.dynamicAvoidanceClearanceM ?? 0)) * pxPerMeter,
+            8,
+            34
+          );
+          const bodyLengthPx = clampNumber((scenario?.vehicles.lengthM ?? 1.03) * pxPerMeter, 15, 28);
+          const bodyWidthPx = clampNumber((scenario?.vehicles.widthM ?? 1.03) * pxPerMeter, 15, 24);
+          context.save();
+          context.translate(point.x, point.y);
+          context.strokeStyle = selected ? 'rgba(31, 116, 196, 0.95)' : 'rgba(31, 116, 196, 0.38)';
+          context.lineWidth = selected ? 1.8 : 1;
+          context.beginPath();
+          context.arc(0, 0, safetyRadiusPx, 0, Math.PI * 2);
+          context.stroke();
+          context.rotate(-vehicle.yaw);
+          context.strokeStyle = selected ? 'rgba(17, 24, 32, 0.95)' : 'rgba(17, 24, 32, 0.5)';
+          context.strokeRect(-bodyLengthPx / 2, -bodyWidthPx / 2, bodyLengthPx, bodyWidthPx);
+          context.restore();
+        }
         context.fillStyle = vehicle.state === 'waiting-blocked'
           ? '#b7892c'
           : vehicle.loaded
             ? '#2f9e6d'
             : vehicle.taskId
-              ? '#1976d2'
+              ? '#2f8cff'
               : vehicle.state === 'idle'
-                ? '#66717b'
-                : '#7c5ed8';
-        context.strokeStyle = selected ? '#111820' : vehicle.loaded ? '#dff6e8' : '#e7f2ff';
+                ? '#6f7f8c'
+                : '#9b83ff';
+        context.strokeStyle = selected ? '#f8fbff' : vehicle.loaded ? '#dff6e8' : '#d7edff';
         context.lineWidth = selected ? 2 : 1.5;
         context.shadowColor = 'rgba(20, 28, 34, 0.18)';
         context.shadowBlur = selected ? 5 : 4;
@@ -2192,11 +2452,7 @@ function CanvasLiteMap({
         context.fill();
         context.restore();
         context.shadowColor = 'transparent';
-        context.fillStyle = '#f8fbff';
-        context.font = '800 10px system-ui, sans-serif';
-        context.textAlign = 'center';
-        context.textBaseline = 'middle';
-        context.fillText(vehicleDisplayNumber(vehicle.id), point.x, point.y + 0.5);
+        drawVehicleIdBadge(point, vehicle, selected);
       }
     };
 
@@ -2219,7 +2475,7 @@ function CanvasLiteMap({
     const padding = 16;
     const project = (point: { x: number; z: number }) => ({
       x: padding + ((point.x - geometry.minX) / geometry.width) * (rect.width - padding * 2),
-      y: rect.height - padding - ((point.z - geometry.minZ) / geometry.depth) * (rect.height - padding * 2)
+      y: padding + ((point.z - geometry.minZ) / geometry.depth) * (rect.height - padding * 2)
     });
     const clickX = event.clientX - rect.left;
     const clickY = event.clientY - rect.top;
@@ -2347,7 +2603,13 @@ function StreamingPane({
             <span><i className="planned-taskless" />Clearance</span>
             <span><i className="local" />Local</span>
             <span><i className="goal" />Goal</span>
-            <span><i className="pickup" />Pickup</span>
+            <span><i className="pickup" />Pickup target</span>
+          </span>
+          <span className="vehicle-legend" aria-label="Shuttle state legend">
+            <span><i className="vehicle-empty" />Empty task</span>
+            <span><i className="vehicle-loaded" />Loaded</span>
+            <span><i className="vehicle-waiting" />Waiting</span>
+            <span><i className="vehicle-idle" />Idle</span>
           </span>
           {viewMode === '3d' && <span
             className={`gpu-badge ${rendererInfo?.hardwareAccelerated === false ? 'software' : 'hardware'}`}
@@ -2358,21 +2620,14 @@ function StreamingPane({
         </div>
       </div>
       <div className="stream-placeholder">
-        {viewMode === 'lite' ? (
+        {viewMode === 'lite' || viewMode === '2d' ? (
           <CanvasLiteMap
             scenario={scenario}
             state={state}
             layers={layers}
             selectedVehicleId={selectedVehicleId}
             playbackSpeed={playbackSpeed}
-            onSelectVehicle={onSelectVehicle}
-          />
-        ) : viewMode === '2d' ? (
-          <AuthoritativeMap
-            scenario={scenario}
-            state={state}
-            layers={layers}
-            selectedVehicleId={selectedVehicleId}
+            debugMode={viewMode === '2d'}
             onSelectVehicle={onSelectVehicle}
           />
         ) : (
