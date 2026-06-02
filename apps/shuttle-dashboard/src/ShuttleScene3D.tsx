@@ -853,64 +853,6 @@ function isLiftServiceExitNode(nodeId: string): boolean {
   return /^lift-\d{2}-(?:inbound|outbound)-queue-\d{2}-service-exit$/.test(nodeId);
 }
 
-function liftWorkcellRole(nodeId: string, fallback?: ShuttleNode['liftKind']): LoadFlowRole | null {
-  const match = /^lift-\d{2}-(inbound|outbound)(?:$|-)/.exec(nodeId);
-  return (match?.[1] as LoadFlowRole | undefined) ?? fallback ?? null;
-}
-
-function createLiftWorkcellEquipmentSlot(node: ShuttleNode): THREE.Group | null {
-  const role = liftWorkcellRole(node.id, node.liftKind);
-  if (!role) {
-    return null;
-  }
-  const group = new THREE.Group();
-  group.position.set(node.x, 0, node.z);
-  const isService = isLiftServiceExitNode(node.id);
-  const isBuffer = node.type === 'inbound' || node.type === 'outbound';
-  const accent = FLOW_VISUAL_COLORS[role].three;
-  const baseWidth = isService ? 0.72 : isBuffer ? 0.58 : 0.5;
-  const baseDepth = isService ? 0.58 : 0.5;
-
-  const base = new THREE.Mesh(
-    new THREE.BoxGeometry(baseWidth, 0.035, baseDepth),
-    material(isService ? 0x1a2530 : 0x18212a, 0.78, 0.08)
-  );
-  base.position.y = 0.06;
-  base.receiveShadow = true;
-  group.add(base);
-
-  const deck = new THREE.Mesh(
-    new THREE.BoxGeometry(baseWidth * 0.78, 0.034, baseDepth * 0.62),
-    material(accent, isService ? 0.5 : 0.38, 0.14)
-  );
-  deck.position.y = 0.105;
-  deck.receiveShadow = true;
-  group.add(deck);
-
-  const railMaterial = material(0xd7e2e7, 0.46, 0.18);
-  for (const z of [-baseDepth * 0.42, baseDepth * 0.42]) {
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(baseWidth * 0.92, 0.035, 0.024), railMaterial);
-    rail.position.set(0, 0.14, z);
-    rail.castShadow = true;
-    group.add(rail);
-  }
-
-  const arrowDirection = role === 'inbound' ? 1 : -1;
-  const arrow = createRouteArrow(
-    { x: -arrowDirection * baseWidth * 0.24, z: 0 },
-    { x: arrowDirection * baseWidth * 0.34, z: 0 },
-    accent,
-    0.19,
-    isService ? 0.82 : 0.68
-  );
-  if (arrow) {
-    arrow.renderOrder = 110;
-    group.add(arrow);
-  }
-
-  return group;
-}
-
 function createLiftBlackboxPort(node: ShuttleNode, pad?: ShuttleStaticScenePad): THREE.Group {
   const group = new THREE.Group();
   group.position.set(node.x, 0, node.z);
@@ -1007,18 +949,6 @@ function createLiftBlackboxPort(node: ShuttleNode, pad?: ShuttleStaticScenePad):
   portPlate.position.set(isInbound ? padLengthX * 0.58 : -padLengthX * 0.58, 0.22, 0);
   portPlate.castShadow = true;
   group.add(portPlate);
-
-  const flowArrow = createRouteArrow(
-    { x: isInbound ? -padLengthX * 0.16 : padLengthX * 0.42, z: 0 },
-    { x: isInbound ? padLengthX * 0.42 : -padLengthX * 0.16, z: 0 },
-    roleAccent,
-    0.38,
-    1.05
-  );
-  if (flowArrow) {
-    flowArrow.renderOrder = 112;
-    group.add(flowArrow);
-  }
 
   return group;
 }
@@ -1479,11 +1409,8 @@ function isTopLiftDisplayRailNode(nodeId: string): boolean {
 }
 
 function liftRouteDisplaySnapLevel(nodeId: string): 'top-a' | 'top-b' | null {
-  if (/^lift-\d{2}-inbound-/.test(nodeId)) {
+  if (/^lift-\d{2}-(?:inbound|outbound)-/.test(nodeId)) {
     return 'top-b';
-  }
-  if (/^lift-\d{2}-outbound-/.test(nodeId)) {
-    return 'top-a';
   }
   return null;
 }
@@ -1873,10 +1800,6 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
       continue;
     }
     if (node.type === 'inbound' || node.type === 'outbound') {
-      const slot = createLiftWorkcellEquipmentSlot(node);
-      if (slot) {
-        runtime.staticGroup.add(slot);
-      }
       continue;
     }
     if (node.type === 'lift-blackbox') {
@@ -1884,10 +1807,6 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
       continue;
     }
     if (isLiftServiceExitNode(node.id)) {
-      const slot = createLiftWorkcellEquipmentSlot(node);
-      if (slot) {
-        runtime.staticGroup.add(slot);
-      }
       continue;
     }
     if (node.type === 'parking') {

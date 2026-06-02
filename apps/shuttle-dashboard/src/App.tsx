@@ -919,11 +919,8 @@ function isTopLiftDisplayRailNode(nodeId: string): boolean {
 }
 
 function liftRouteDisplaySnapLevel(nodeId: string): 'top-a' | 'top-b' | null {
-  if (/^lift-\d{2}-inbound-/.test(nodeId)) {
+  if (/^lift-\d{2}-(?:inbound|outbound)-/.test(nodeId)) {
     return 'top-b';
-  }
-  if (/^lift-\d{2}-outbound-/.test(nodeId)) {
-    return 'top-a';
   }
   return null;
 }
@@ -2111,24 +2108,6 @@ function CanvasLiteMap({
         context.fillStyle = flowRgba(dock.role, 0.18);
         context.beginPath();
         context.roundRect(rect.left + 5, rect.top + 5, Math.max(4, rect.width - 10), Math.max(4, rect.height - 10), 4);
-        context.fill();
-        const arrowY = rect.top + rect.height * 0.32;
-        const arrowStartX = dock.role === 'inbound' ? rect.left + rect.width * 0.34 : rect.left + rect.width * 0.66;
-        const arrowEndX = dock.role === 'inbound' ? rect.left + rect.width * 0.72 : rect.left + rect.width * 0.28;
-        context.strokeStyle = flowRgba(dock.role, 0.82);
-        context.fillStyle = flowRgba(dock.role, 0.82);
-        context.lineWidth = 1.6;
-        context.lineCap = 'round';
-        context.beginPath();
-        context.moveTo(arrowStartX, arrowY);
-        context.lineTo(arrowEndX, arrowY);
-        context.stroke();
-        const arrowHead = dock.role === 'inbound' ? 1 : -1;
-        context.beginPath();
-        context.moveTo(arrowEndX, arrowY);
-        context.lineTo(arrowEndX - arrowHead * 4.2, arrowY - 3);
-        context.lineTo(arrowEndX - arrowHead * 4.2, arrowY + 3);
-        context.closePath();
         context.fill();
         context.fillStyle = dock.role === 'outbound' ? '#f8ecd0' : '#dff4ff';
         context.font = '800 8px system-ui, sans-serif';
