@@ -936,6 +936,35 @@ function createLiftBlackboxPort(node: ShuttleNode, pad?: ShuttleStaticScenePad):
   return group;
 }
 
+function createLiftBufferPad(node: ShuttleNode): THREE.Group {
+  const group = new THREE.Group();
+  group.position.set(node.x, 0, node.z);
+  const role = node.type === 'outbound' ? 'outbound' : 'inbound';
+  const accent = FLOW_VISUAL_COLORS[role].three;
+
+  const base = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.035, 0.58), material(0x14212c, 0.76, 0.08));
+  base.position.y = 0.04;
+  base.castShadow = true;
+  base.receiveShadow = true;
+  group.add(base);
+
+  const belt = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.032, 0.4), material(accent, 0.48, 0.08));
+  belt.position.y = 0.085;
+  belt.castShadow = true;
+  belt.receiveShadow = true;
+  group.add(belt);
+
+  const railMaterial = material(0xdce7ea, 0.44, 0.16);
+  for (const x of [-0.32, 0.32]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.09, 0.5), railMaterial);
+    rail.position.set(x, 0.13, 0);
+    rail.castShadow = true;
+    group.add(rail);
+  }
+
+  return group;
+}
+
 function createParkingPad(node: ShuttleNode, pad?: ShuttleStaticScenePad): THREE.Group {
   const group = new THREE.Group();
   group.position.set(node.x, 0, node.z);
@@ -1019,7 +1048,8 @@ function isLiftWorkcellNode(node: ShuttleNode): boolean {
   return node.type === 'inbound' ||
     node.type === 'outbound' ||
     node.type === 'lift-blackbox' ||
-    node.id.startsWith('lift-');
+    node.id.startsWith('lift-') ||
+    node.id.startsWith('parking-lift-');
 }
 
 function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
@@ -1701,7 +1731,7 @@ function updateDynamicScene(
     const loads = state.loads.filter((load) => load.nodeId && load.state !== 'carried');
     loads.forEach((load, index) => {
       const node = load.nodeId ? runtime.nodeById.get(load.nodeId) : null;
-      if (node && !isLiftWorkcellNode(node)) {
+      if (node && (!isLiftWorkcellNode(node) || load.state === 'waiting')) {
         runtime.loadGroup.add(createLoadMesh(state, load, node, index));
       }
     });
@@ -1862,10 +1892,11 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
       continue;
     }
     if (node.type === 'inbound' || node.type === 'outbound') {
+      runtime.staticGroup.add(createLiftBufferPad(node));
       continue;
     }
     if (node.type === 'lift-blackbox') {
-      runtime.networkGroup.add(createLiftBlackboxPort(node, liftPadById.get(node.id)));
+      runtime.staticGroup.add(createLiftBlackboxPort(node, liftPadById.get(node.id)));
       continue;
     }
     if (isLiftServiceExitNode(node.id)) {

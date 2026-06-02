@@ -1959,6 +1959,105 @@ input[type="range"] {
   background: rgba(var(--flow-outbound-rgb), 0.16);
 }
 
+.map-lift-transfer {
+  position: absolute;
+  display: block;
+  height: 2px;
+  border-radius: 999px;
+  transform-origin: left center;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0.58;
+}
+
+.map-lift-transfer.flow-inbound {
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(var(--flow-inbound-rgb), 0.74) 0,
+    rgba(var(--flow-inbound-rgb), 0.74) 6px,
+    transparent 6px,
+    transparent 10px
+  );
+}
+
+.map-lift-transfer.flow-outbound {
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(var(--flow-outbound-rgb), 0.78) 0,
+    rgba(var(--flow-outbound-rgb), 0.78) 6px,
+    transparent 6px,
+    transparent 10px
+  );
+}
+
+.map-lift-equipment {
+  position: absolute;
+  z-index: 2;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+.map-lift-equipment.lift-main {
+  width: 42px;
+  height: 22px;
+  border-radius: 5px;
+  color: #edf7fb;
+  background: rgba(18, 28, 36, 0.94);
+  border: 1px solid rgba(237, 247, 251, 0.38);
+  box-shadow: 0 0 0 2px rgba(18, 28, 36, 0.38);
+}
+
+.map-lift-equipment.lift-main.flow-inbound {
+  border-color: rgba(var(--flow-inbound-rgb), 0.84);
+  color: rgb(var(--flow-inbound-rgb));
+}
+
+.map-lift-equipment.lift-main.flow-outbound {
+  border-color: rgba(var(--flow-outbound-rgb), 0.88);
+  color: rgb(var(--flow-outbound-rgb));
+}
+
+.map-lift-equipment.lift-buffer {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  color: transparent;
+  background: rgba(237, 247, 251, 0.76);
+  border: 1px solid rgba(237, 247, 251, 0.62);
+}
+
+.map-lift-equipment.lift-buffer.flow-inbound {
+  background: rgba(var(--flow-inbound-rgb), 0.44);
+  border-color: rgba(var(--flow-inbound-rgb), 0.82);
+}
+
+.map-lift-equipment.lift-buffer.flow-outbound {
+  background: rgba(var(--flow-outbound-rgb), 0.5);
+  border-color: rgba(var(--flow-outbound-rgb), 0.84);
+}
+
+.map-lift-equipment.lift-dock {
+  z-index: 6;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: #101922;
+  border: 2px solid currentColor;
+}
+
+.map-lift-equipment.lift-dock.flow-inbound {
+  color: rgb(var(--flow-inbound-rgb));
+}
+
+.map-lift-equipment.lift-dock.flow-outbound {
+  color: rgb(var(--flow-outbound-rgb));
+}
+
 .map-storage-cell {
   z-index: 1;
   border: 1px solid rgba(181, 154, 255, 0.62);

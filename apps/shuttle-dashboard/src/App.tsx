@@ -1684,6 +1684,101 @@ function isLiftWorkcellDisplayNode(node: ShuttleScenario['layout']['nodes'][numb
     node.id.startsWith('parking-lift-');
 }
 
+type LiftVisualWorkcell = {
+  key: string;
+  role: 'inbound' | 'outbound';
+  liftNodeId: string;
+  bufferNodeIds: string[];
+  dockNodeIds: string[];
+  transferPairs: Array<{ fromNodeId: string; toNodeId: string }>;
+};
+
+function liftWorkcellKeyParts(nodeId: string): { number: string; role: 'inbound' | 'outbound'; key: string; prefix: string } | null {
+  const match = /^(?:lift|parking-lift)-(\d{2})-(inbound|outbound)(?:$|-)/.exec(nodeId);
+  if (!match) return null;
+  const role = match[2] as 'inbound' | 'outbound';
+  return {
+    number: match[1]!,
+    role,
+    key: `lift-${match[1]}-${role}`,
+    prefix: `lift-${match[1]}-${role}`
+  };
+}
+
+function topRailDockLevel(nodeId: string): 'a' | 'b' | null {
+  const match = /^column-top-([ab])-c\d+$/.exec(nodeId);
+  return match ? match[1] as 'a' | 'b' : null;
+}
+
+function createLiftVisualWorkcells(
+  nodes: ShuttleScenario['layout']['nodes'],
+  edges: ShuttleScenario['layout']['edges']
+): LiftVisualWorkcell[] {
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  const workcells = new Map<string, LiftVisualWorkcell>();
+  const ensure = (parts: NonNullable<ReturnType<typeof liftWorkcellKeyParts>>, liftNodeId = '') => {
+    const existing = workcells.get(parts.key);
+    if (existing) {
+      if (liftNodeId) existing.liftNodeId = liftNodeId;
+      return existing;
+    }
+    const next: LiftVisualWorkcell = {
+      key: parts.key,
+      role: parts.role,
+      liftNodeId,
+      bufferNodeIds: [],
+      dockNodeIds: [],
+      transferPairs: []
+    };
+    workcells.set(parts.key, next);
+    return next;
+  };
+
+  for (const node of nodes) {
+    const parts = liftWorkcellKeyParts(node.id);
+    if (!parts) continue;
+    const visual = ensure(parts, node.type === 'lift-blackbox' ? node.id : '');
+    if ((node.type === 'inbound' || node.type === 'outbound') && node.type === parts.role) {
+      visual.bufferNodeIds.push(node.id);
+    }
+  }
+
+  for (const edge of edges) {
+    for (const [liftSide, railSide] of [[edge.from, edge.to], [edge.to, edge.from]] as const) {
+      const parts = liftWorkcellKeyParts(liftSide);
+      const railLevel = topRailDockLevel(railSide);
+      if (!parts || !railLevel) continue;
+      const expectedDockLevel = parts.role === 'inbound' ? 'b' : 'a';
+      if (railLevel !== expectedDockLevel) continue;
+      const visual = ensure(parts);
+      if (!visual.dockNodeIds.includes(railSide)) {
+        visual.dockNodeIds.push(railSide);
+      }
+    }
+  }
+
+  for (const visual of workcells.values()) {
+    visual.bufferNodeIds.sort((leftId, rightId) => {
+      const left = nodeMap.get(leftId);
+      const right = nodeMap.get(rightId);
+      return (right?.z ?? 0) - (left?.z ?? 0) || leftId.localeCompare(rightId);
+    });
+    visual.dockNodeIds.sort((leftId, rightId) => {
+      const left = nodeMap.get(leftId);
+      const right = nodeMap.get(rightId);
+      return (left?.x ?? 0) - (right?.x ?? 0) || leftId.localeCompare(rightId);
+    });
+    const anchorNodeId = visual.bufferNodeIds[0] ?? visual.liftNodeId;
+    visual.transferPairs = anchorNodeId
+      ? visual.dockNodeIds.map((dockNodeId) => ({ fromNodeId: anchorNodeId, toNodeId: dockNodeId }))
+      : [];
+  }
+
+  return [...workcells.values()]
+    .filter((visual) => visual.liftNodeId)
+    .sort((left, right) => left.key.localeCompare(right.key));
+}
+
 function AuthoritativeMap({
   scenario,
   state,
@@ -1751,6 +1846,7 @@ function AuthoritativeMap({
       aisleRects: staticScene ? createTrackAreaRects(staticScene, ['sideAisle', 'crossAisle']) : [],
       connectorRects: staticScene ? createTrackAreaRects(staticScene, ['inboundConnector', 'outboundConnector']) : [],
       storageCellRects: staticScene ? createStorageCellRects(staticScene) : [],
+      liftVisuals: createLiftVisualWorkcells(nodes, scenario?.layout.edges ?? []),
       project,
       projectRect,
       routeSegmentStyle
@@ -1783,6 +1879,36 @@ function AuthoritativeMap({
       {geometry.storageCellRects.map((rect) => (
         <span className="map-storage-cell" key={rect.id} style={geometry.projectRect(rect)} />
       ))}
+      {geometry.liftVisuals.flatMap((visual) => visual.transferPairs.map((pair) => {
+        const from = geometry.nodeMap.get(pair.fromNodeId);
+        const to = geometry.nodeMap.get(pair.toNodeId);
+        return from && to ? (
+          <span
+            className={`map-lift-transfer flow-${visual.role}`}
+            key={`${visual.key}-transfer-${pair.toNodeId}`}
+            style={geometry.routeSegmentStyle(from, to)}
+          />
+        ) : null;
+      }))}
+      {geometry.liftVisuals.flatMap((visual) => {
+        const nodesToRender = [
+          { nodeId: visual.liftNodeId, className: 'lift-main', label: visual.role === 'inbound' ? 'IN' : 'OUT' },
+          ...visual.bufferNodeIds.map((nodeId, index) => ({ nodeId, className: 'lift-buffer', label: String(index + 1) })),
+          ...visual.dockNodeIds.map((nodeId) => ({ nodeId, className: 'lift-dock', label: '' }))
+        ];
+        return nodesToRender.map((item) => {
+          const node = geometry.nodeMap.get(item.nodeId);
+          return node ? (
+            <span
+              className={`map-lift-equipment ${item.className} flow-${visual.role}`}
+              key={`${visual.key}-${item.className}-${item.nodeId}`}
+              style={geometry.project(node)}
+            >
+              {item.label}
+            </span>
+          ) : null;
+        });
+      })}
       {geometry.edges.map((edge) => {
         const from = geometry.nodeMap.get(edge.from);
         const to = geometry.nodeMap.get(edge.to);
@@ -1821,7 +1947,10 @@ function AuthoritativeMap({
         ))}
       {layers.loads && loads.map((load) => {
         const node = load.nodeId ? geometry.nodeMap.get(load.nodeId) : null;
-        return node ? <span className={`map-load ${load.state} flow-${resolveLoadFlowRole(state!, load)}`} key={load.id} style={geometry.project(node)} /> : null;
+        if (!node || (isLiftWorkcellDisplayNode(node) && load.state !== 'waiting')) {
+          return null;
+        }
+        return <span className={`map-load ${load.state} flow-${resolveLoadFlowRole(state!, load)}`} key={load.id} style={geometry.project(node)} />;
       })}
       {activeTasks.map((task) => {
         const vehicle = task.vehicleId ? vehicleById.get(task.vehicleId) : null;
@@ -2007,6 +2136,7 @@ function CanvasLiteMap({
       aisleRects: staticScene ? createTrackAreaRects(staticScene, ['sideAisle', 'crossAisle']) : [],
       connectorRects: staticScene ? createTrackAreaRects(staticScene, ['inboundConnector', 'outboundConnector']) : [],
       storageCellRects: staticScene ? createStorageCellRects(staticScene) : [],
+      liftVisuals: createLiftVisualWorkcells(nodes, scenario?.layout.edges ?? []),
       minX,
       maxX,
       minZ,
@@ -2112,24 +2242,29 @@ function CanvasLiteMap({
         const point = project(node);
         context.save();
         if (node.type === 'lift-blackbox') {
-          const widthPx = 14;
-          const heightPx = 12;
-          context.fillStyle = 'rgba(226, 235, 241, 0.9)';
+          const widthPx = 24;
+          const heightPx = 16;
+          context.fillStyle = 'rgba(18, 28, 36, 0.94)';
           context.strokeStyle = flowRgba(role, 0.78);
-          context.lineWidth = 1.2;
+          context.lineWidth = 1.6;
           context.beginPath();
-          context.roundRect(point.x - widthPx / 2, point.y - heightPx / 2, widthPx, heightPx, 3);
+          context.roundRect(point.x - widthPx / 2, point.y - heightPx / 2, widthPx, heightPx, 4);
           context.fill();
           context.stroke();
           context.fillStyle = flowRgba(role, 0.88);
-          context.fillRect(point.x - widthPx / 2 + 2, point.y - 1.2, widthPx - 4, 2.4);
+          context.fillRect(point.x - widthPx / 2 + 3, point.y - heightPx / 2 + 3, widthPx - 6, 2.4);
+          context.fillStyle = role === 'outbound' ? '#f3dc8d' : '#cceeff';
+          context.font = '800 8px system-ui, sans-serif';
+          context.textAlign = 'center';
+          context.textBaseline = 'middle';
+          context.fillText(role === 'inbound' ? 'IN' : 'OUT', point.x, point.y + 1.8);
         } else if (node.type === 'inbound' || node.type === 'outbound' || isLiftServiceExitNode(node.id)) {
-          const slotSize = isLiftServiceExitNode(node.id) ? 6.2 : 5.4;
+          const slotSize = isLiftServiceExitNode(node.id) ? 7.2 : 8.2;
           context.fillStyle = flowRgba(role, isLiftServiceExitNode(node.id) ? 0.72 : 0.52);
           context.strokeStyle = 'rgba(235, 245, 250, 0.78)';
-          context.lineWidth = 0.9;
+          context.lineWidth = 1.1;
           context.beginPath();
-          context.roundRect(point.x - slotSize / 2, point.y - slotSize / 2, slotSize, slotSize, 1.8);
+          context.roundRect(point.x - slotSize / 2, point.y - slotSize / 2, slotSize, slotSize, 2);
           context.fill();
           context.stroke();
         }
@@ -2148,6 +2283,23 @@ function CanvasLiteMap({
         context.lineTo(b.x, b.y);
         context.stroke();
         context.globalAlpha = 1;
+      };
+
+      const drawLiftDockMarker = (node: ShuttleScenario['layout']['nodes'][number], role: 'inbound' | 'outbound') => {
+        const point = project(node);
+        context.save();
+        context.fillStyle = '#101922';
+        context.strokeStyle = flowRgba(role, 0.9);
+        context.lineWidth = 1.8;
+        context.beginPath();
+        context.roundRect(point.x - 4.5, point.y - 4.5, 9, 9, 2.4);
+        context.fill();
+        context.stroke();
+        context.fillStyle = flowRgba(role, 0.9);
+        context.beginPath();
+        context.arc(point.x, point.y, 2.2, 0, Math.PI * 2);
+        context.fill();
+        context.restore();
       };
 
       const drawRoute = (vehicle: VehicleState, nodeIds: string[], color: string, lineWidth: number, alpha: number) => {
@@ -2244,6 +2396,36 @@ function CanvasLiteMap({
         drawMeterRect(rect, '#8d78ff', '#b59aff', 0.22, 0.55);
       }
 
+      for (const visual of geometry.liftVisuals) {
+        context.save();
+        context.setLineDash([4, 3]);
+        for (const pair of visual.transferPairs) {
+          const from = geometry.nodeMap.get(pair.fromNodeId);
+          const to = geometry.nodeMap.get(pair.toNodeId);
+          if (from && to) {
+            drawLine(from, to, FLOW_VISUAL_COLORS[visual.role].hex, 1.4, 0.42);
+          }
+        }
+        context.setLineDash([]);
+        const liftNode = geometry.nodeMap.get(visual.liftNodeId);
+        if (liftNode) {
+          drawLiftEquipmentNode(liftNode);
+        }
+        for (const bufferNodeId of visual.bufferNodeIds) {
+          const bufferNode = geometry.nodeMap.get(bufferNodeId);
+          if (bufferNode) {
+            drawLiftEquipmentNode(bufferNode);
+          }
+        }
+        for (const dockNodeId of visual.dockNodeIds) {
+          const dockNode = geometry.nodeMap.get(dockNodeId);
+          if (dockNode) {
+            drawLiftDockMarker(dockNode, visual.role);
+          }
+        }
+        context.restore();
+      }
+
       if (debugMode) {
         for (const edge of geometry.edges) {
           const from = geometry.nodeMap.get(edge.from);
@@ -2300,7 +2482,9 @@ function CanvasLiteMap({
 
       if (layers.physics) {
         for (const node of geometry.nodes) {
-          drawLiftEquipmentNode(node);
+          if (isLiftWorkcellDisplayNode(node) && node.type !== 'lift-blackbox' && node.type !== 'inbound' && node.type !== 'outbound') {
+            drawLiftEquipmentNode(node);
+          }
         }
       }
 
@@ -2309,10 +2493,10 @@ function CanvasLiteMap({
           if (!load.nodeId || load.state === 'carried') continue;
           const node = geometry.nodeMap.get(load.nodeId);
           if (!node) continue;
-          if (isLiftWorkcellDisplayNode(node)) continue;
+          if (isLiftWorkcellDisplayNode(node) && load.state !== 'waiting') continue;
           const point = project(node);
           const loadRole = resolveLoadFlowRole(state, load);
-          const conveyorLoad = node.type === 'inbound' || node.type === 'outbound' || node.type === 'lift-blackbox';
+          const conveyorLoad = node.type === 'inbound' || node.type === 'outbound' || node.type === 'lift-blackbox' || isLiftServiceExitNode(node.id);
           const sizePx = conveyorLoad ? 5.8 : 8.4;
           context.fillStyle = flowRgba(loadRole, 0.88);
           context.strokeStyle = conveyorLoad ? flowRgba(loadRole, 0.5) : 'rgba(255,255,255,0.72)';
