@@ -454,19 +454,6 @@ function createCadFloorTexture(
     ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
   }
 
-  for (const pad of [...staticScene.liftPads, ...staticScene.parkingPads]) {
-    const rect = rectForMeterBox(pad.xM, pad.zM, pad.lengthXM, pad.lengthZM);
-    ctx.fillStyle = pad.category === 'inboundLift'
-      ? 'rgba(79, 143, 203, 0.24)'
-      : pad.category === 'outboundLift'
-        ? 'rgba(109, 168, 214, 0.24)'
-        : 'rgba(122, 135, 148, 0.26)';
-    ctx.strokeStyle = pad.category === 'parking' ? '#7a8794' : '#9fb9c8';
-    ctx.lineWidth = 2;
-    ctx.fillRect(rect.left, rect.top, rect.width, rect.height);
-    ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
-  }
-
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = 8;
@@ -1738,9 +1725,11 @@ function updateDynamicScene(
         if (!from || !to) {
           continue;
         }
+        const displayFrom = routeDisplayPointForNode(runtime, from.id, from);
+        const displayTo = routeDisplayPointForNode(runtime, to.id, to);
         const reservedSegment = createSegment(
-          from,
-          to,
+          displayFrom,
+          displayTo,
           0.095,
           new THREE.MeshBasicMaterial({ color: 0xe2b84b, transparent: true, opacity: 0.8 }),
           0.11
@@ -1760,7 +1749,8 @@ function updateDynamicScene(
           new THREE.MeshBasicMaterial({ color: 0xe2b84b, transparent: true, opacity: 0.72, side: THREE.DoubleSide })
         );
         marker.rotation.x = -Math.PI / 2;
-        marker.position.set(node.x, 0.035, node.z);
+        const displayPoint = routeDisplayPointForNode(runtime, node.id, node);
+        marker.position.set(displayPoint.x, 0.035, displayPoint.z);
         runtime.reservationGroup.add(marker);
       }
     }
@@ -1885,14 +1875,14 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
       continue;
     }
     if (node.type === 'lift-blackbox') {
-      runtime.staticGroup.add(createLiftBlackboxPort(node, liftPadById.get(node.id)));
+      runtime.networkGroup.add(createLiftBlackboxPort(node, liftPadById.get(node.id)));
       continue;
     }
     if (isLiftServiceExitNode(node.id)) {
       continue;
     }
     if (node.type === 'parking') {
-      runtime.staticGroup.add(createParkingPad(node, parkingPadById.get(node.id)));
+      runtime.networkGroup.add(createParkingPad(node, parkingPadById.get(node.id)));
       continue;
     }
     if (node.type === 'intersection' || node.type === 'aisle') {
@@ -1908,7 +1898,7 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
   runtime.root.scale.set(1, 1, 1);
   runtime.root.position.set(0, 0, 0);
   runtime.cameraTarget.set(bounds.centerX, 0, bounds.centerZ);
-  const defaultCameraOffset = new THREE.Vector3(0, Math.max(13, bounds.size * 0.86), bounds.size * 0.34);
+  const defaultCameraOffset = new THREE.Vector3(0, Math.max(16, bounds.size * 1.08), bounds.size * 0.14);
   runtime.baseCameraDistance = defaultCameraOffset.length();
   runtime.baseCameraYaw = Math.atan2(defaultCameraOffset.x, defaultCameraOffset.z);
   runtime.baseCameraPitch = Math.asin(defaultCameraOffset.y / Math.max(0.001, runtime.baseCameraDistance));

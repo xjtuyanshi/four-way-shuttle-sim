@@ -473,7 +473,7 @@ const WORKSPACE_TABS: Array<{ id: WorkspaceTab; label: string }> = [
 ];
 const API_BASE_URL = import.meta.env.VITE_SHUTTLE_API_TARGET?.replace(/\/$/, '') ?? '';
 const DEFAULT_SCENE_CAMERA_VIEW: ShuttleSceneCameraView = {
-  zoom: 1,
+  zoom: 1.28,
   yawOffsetRad: 0,
   pitchOffsetRad: 0
 };
