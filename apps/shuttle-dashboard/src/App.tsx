@@ -901,7 +901,8 @@ function routeRenderStartPoint(
 }
 
 function isLiftRouteDisplaySnapNode(nodeId: string): boolean {
-  return /^lift-\d{2}-(?:inbound|outbound)-(?:buffer-access|queue-access|queue-\d{2}-(?:access|entry-access|service-exit))$/.test(nodeId);
+  return /^lift-\d{2}-(?:inbound|outbound)-(?:buffer-access|queue-access|queue-\d{2}-(?:access|entry-access|service-exit))$/.test(nodeId) ||
+    /^parking-lift-\d{2}-(?:inbound|outbound)-queue(?:-\d{2})?$/.test(nodeId);
 }
 
 type TopLiftDisplayRailLevel = 'top-a' | 'top-b';
@@ -1667,7 +1668,7 @@ function vehicleDisplayNumber(vehicleId: string): string {
 }
 
 function liftWorkcellNodeRole(nodeId: string): 'inbound' | 'outbound' | null {
-  const match = /^lift-\d{2}-(inbound|outbound)(?:$|-)/.exec(nodeId);
+  const match = /^(?:lift|parking-lift)-\d{2}-(inbound|outbound)(?:$|-)/.exec(nodeId);
   return match ? match[1] as 'inbound' | 'outbound' : null;
 }
 
@@ -1679,7 +1680,8 @@ function isLiftWorkcellDisplayNode(node: ShuttleScenario['layout']['nodes'][numb
   return node.type === 'inbound' ||
     node.type === 'outbound' ||
     node.type === 'lift-blackbox' ||
-    node.id.startsWith('lift-');
+    node.id.startsWith('lift-') ||
+    node.id.startsWith('parking-lift-');
 }
 
 function AuthoritativeMap({
@@ -1746,7 +1748,7 @@ function AuthoritativeMap({
       nodeMap,
       edges: scenario?.layout.edges ?? [],
       edgeTraversalKeys: createEdgeTraversalKeys(scenario?.layout.edges ?? []),
-      aisleRects: staticScene ? createTrackAreaRects(staticScene, ['sideAisle', 'crossAisle', 'parkingConnector']) : [],
+      aisleRects: staticScene ? createTrackAreaRects(staticScene, ['sideAisle', 'crossAisle']) : [],
       connectorRects: staticScene ? createTrackAreaRects(staticScene, ['inboundConnector', 'outboundConnector']) : [],
       storageCellRects: staticScene ? createStorageCellRects(staticScene) : [],
       project,
@@ -1775,7 +1777,7 @@ function AuthoritativeMap({
       {geometry.aisleRects.map((rect) => (
         <span className={`map-area ${rect.category}`} key={rect.id} style={geometry.projectRect(rect)} />
       ))}
-      {geometry.connectorRects.map((rect) => (
+      {layers.physics && geometry.connectorRects.map((rect) => (
         <span className={`map-area ${rect.category}`} key={rect.id} style={geometry.projectRect(rect)} />
       ))}
       {geometry.storageCellRects.map((rect) => (
@@ -1811,7 +1813,7 @@ function AuthoritativeMap({
           );
         })}
       {geometry.nodes
-        .filter((node) => node.type !== 'storage' && node.type !== 'intersection' && node.type !== 'aisle' && node.type !== 'inbound' && node.type !== 'outbound' && node.type !== 'lift-blackbox')
+        .filter((node) => node.type !== 'storage' && node.type !== 'intersection' && node.type !== 'aisle' && !isLiftWorkcellDisplayNode(node))
         .map((node) => (
           <span className={`map-node ${node.type}`} key={node.id} style={geometry.project(node)}>
             {node.id.replace('inbound-lift-', 'in-').replace('outbound-lift-', 'out-')}
@@ -1827,7 +1829,7 @@ function AuthoritativeMap({
         if (!vehicle || !pickupNode || vehicle.loaded) {
           return null;
         }
-        if (pickupNode.type === 'inbound' || pickupNode.type === 'outbound' || pickupNode.type === 'lift-blackbox') {
+        if (isLiftWorkcellDisplayNode(pickupNode)) {
           return null;
         }
         return (
@@ -1843,7 +1845,7 @@ function AuthoritativeMap({
           type="button"
           onClick={() => onSelectVehicle(vehicle.id)}
           style={{
-            ...geometry.project(vehicle),
+            ...geometry.project(routeDisplayPointForVehicleState(vehicle, geometry.nodeMap)),
             transform: 'translate(-50%, -50%)'
           }}
           title={`${vehicle.id} ${vehicle.loaded ? 'loaded' : vehicle.taskId ? 'to pickup' : formatVehicleOperationalLabel(vehicle)} ${vehicle.currentNodeId}`}
@@ -2002,7 +2004,7 @@ function CanvasLiteMap({
       edges: scenario?.layout.edges ?? [],
       edgeTraversalKeys: createEdgeTraversalKeys(scenario?.layout.edges ?? []),
       nodeMap: new Map(nodes.map((node) => [node.id, node])),
-      aisleRects: staticScene ? createTrackAreaRects(staticScene, ['sideAisle', 'crossAisle', 'parkingConnector']) : [],
+      aisleRects: staticScene ? createTrackAreaRects(staticScene, ['sideAisle', 'crossAisle']) : [],
       connectorRects: staticScene ? createTrackAreaRects(staticScene, ['inboundConnector', 'outboundConnector']) : [],
       storageCellRects: staticScene ? createStorageCellRects(staticScene) : [],
       minX,
@@ -2231,9 +2233,11 @@ function CanvasLiteMap({
         fillMeterRect(rect, '#d6aa2f', 0.15);
       }
 
-      for (const rect of geometry.connectorRects) {
-        const color = rect.category === 'inboundConnector' ? FLOW_VISUAL_COLORS.inbound.hex : FLOW_VISUAL_COLORS.outbound.hex;
-        fillMeterRect(rect, color, 0.15);
+      if (layers.physics) {
+        for (const rect of geometry.connectorRects) {
+          const color = rect.category === 'inboundConnector' ? FLOW_VISUAL_COLORS.inbound.hex : FLOW_VISUAL_COLORS.outbound.hex;
+          fillMeterRect(rect, color, 0.15);
+        }
       }
 
       for (const rect of geometry.storageCellRects) {

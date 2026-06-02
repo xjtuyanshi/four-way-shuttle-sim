@@ -420,12 +420,8 @@ function createCadFloorTexture(
   ctx.lineWidth = 2;
   ctx.strokeRect(inset, inset, plotWidth, plotHeight);
 
-  for (const rect of createTrackAreaRects(staticScene, ['sideAisle', 'crossAisle', 'parkingConnector'])) {
+  for (const rect of createTrackAreaRects(staticScene, ['sideAisle', 'crossAisle'])) {
     fillMeterRect(rect, CAD_AISLE_FILL);
-  }
-
-  for (const rect of createTrackAreaRects(staticScene, ['inboundConnector', 'outboundConnector'])) {
-    fillMeterRect(rect, rect.category === 'inboundConnector' ? 'rgba(79, 143, 203, 0.16)' : 'rgba(226, 184, 75, 0.18)');
   }
 
   for (const storageField of getStorageFields(staticScene)) {
@@ -1389,12 +1385,13 @@ function createEdgeTraversalKeys(edges: ShuttleEdge[]): Set<string> {
 }
 
 function liftWorkcellRole(nodeId: string): 'inbound' | 'outbound' | null {
-  const match = /^lift-\d{2}-(inbound|outbound)(?:$|-)/.exec(nodeId);
+  const match = /^(?:lift|parking-lift)-\d{2}-(inbound|outbound)(?:$|-)/.exec(nodeId);
   return match ? match[1] as 'inbound' | 'outbound' : null;
 }
 
 function isLiftRouteDisplaySnapNode(nodeId: string): boolean {
-  return /^lift-\d{2}-(?:inbound|outbound)-(?:buffer-access|queue-access|queue-\d{2}-(?:access|entry-access|service-exit))$/.test(nodeId);
+  return /^lift-\d{2}-(?:inbound|outbound)-(?:buffer-access|queue-access|queue-\d{2}-(?:access|entry-access|service-exit))$/.test(nodeId) ||
+    /^parking-lift-\d{2}-(?:inbound|outbound)-queue(?:-\d{2})?$/.test(nodeId);
 }
 
 type TopLiftDisplayRailLevel = 'top-a' | 'top-b';
@@ -1850,15 +1847,8 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
     transparent: true,
     opacity: 0.72
   });
-  const parkingAreaMaterial = new THREE.MeshStandardMaterial({
-    color: 0x26313b,
-    roughness: 0.84,
-    metalness: 0.04,
-    transparent: true,
-    opacity: 0.64
-  });
-  for (const rect of createTrackAreaRects(visualStaticScene, ['sideAisle', 'crossAisle', 'parkingConnector'])) {
-    runtime.staticGroup.add(createTrackAreaBlock(rect, rect.category === 'parkingConnector' ? parkingAreaMaterial : aisleAreaMaterial));
+  for (const rect of createTrackAreaRects(visualStaticScene, ['sideAisle', 'crossAisle'])) {
+    runtime.staticGroup.add(createTrackAreaBlock(rect, aisleAreaMaterial));
   }
 
   runtime.networkGroup.add(createRouteNetwork(visualStaticScene));
@@ -1882,7 +1872,11 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
       continue;
     }
     if (node.type === 'parking') {
-      runtime.networkGroup.add(createParkingPad(node, parkingPadById.get(node.id)));
+      if (node.id.startsWith('parking-lift-')) {
+        runtime.networkGroup.add(createParkingPad(node, parkingPadById.get(node.id)));
+      } else {
+        runtime.staticGroup.add(createParkingPad(node, parkingPadById.get(node.id)));
+      }
       continue;
     }
     if (node.type === 'intersection' || node.type === 'aisle') {
