@@ -96,11 +96,6 @@ const TEXTURE_ASSETS = {
     normal: '/assets/textures/ambientcg-fabric001/normal.jpg',
     roughness: '/assets/textures/ambientcg-fabric001/roughness.jpg'
   },
-  rubber: {
-    color: '/assets/textures/ambientcg-rubber001/color.jpg',
-    normal: '/assets/textures/ambientcg-rubber001/normal.jpg',
-    roughness: '/assets/textures/ambientcg-rubber001/roughness.jpg'
-  },
   metalPlate: {
     color: '/assets/textures/polyhaven-metal-plate/diff.jpg',
     normal: '/assets/textures/polyhaven-metal-plate/normal.jpg',
@@ -472,17 +467,6 @@ function createCadFloorTexture(
     ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
   }
 
-  for (const node of scenario.layout.nodes) {
-    if (node.type === 'inbound' || node.type === 'outbound') {
-      const x = xToPx(node.x);
-      const z = zToPx(node.z);
-      ctx.fillStyle = node.type === 'inbound' ? '#9fd9ff' : '#f6d63e';
-      ctx.beginPath();
-      ctx.arc(x, z, 18, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = 8;
@@ -580,59 +564,6 @@ function createRouteGoalMarker(node: ShuttleNode, color: number, selected: boole
   return group;
 }
 
-function createConveyorTrackSegment(
-  from: { x: number; z: number },
-  to: { x: number; z: number },
-  options: {
-    accentColor: number;
-    beltMaterial: THREE.Material;
-    frameMaterial: THREE.Material;
-    rollerMaterial: THREE.Material;
-  }
-): THREE.Group | null {
-  const dx = to.x - from.x;
-  const dz = to.z - from.z;
-  const length = Math.hypot(dx, dz);
-  if (length < 0.001) {
-    return null;
-  }
-
-  const group = new THREE.Group();
-  group.position.set((from.x + to.x) / 2, 0, (from.z + to.z) / 2);
-  group.rotation.y = -Math.atan2(dz, dx);
-
-  const beltWidthM = 0.68;
-  const bed = new THREE.Mesh(new THREE.BoxGeometry(length, 0.052, beltWidthM), options.beltMaterial);
-  bed.position.y = 0.18;
-  bed.castShadow = true;
-  bed.receiveShadow = true;
-  group.add(bed);
-
-  for (const z of [-beltWidthM / 2 - 0.055, beltWidthM / 2 + 0.055]) {
-    const sideRail = new THREE.Mesh(new THREE.BoxGeometry(length, 0.09, 0.045), options.frameMaterial);
-    sideRail.position.set(0, 0.235, z);
-    sideRail.castShadow = true;
-    sideRail.receiveShadow = true;
-    group.add(sideRail);
-  }
-
-  const rollerCount = clamp(Math.floor(length / 0.28), 2, 16);
-  for (let index = 0; index < rollerCount; index += 1) {
-    const x = rollerCount === 1 ? 0 : -length / 2 + (length * index) / (rollerCount - 1);
-    const roller = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.032, beltWidthM * 0.82), options.rollerMaterial);
-    roller.position.set(x, 0.252, 0);
-    roller.castShadow = true;
-    group.add(roller);
-  }
-
-  const marker = new THREE.Mesh(new THREE.BoxGeometry(Math.min(0.28, length), 0.035, beltWidthM + 0.16), material(options.accentColor, 0.48, 0.18));
-  marker.position.set(length / 2 - Math.min(0.14, length / 2), 0.29, 0);
-  marker.castShadow = true;
-  group.add(marker);
-
-  return group;
-}
-
 function createTrackAreaBlock(rect: MeterRect, areaMaterial: THREE.Material): THREE.Mesh {
   const width = Math.max(rect.maxX - rect.minX, 0.08);
   const depth = Math.max(rect.maxZ - rect.minZ, 0.08);
@@ -657,9 +588,9 @@ function routeNetworkStyle(category: ShuttleStaticSceneTrackBed['category']): {
     case 'crossAisle':
       return { color: 0x4bd7c8, edgeColor: 0xd6fff8, opacity: 0.34, edgeOpacity: 0.64, widthM: 0.22, yM: 0.13 };
     case 'inboundConnector':
-      return { color: FLOW_VISUAL_COLORS.inbound.three, edgeColor: 0xc7ecff, opacity: 0.42, edgeOpacity: 0.7, widthM: 0.18, yM: 0.31 };
+      return { color: FLOW_VISUAL_COLORS.inbound.three, edgeColor: 0xc7ecff, opacity: 0.34, edgeOpacity: 0.56, widthM: 0.13, yM: 0.126 };
     case 'outboundConnector':
-      return { color: FLOW_VISUAL_COLORS.outbound.three, edgeColor: 0xffefb8, opacity: 0.44, edgeOpacity: 0.72, widthM: 0.18, yM: 0.31 };
+      return { color: FLOW_VISUAL_COLORS.outbound.three, edgeColor: 0xffefb8, opacity: 0.34, edgeOpacity: 0.56, widthM: 0.13, yM: 0.126 };
     case 'parkingConnector':
       return { color: 0x8fa1ad, edgeColor: 0xe4edf0, opacity: 0.28, edgeOpacity: 0.52, widthM: 0.16, yM: 0.118 };
     default:
@@ -918,99 +849,8 @@ function createBlockedCellMarker(cell: ShuttleStaticSceneBlockedCell): THREE.Gro
   return group;
 }
 
-function liftWorkcellNodeRole(nodeId: string): LoadFlowRole | null {
-  const match = /^lift-\d{2}-(inbound|outbound)(?:$|-)/.exec(nodeId);
-  return match ? match[1] as LoadFlowRole : null;
-}
-
 function isLiftServiceExitNode(nodeId: string): boolean {
   return /^lift-\d{2}-(?:inbound|outbound)-queue-\d{2}-service-exit$/.test(nodeId);
-}
-
-function createConveyor(node: ShuttleNode, color: number, beltMaterial: THREE.Material, frameMaterial: THREE.Material): THREE.Group {
-  const group = new THREE.Group();
-  group.position.set(node.x, 0, node.z);
-
-  const frame = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.065, 0.86), frameMaterial);
-  frame.position.y = 0.08;
-  frame.castShadow = true;
-  frame.receiveShadow = true;
-  group.add(frame);
-
-  const belt = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.034, 0.7), beltMaterial);
-  belt.position.y = 0.145;
-  belt.castShadow = true;
-  belt.receiveShadow = true;
-  group.add(belt);
-
-  const rollerMaterial = material(0xb8c5c8, 0.36, 0.3);
-  for (let index = 0; index < 4; index += 1) {
-    const z = -0.27 + index * 0.18;
-    const rollerBar = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.026, 0.032), rollerMaterial);
-    rollerBar.position.set(0, 0.19, z);
-    rollerBar.castShadow = true;
-    group.add(rollerBar);
-  }
-
-  const railMaterial = material(0x8fa1ad, 0.46, 0.22);
-  for (const x of [-0.37, 0.37]) {
-    const sideRail = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.09, 0.78), railMaterial);
-    sideRail.position.set(x, 0.21, 0);
-    sideRail.castShadow = true;
-    group.add(sideRail);
-  }
-
-  const dockPlate = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.05, 0.82), material(color, 0.58, 0.12));
-  dockPlate.position.set(node.type === 'inbound' ? 0.47 : -0.47, 0.22, 0);
-  group.add(dockPlate);
-
-  return group;
-}
-
-function createLiftServiceDock(
-  node: ShuttleNode,
-  role: LoadFlowRole,
-  beltMaterial: THREE.Material,
-  frameMaterial: THREE.Material
-): THREE.Group {
-  const group = new THREE.Group();
-  group.position.set(node.x, 0, node.z);
-
-  const accent = FLOW_VISUAL_COLORS[role].three;
-  const base = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.05, 0.68), frameMaterial);
-  base.position.y = 0.085;
-  base.castShadow = true;
-  base.receiveShadow = true;
-  group.add(base);
-
-  const belt = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.034, 0.54), beltMaterial);
-  belt.position.y = 0.152;
-  belt.castShadow = true;
-  belt.receiveShadow = true;
-  group.add(belt);
-
-  const railMaterial = material(0xa9b8c0, 0.44, 0.26);
-  for (const x of [-0.34, 0.34]) {
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.11, 0.64), railMaterial);
-    rail.position.set(x, 0.225, 0);
-    rail.castShadow = true;
-    group.add(rail);
-  }
-
-  const transferLip = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.04, 0.08), material(accent, 0.5, 0.18));
-  transferLip.position.set(0, 0.245, role === 'inbound' ? -0.32 : 0.32);
-  transferLip.castShadow = true;
-  group.add(transferLip);
-
-  const statusLight = new THREE.Mesh(
-    new THREE.BoxGeometry(0.18, 0.026, 0.18),
-    new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.92 })
-  );
-  statusLight.position.set(role === 'inbound' ? 0.25 : -0.25, 0.288, 0);
-  statusLight.renderOrder = 80;
-  group.add(statusLight);
-
-  return group;
 }
 
 function createLiftBlackboxPort(node: ShuttleNode, pad?: ShuttleStaticScenePad): THREE.Group {
@@ -1075,15 +915,6 @@ function createLiftBlackboxPort(node: ShuttleNode, pad?: ShuttleStaticScenePad):
     group.add(sideGuide);
   }
 
-  const rollerMaterial = material(0x96a3ad, 0.42, 0.28);
-  for (let index = 0; index < 5; index += 1) {
-    const x = -padLengthX * 0.28 + index * padLengthX * 0.14;
-    const rollerBar = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.026, padLengthZ * 0.56), rollerMaterial);
-    rollerBar.position.set(x, 0.292, 0);
-    rollerBar.castShadow = true;
-    group.add(rollerBar);
-  }
-
   const postMaterial = material(0xe6eef2, 0.38, 0.32);
   const postAccentMaterial = material(roleAccent, 0.5, 0.22);
   for (const x of [-padLengthX * 0.5, padLengthX * 0.5]) {
@@ -1114,23 +945,10 @@ function createLiftBlackboxPort(node: ShuttleNode, pad?: ShuttleStaticScenePad):
     group.add(beam);
   }
 
-  const forkMaterial = material(0xf0c84d, 0.48, 0.12);
-  for (const z of [-padLengthZ * 0.18, padLengthZ * 0.18]) {
-    const fork = new THREE.Mesh(new THREE.BoxGeometry(padLengthX * 0.54, 0.035, 0.038), forkMaterial);
-    fork.position.set(isInbound ? padLengthX * 0.08 : -padLengthX * 0.08, 0.325, z);
-    fork.castShadow = true;
-    group.add(fork);
-  }
-
   const portPlate = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.22, padLengthZ * 0.68), material(roleAccent, 0.54, 0.16));
   portPlate.position.set(isInbound ? padLengthX * 0.58 : -padLengthX * 0.58, 0.22, 0);
   portPlate.castShadow = true;
   group.add(portPlate);
-
-  const statusStrip = new THREE.Mesh(new THREE.BoxGeometry(padLengthX * 0.4, 0.035, 0.08), material(roleAccent, 0.5, 0.08));
-  statusStrip.position.set(0, 0.34, isInbound ? -padLengthZ * 0.52 : padLengthZ * 0.52);
-  statusStrip.castShadow = true;
-  group.add(statusStrip);
 
   return group;
 }
@@ -1976,34 +1794,6 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
 
   runtime.networkGroup.add(createRouteNetwork(visualStaticScene));
 
-  const conveyorBeltMaterial = texturedMaterial(TEXTURE_ASSETS.rubber, {
-    color: 0x22282d,
-    repeat: { x: 3.2, y: 0.9 },
-    roughness: 0.9,
-    metalness: 0.01,
-    normalScale: 0.16
-  });
-  const conveyorFrameMaterial = texturedMaterial(TEXTURE_ASSETS.metalPlate, {
-    color: 0x26323c,
-    repeat: { x: 1.8, y: 0.6 },
-    roughness: 0.62,
-    metalness: 0.28,
-    normalScale: 0.12
-  });
-  const conveyorRollerMaterial = material(0xc8d1d8, 0.36, 0.38);
-  for (const track of visualStaticScene.trackBeds.filter((candidate) => candidate.category === 'inboundConnector' || candidate.category === 'outboundConnector')) {
-    const [from, to] = trackBedEndpoints(track);
-    const segment = createConveyorTrackSegment(from, to, {
-      accentColor: track.category === 'inboundConnector' ? FLOW_VISUAL_COLORS.inbound.three : FLOW_VISUAL_COLORS.outbound.three,
-      beltMaterial: conveyorBeltMaterial,
-      frameMaterial: conveyorFrameMaterial,
-      rollerMaterial: conveyorRollerMaterial
-    });
-    if (segment) {
-      runtime.staticGroup.add(segment);
-    }
-  }
-
   for (const cell of visualStaticScene.blockedCells) {
     runtime.staticGroup.add(createBlockedCellMarker(cell));
   }
@@ -2012,21 +1802,14 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
     if (node.type === 'storage') {
       continue;
     }
-    if (node.type === 'inbound') {
-      runtime.staticGroup.add(createConveyor(node, FLOW_VISUAL_COLORS.inbound.three, conveyorBeltMaterial, conveyorFrameMaterial));
-      continue;
-    }
-    if (node.type === 'outbound') {
-      runtime.staticGroup.add(createConveyor(node, FLOW_VISUAL_COLORS.outbound.three, conveyorBeltMaterial, conveyorFrameMaterial));
+    if (node.type === 'inbound' || node.type === 'outbound') {
       continue;
     }
     if (node.type === 'lift-blackbox') {
       runtime.staticGroup.add(createLiftBlackboxPort(node, liftPadById.get(node.id)));
       continue;
     }
-    const serviceDockRole = isLiftServiceExitNode(node.id) ? liftWorkcellNodeRole(node.id) : null;
-    if (serviceDockRole) {
-      runtime.staticGroup.add(createLiftServiceDock(node, serviceDockRole, conveyorBeltMaterial, conveyorFrameMaterial));
+    if (isLiftServiceExitNode(node.id)) {
       continue;
     }
     if (node.type === 'parking') {
