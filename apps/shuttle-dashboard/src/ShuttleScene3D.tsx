@@ -1256,8 +1256,9 @@ function applyVehicleState(runtime: SceneRuntime, group: THREE.Group, state: Shu
     data.labelSprite.position.y = selected ? 0.86 : 0.74;
     data.labelSprite.scale.set(selected ? 0.72 : 0.62, selected ? 0.52 : 0.45, 1);
   }
-  data.targetPosition.set(vehicle.x, 0, vehicle.z);
-  data.targetYaw = vehicle.yaw;
+  const displayPose = routeDisplayPoseForVehicle(runtime, vehicle);
+  data.targetPosition.set(displayPose.x, 0, displayPose.z);
+  data.targetYaw = displayPose.yaw;
   data.loadedMesh.visible = vehicle.loaded;
   setPalletLoadColor(data.loadedMesh, FLOW_VISUAL_COLORS[resolveVehicleLoadFlowRole(state, vehicle)].three);
   data.safetyRing.visible = layers.physics;
@@ -1400,39 +1401,95 @@ function createEdgeTraversalKeys(edges: ShuttleEdge[]): Set<string> {
   return keys;
 }
 
+function liftWorkcellRole(nodeId: string): 'inbound' | 'outbound' | null {
+  const match = /^lift-\d{2}-(inbound|outbound)(?:$|-)/.exec(nodeId);
+  return match ? match[1] as 'inbound' | 'outbound' : null;
+}
+
 function isLiftRouteDisplaySnapNode(nodeId: string): boolean {
   return /^lift-\d{2}-(?:inbound|outbound)-(?:buffer-access|queue-access|queue-\d{2}-(?:access|entry-access|service-exit))$/.test(nodeId);
 }
 
-function isTopLiftDisplayRailNode(nodeId: string): boolean {
-  return /^column-top-[ab]-c\d+$/.test(nodeId) || /^(?:module-\d+|module-boundary-\d+)-spine-top-[ab]$/.test(nodeId);
+type TopLiftDisplayRailLevel = 'top-a' | 'top-b';
+
+function topLiftDisplayRailLevel(nodeId: string): TopLiftDisplayRailLevel | null {
+  const column = /^column-(top-[ab])-c\d+$/.exec(nodeId);
+  if (column) {
+    return column[1] as TopLiftDisplayRailLevel;
+  }
+  const spine = /^(?:module-\d+|module-boundary-\d+)-spine-(top-[ab])$/.exec(nodeId);
+  return spine ? spine[1] as TopLiftDisplayRailLevel : null;
 }
 
-function liftRouteDisplaySnapLevel(nodeId: string): 'top-a' | 'top-b' | null {
-  if (/^lift-\d{2}-(?:inbound|outbound)-/.test(nodeId)) {
+function isTopLiftDisplayRailNode(nodeId: string): boolean {
+  return topLiftDisplayRailLevel(nodeId) !== null;
+}
+
+function defaultLiftRouteDisplaySnapLevel(nodeId: string): TopLiftDisplayRailLevel | null {
+  const role = liftWorkcellRole(nodeId);
+  if (role === 'outbound') {
+    return 'top-a';
+  }
+  if (role === 'inbound') {
     return 'top-b';
   }
   return null;
 }
 
-function isTopLiftDisplayRailLevelNode(nodeId: string, level: 'top-a' | 'top-b'): boolean {
+function isTopLiftDisplayRailLevelNode(nodeId: string, level: TopLiftDisplayRailLevel): boolean {
   return new RegExp(`^column-${level}-c\\d+$`).test(nodeId) ||
     new RegExp(`^(?:module-\\d+|module-boundary-\\d+)-spine-${level}$`).test(nodeId);
+}
+
+function liftDisplayLevelForRouteNode(nodeIds: string[], index: number): TopLiftDisplayRailLevel | null {
+  const nodeId = nodeIds[index];
+  if (!nodeId || !isLiftRouteDisplaySnapNode(nodeId)) {
+    return null;
+  }
+
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const previousNodeId = nodeIds[cursor]!;
+    const railLevel = topLiftDisplayRailLevel(previousNodeId);
+    if (railLevel) {
+      return railLevel;
+    }
+    if (!isLiftRouteDisplaySnapNode(previousNodeId)) {
+      break;
+    }
+  }
+
+  for (let cursor = index + 1; cursor < nodeIds.length; cursor += 1) {
+    const nextNodeId = nodeIds[cursor]!;
+    const railLevel = topLiftDisplayRailLevel(nextNodeId);
+    if (railLevel) {
+      return railLevel;
+    }
+    if (!isLiftRouteDisplaySnapNode(nextNodeId)) {
+      break;
+    }
+  }
+
+  return defaultLiftRouteDisplaySnapLevel(nodeId);
+}
+
+function liftDisplayLevelsForRoute(nodeIds: string[]): Array<TopLiftDisplayRailLevel | null> {
+  return nodeIds.map((_, index) => liftDisplayLevelForRouteNode(nodeIds, index));
 }
 
 function routeDisplayPointForNode(
   runtime: SceneRuntime,
   nodeId: string,
-  fallback: { x: number; z: number }
+  fallback: { x: number; z: number },
+  preferredLevel: TopLiftDisplayRailLevel | null = null
 ): { x: number; z: number } {
   if (!isLiftRouteDisplaySnapNode(nodeId)) {
     return fallback;
   }
   let nearest: ShuttleNode | null = null;
   let nearestDistance = Number.POSITIVE_INFINITY;
-  const preferredLevel = liftRouteDisplaySnapLevel(nodeId);
+  const displayLevel = preferredLevel ?? defaultLiftRouteDisplaySnapLevel(nodeId);
   for (const node of runtime.nodeById.values()) {
-    if (preferredLevel ? !isTopLiftDisplayRailLevelNode(node.id, preferredLevel) : !isTopLiftDisplayRailNode(node.id)) {
+    if (displayLevel ? !isTopLiftDisplayRailLevelNode(node.id, displayLevel) : !isTopLiftDisplayRailNode(node.id)) {
       continue;
     }
     const distance = Math.hypot(node.x - fallback.x, node.z - fallback.z);
@@ -1444,7 +1501,12 @@ function routeDisplayPointForNode(
   return nearest ? { x: nearest.x, z: nearest.z } : fallback;
 }
 
-function routeDisplayPointForVehicle(runtime: SceneRuntime, vehicle: VehicleState): { x: number; z: number } {
+function routeDisplayPointForVehicle(
+  runtime: SceneRuntime,
+  vehicle: VehicleState,
+  currentPreferredLevel: TopLiftDisplayRailLevel | null = null,
+  targetPreferredLevel: TopLiftDisplayRailLevel | null = null
+): { x: number; z: number } {
   const rawPoint = { x: vehicle.x, z: vehicle.z };
   const currentNode = runtime.nodeById.get(vehicle.currentNodeId);
   const targetNode = vehicle.targetNodeId ? runtime.nodeById.get(vehicle.targetNodeId) : null;
@@ -1460,14 +1522,32 @@ function routeDisplayPointForVehicle(runtime: SceneRuntime, vehicle: VehicleStat
     const progress = lengthSq <= 1e-9
       ? 0
       : clamp(((rawPoint.x - currentNode.x) * dx + (rawPoint.z - currentNode.z) * dz) / lengthSq, 0, 1);
-    const displayFrom = routeDisplayPointForNode(runtime, currentNode.id, { x: currentNode.x, z: currentNode.z });
-    const displayTo = routeDisplayPointForNode(runtime, targetNode.id, { x: targetNode.x, z: targetNode.z });
+    const displayFrom = routeDisplayPointForNode(runtime, currentNode.id, { x: currentNode.x, z: currentNode.z }, currentPreferredLevel);
+    const displayTo = routeDisplayPointForNode(runtime, targetNode.id, { x: targetNode.x, z: targetNode.z }, targetPreferredLevel);
     return {
       x: displayFrom.x + (displayTo.x - displayFrom.x) * progress,
       z: displayFrom.z + (displayTo.z - displayFrom.z) * progress
     };
   }
-  return routeDisplayPointForNode(runtime, vehicle.currentNodeId, rawPoint);
+  return routeDisplayPointForNode(runtime, vehicle.currentNodeId, rawPoint, currentPreferredLevel);
+}
+
+function routeDisplayPoseForVehicle(runtime: SceneRuntime, vehicle: VehicleState): { x: number; z: number; yaw: number } {
+  const routeNodeIds = remainingRouteNodeIds(vehicle, vehicle.plannedRouteNodeIds);
+  const fallbackRouteNodeIds = routeNodeIds.length >= 2 ? routeNodeIds : remainingRouteNodeIds(vehicle, vehicle.routeNodeIds);
+  const displayLevels = liftDisplayLevelsForRoute(fallbackRouteNodeIds);
+  const point = routeDisplayPointForVehicle(runtime, vehicle, displayLevels[0] ?? null, displayLevels[1] ?? null);
+  const nextNodeId = fallbackRouteNodeIds[1];
+  const nextNode = nextNodeId ? runtime.nodeById.get(nextNodeId) : null;
+  if (nextNode) {
+    const nextPoint = routeDisplayPointForNode(runtime, nextNode.id, { x: nextNode.x, z: nextNode.z }, displayLevels[1] ?? null);
+    const dx = nextPoint.x - point.x;
+    const dz = nextPoint.z - point.z;
+    if (Math.hypot(dx, dz) > 1e-6) {
+      return { ...point, yaw: Math.atan2(-dz, dx) };
+    }
+  }
+  return { ...point, yaw: vehicle.yaw };
 }
 
 function routeSegmentsForNodeIds(
@@ -1478,18 +1558,20 @@ function routeSegmentsForNodeIds(
   if (nodeIds.length < 2) {
     return [];
   }
+  const displayLevels = liftDisplayLevelsForRoute(nodeIds);
   const segments: Array<{ from: { x: number; z: number }; to: { x: number; z: number } }> = [];
   let fromNodeId = nodeIds[0]!;
   let graphFromPoint = routeRenderStartPoint(runtime, vehicle);
-  let displayFromPoint = routeDisplayPointForVehicle(runtime, vehicle);
-  for (const toNodeId of nodeIds.slice(1)) {
+  let displayFromPoint = routeDisplayPointForVehicle(runtime, vehicle, displayLevels[0] ?? null, displayLevels[1] ?? null);
+  for (let index = 1; index < nodeIds.length; index += 1) {
+    const toNodeId = nodeIds[index]!;
     const toNode = runtime.nodeById.get(toNodeId);
     if (!toNode) {
       fromNodeId = toNodeId;
       continue;
     }
     const graphToPoint = { x: toNode.x, z: toNode.z };
-    const displayToPoint = routeDisplayPointForNode(runtime, toNodeId, graphToPoint);
+    const displayToPoint = routeDisplayPointForNode(runtime, toNodeId, graphToPoint, displayLevels[index] ?? null);
     if (
       runtime.edgeTraversalKeys.has(edgeTraversalKey(fromNodeId, toNodeId)) &&
       isAxisAlignedRouteSegment(graphFromPoint, graphToPoint) &&
@@ -1615,9 +1697,9 @@ function updateDynamicScene(
     let object = runtime.vehicleObjects.get(vehicle.id);
     if (!object) {
       object = createVehicleObject(scenario);
-      const displayPoint = routeDisplayPointForVehicle(runtime, vehicle);
-      object.position.set(displayPoint.x, 0, displayPoint.z);
-      object.rotation.y = 0;
+      const displayPose = routeDisplayPoseForVehicle(runtime, vehicle);
+      object.position.set(displayPose.x, 0, displayPose.z);
+      object.rotation.y = displayPose.yaw;
       runtime.vehicleObjects.set(vehicle.id, object);
       runtime.vehicleGroup.add(object);
     }
@@ -1635,7 +1717,7 @@ function updateDynamicScene(
     const loads = state.loads.filter((load) => load.nodeId && load.state !== 'carried');
     loads.forEach((load, index) => {
       const node = load.nodeId ? runtime.nodeById.get(load.nodeId) : null;
-      if (node) {
+      if (node && !isLiftWorkcellNode(node)) {
         runtime.loadGroup.add(createLoadMesh(state, load, node, index));
       }
     });
@@ -2186,19 +2268,22 @@ export function ShuttleScene3D({
       const newSnap: VehicleSnapshot = {
         simTime: visualState.simTimeSec,
         wallMs: performance.now(),
-        vehicles: new Map(visualState.vehicles.map((vehicle) => [
-          vehicle.id,
-          {
-            x: vehicle.x,
-            z: vehicle.z,
-            yaw: vehicle.yaw,
-            currentEdgeId: vehicle.currentEdgeId,
-            currentNodeId: vehicle.currentNodeId,
-            targetNodeId: vehicle.targetNodeId,
-            taskId: vehicle.taskId,
-            loaded: vehicle.loaded
-          }
-        ]))
+        vehicles: new Map(visualState.vehicles.map((vehicle) => {
+          const displayPose = routeDisplayPoseForVehicle(runtime, vehicle);
+          return [
+            vehicle.id,
+            {
+              x: displayPose.x,
+              z: displayPose.z,
+              yaw: displayPose.yaw,
+              currentEdgeId: vehicle.currentEdgeId,
+              currentNodeId: vehicle.currentNodeId,
+              targetNodeId: vehicle.targetNodeId,
+              taskId: vehicle.taskId,
+              loaded: vehicle.loaded
+            }
+          ];
+        }))
       };
       snapshotsRef.current = appendVehicleSnapshot(snapshotsRef.current, newSnap);
     }
