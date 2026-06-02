@@ -12,7 +12,9 @@ import {
   hashEngineSnapshot,
   motionProfileAt,
   runFixedStep,
+  staticObstacleFootprintViolations,
   summarizeScenarioStaticSceneContract,
+  topLiftWorkcellRouteContractViolations,
   verticalStorageFootprintEdgeViolations
 } from './index.js';
 
@@ -917,6 +919,136 @@ describe('shuttle phase 0 SimCore', () => {
     expect(vehicle?.targetNodeId).toBe('module-01-spine-top-b');
   });
 
+  it('clears an unready inbound pickup stop into adjacent storage even when that column is active', () => {
+    const scenario = createInboundMvpBaselineScenario({
+      vehicles: { count: 3 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({ id: 'blocked-queue-earlier-load', state: 'waiting', nodeId: 'lift-01-inbound-buffer-03', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'blocked-queue-later-load', state: 'waiting', nodeId: 'lift-01-inbound-buffer-02', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'blocked-queue-earlier-pickup',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-b-c07',
+      dropoffNodeId: 'storage-r14-c07',
+      loadId: 'blocked-queue-earlier-load',
+      vehicleId: 'SH-02',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'blocked-queue-later-pickup',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 1,
+      assignedAtSec: 1,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-b-c07',
+      dropoffNodeId: 'storage-r13-c07',
+      loadId: 'blocked-queue-later-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', ['column-top-b-c07']);
+    sim.setVehicleTaskForTest('SH-01', 'blocked-queue-later-pickup', false);
+    sim.setVehicleRouteForTest('SH-03', ['module-01-spine-top-b', 'column-top-b-c08']);
+    sim.setVehicleTaskForTest('SH-03', null, false);
+
+    const state = sim.step(0.2);
+    const vehicle = state.vehicles.find((candidate) => candidate.id === 'SH-01');
+    const reroute = sim.getEventLog().find((event) =>
+      event.vehicleId === 'SH-01' &&
+      event.eventType === 'route-replanned' &&
+      event.reason === 'inbound-pickup-clears-earlier-load'
+    );
+
+    expect(reroute?.details.route).toBe('column-top-b-c07>storage-r01-c07');
+    expect(reroute?.details.route).not.toContain('column-top-a-c07');
+    expect(vehicle?.waitReason).not.toBe('inbound-source-not-at-pickup');
+    expect(vehicle?.targetNodeId).toBe('storage-r01-c07');
+  });
+
+  it('moves a later inbound queue blocker into storage so the earlier pickup can pass', () => {
+    const scenario = createInboundMvpBaselineScenario({
+      vehicles: { count: 6 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({ id: 'queue-block-earlier-load', state: 'waiting', nodeId: 'lift-01-inbound-buffer-03', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'queue-block-later-load', state: 'waiting', nodeId: 'lift-01-inbound-buffer-02', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'queue-block-earlier-pickup',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-b-c07',
+      dropoffNodeId: 'storage-r14-c01',
+      loadId: 'queue-block-earlier-load',
+      vehicleId: 'SH-03',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'queue-block-later-pickup',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 1,
+      assignedAtSec: 1,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-b-c07',
+      dropoffNodeId: 'storage-r13-c01',
+      loadId: 'queue-block-later-load',
+      vehicleId: 'SH-06',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-03', [
+      'column-top-b-c09',
+      'column-top-b-c08',
+      'module-01-spine-top-b',
+      'column-top-b-c07'
+    ]);
+    sim.setVehicleTaskForTest('SH-03', 'queue-block-earlier-pickup', false);
+    sim.setVehicleRouteForTest('SH-06', ['column-top-b-c08']);
+    sim.setVehicleTaskForTest('SH-06', 'queue-block-later-pickup', false);
+
+    const state = sim.step(0.2);
+    const laterVehicle = state.vehicles.find((candidate) => candidate.id === 'SH-06');
+    const reroute = sim.getEventLog().find((event) =>
+      event.vehicleId === 'SH-06' &&
+      event.eventType === 'route-replanned' &&
+      event.reason === 'agent-refresh-side-yield'
+    );
+
+    expect(reroute?.details.route).toBe('column-top-b-c08>storage-r01-c08');
+    expect(laterVehicle?.targetNodeId).toBe('storage-r01-c08');
+    expect(laterVehicle?.waitReason).toBeNull();
+  });
+
   it('keeps short top-lift side-yields from creating early traffic failures', () => {
     const sim = new ShuttleSimCore(createInboundMvpBaselineScenario());
 
@@ -944,7 +1076,7 @@ describe('shuttle phase 0 SimCore', () => {
       assignedAtSec: 0,
       startedAtSec: 0,
       completedAtSec: null,
-      pickupNodeId: 'lift-02-inbound-buffer-03',
+      pickupNodeId: 'lift-02-inbound-queue-01-service-exit',
       dropoffNodeId: 'storage-r02-c16',
       loadId: 'loaded-drop-load',
       vehicleId: 'SH-01',
@@ -1663,7 +1795,7 @@ describe('shuttle phase 0 SimCore', () => {
 
     const route = internals.agentRefreshLoadedOutboundRouteToDropoff('storage-r09-c15', {
       kind: 'outbound',
-      dropoffNodeId: 'lift-02-outbound-buffer-03'
+      dropoffNodeId: 'lift-02-outbound-queue-01-service-exit'
     });
 
     expect(route?.slice(0, 7)).toEqual([
@@ -1676,10 +1808,9 @@ describe('shuttle phase 0 SimCore', () => {
       'column-bottom-a-c15'
     ]);
     expect(route).not.toContain('lift-02-outbound-queue-access');
-    expect(route?.slice(-2)).toEqual([
-      'lift-02-outbound-buffer-access',
-      'lift-02-outbound-buffer-03'
-    ]);
+    expect(route?.at(-1)).toBe('lift-02-outbound-queue-01-service-exit');
+    expect(route).not.toContain('lift-02-outbound-buffer-access');
+    expect(route).not.toContain('lift-02-outbound-buffer-03');
     expect(route).not.toContain('storage-r08-c15');
   });
 
@@ -1760,7 +1891,7 @@ describe('shuttle phase 0 SimCore', () => {
       startedAtSec: 0,
       completedAtSec: null,
       pickupNodeId: 'storage-r14-c01',
-      dropoffNodeId: 'lift-01-outbound-buffer-03',
+      dropoffNodeId: 'lift-01-outbound-queue-01-service-exit',
       loadId: 'front-load',
       vehicleId: 'SH-01',
       replanCount: 0,
@@ -3146,7 +3277,7 @@ describe('shuttle phase 0 SimCore', () => {
       assignedAtSec: 0,
       startedAtSec: 0,
       completedAtSec: null,
-      pickupNodeId: 'lift-02-inbound-buffer-03',
+      pickupNodeId: 'lift-02-inbound-queue-01-service-exit',
       dropoffNodeId: 'storage-r10-c15',
       loadId: 'inbound-lower-load',
       vehicleId: 'SH-01',
@@ -3293,7 +3424,7 @@ describe('shuttle phase 0 SimCore', () => {
       assignedAtSec: null,
       startedAtSec: null,
       completedAtSec: null,
-      pickupNodeId: 'lift-02-inbound-buffer-03',
+      pickupNodeId: 'lift-02-inbound-queue-01-service-exit',
       dropoffNodeId: 'storage-r01-c01',
       loadId: 'return-column-load-01',
       vehicleId: null,
@@ -3316,7 +3447,7 @@ describe('shuttle phase 0 SimCore', () => {
     }
     const assignedVehicle = sim.getState().vehicles[0];
     expect(assignedVehicle?.taskId).toBe('return-column-task-01');
-    expect(assignedVehicle?.routeNodeIds.at(-1)).toBe('lift-02-inbound-buffer-03');
+    expect(assignedVehicle?.routeNodeIds.at(-1)).toBe('lift-02-inbound-queue-01-service-exit');
   });
 
   it('lets empty top-lift inbound pickup shuttles pass through stored columns after a side yield', () => {
@@ -3351,7 +3482,7 @@ describe('shuttle phase 0 SimCore', () => {
       assignedAtSec: 0,
       startedAtSec: null,
       completedAtSec: null,
-      pickupNodeId: 'lift-01-inbound-buffer-03',
+      pickupNodeId: 'lift-01-inbound-queue-01-service-exit',
       dropoffNodeId: 'storage-r07-c03',
       loadId: 'pickup-load',
       vehicleId: 'SH-01',
@@ -3370,7 +3501,7 @@ describe('shuttle phase 0 SimCore', () => {
     const route = internals.agentRouteToGoal(vehicle, task, task.pickupNodeId);
 
     expect(route[0]).toBe('column-middle-c02');
-    expect(route.at(-1)).toBe('lift-01-inbound-buffer-03');
+    expect(route.at(-1)).toBe('lift-01-inbound-queue-01-service-exit');
     expect(route.some((nodeId) => /^storage-r\d+-c02$/.test(nodeId))).toBe(true);
   });
 
@@ -4128,7 +4259,7 @@ describe('shuttle phase 0 SimCore', () => {
       startedAtSec: null,
       completedAtSec: null,
       pickupNodeId: 'storage-r11-c01',
-      dropoffNodeId: 'lift-01-outbound-buffer-03',
+      dropoffNodeId: 'lift-01-outbound-queue-01-service-exit',
       loadId: 'outbound-c01-load',
       vehicleId: 'SH-02',
       replanCount: 0,
@@ -4487,7 +4618,7 @@ describe('shuttle phase 0 SimCore', () => {
       startedAtSec: 0,
       completedAtSec: null,
       pickupNodeId: 'storage-r06-c03',
-      dropoffNodeId: 'lift-01-outbound-buffer-03',
+      dropoffNodeId: 'lift-01-outbound-queue-01-service-exit',
       loadId: 'outbound-middle-yield-load',
       vehicleId: 'SH-01',
       replanCount: 0,
@@ -6309,6 +6440,54 @@ describe('shuttle phase 0 SimCore', () => {
       'column-middle-c07'
     ]);
     expect(route).not.toContain('column-bottom-b-c07');
+  });
+
+  it('enforces top-lift workcell route contracts for service approach and clear-through order', () => {
+    expect(topLiftWorkcellRouteContractViolations([
+      'lift-01-inbound-buffer-03',
+      'lift-01-inbound-queue-01-service-exit',
+      'lift-01-inbound-queue-01-entry-access',
+      'column-top-b-c07'
+    ], {
+      flow: 'inbound-loaded-departure',
+      expectedLiftNodeId: 'lift-01-inbound',
+      expectedKind: 'inbound'
+    })).toEqual([]);
+
+    expect(topLiftWorkcellRouteContractViolations([
+      'lift-01-outbound-queue-01-service-exit',
+      'lift-01-outbound-queue-02-service-exit',
+      'lift-01-outbound-queue-03-service-exit',
+      'lift-01-outbound-queue-03-entry-access',
+      'column-top-b-c08'
+    ], {
+      flow: 'outbound-clear-through',
+      expectedLiftNodeId: 'lift-01-outbound',
+      expectedKind: 'outbound'
+    })).toEqual([]);
+
+    expect(topLiftWorkcellRouteContractViolations([
+      'lift-01-inbound-queue-01-service-exit',
+      'lift-01-inbound-queue-01-access',
+      'parking-lift-01-inbound-queue'
+    ], {
+      flow: 'inbound-loaded-departure',
+      expectedLiftNodeId: 'lift-01-inbound',
+      expectedKind: 'inbound'
+    }).map((violation) => violation.code)).toContain('inbound-loaded-reentered-queue');
+
+    expect(topLiftWorkcellRouteContractViolations([
+      'column-top-a-c08',
+      'lift-01-outbound-buffer-access',
+      'lift-01-outbound-queue-01-service-exit'
+    ], {
+      flow: 'outbound-loaded-approach',
+      expectedLiftNodeId: 'lift-01-outbound',
+      expectedKind: 'outbound'
+    }).map((violation) => violation.code)).toEqual(expect.arrayContaining([
+      'outbound-loaded-entered-conveyor',
+      'outbound-loaded-service-without-entry'
+    ]));
   });
 
   it('routes loaded inbound top-lift cross travel on top-b before entering the target column', () => {
@@ -11270,6 +11449,85 @@ describe('shuttle phase 0 SimCore', () => {
     expect(contract.trackBeds.some((track) => track.id === 'cad-blocked-gap-01')).toBe(false);
   });
 
+  it('rejects route edges whose swept square shuttle footprint intersects blocked structural cells', () => {
+    const base = createDefaultShuttleScenario();
+    const edge = base.layout.edges.find((candidate) => candidate.id === 'main-north-01-main-north-02')!;
+    const from = base.layout.nodes.find((node) => node.id === edge.from)!;
+    const to = base.layout.nodes.find((node) => node.id === edge.to)!;
+    const scenario: ShuttleScenario = {
+      ...base,
+      layout: {
+        ...base.layout,
+        calibrationProfile: {
+          ...base.layout.calibrationProfile!,
+          id: 'blocked-edge-footprint-test-profile',
+          label: 'Blocked edge footprint test profile',
+          status: 'partial-cad',
+          sourceDescription: 'Test profile with a structural keepout placed on a route edge.',
+          blockedCells: [
+            {
+              id: 'cad-structural-main-north-edge',
+              role: 'structural',
+              xM: (from.x + to.x) / 2,
+              yM: 0,
+              zM: (from.z + to.z) / 2,
+              lengthXM: 0.25,
+              lengthZM: 0.25,
+              source: 'cad',
+              confidence: 'high'
+            }
+          ]
+        }
+      }
+    };
+
+    expect(staticObstacleFootprintViolations(base)).toEqual([]);
+    expect(staticObstacleFootprintViolations(scenario)).toContainEqual({
+      resourceType: 'edge',
+      resourceId: 'main-north-01-main-north-02',
+      blockedCellId: 'cad-structural-main-north-edge'
+    });
+    expect(() => new ShuttleSimCore(scenario)).toThrow(/blocked cell cad-structural-main-north-edge/);
+  });
+
+  it('rejects queue and yield-pocket nodes whose shuttle footprint intersects blocked structural cells', () => {
+    const base = createInboundOutboundDemoScenario();
+    const queueNode = base.layout.nodes.find((node) => node.id === 'parking-lift-01-inbound-queue')!;
+    const scenario: ShuttleScenario = {
+      ...base,
+      layout: {
+        ...base.layout,
+        calibrationProfile: {
+          ...base.layout.calibrationProfile!,
+          label: 'Blocked queue footprint test profile',
+          status: 'partial-cad',
+          sourceDescription: 'Test profile with a structural keepout placed on a lift queue pocket.',
+          blockedCells: [
+            {
+              id: 'cad-structural-inbound-queue-pocket',
+              role: 'structural',
+              xM: queueNode.x,
+              yM: 0,
+              zM: queueNode.z,
+              lengthXM: 0.25,
+              lengthZM: 0.25,
+              source: 'cad',
+              confidence: 'high'
+            }
+          ]
+        }
+      }
+    };
+
+    expect(staticObstacleFootprintViolations(base)).toEqual([]);
+    expect(staticObstacleFootprintViolations(scenario)).toContainEqual({
+      resourceType: 'node',
+      resourceId: 'parking-lift-01-inbound-queue',
+      blockedCellId: 'cad-structural-inbound-queue-pocket'
+    });
+    expect(() => new ShuttleSimCore(scenario)).toThrow(/blocked cell cad-structural-inbound-queue-pocket/);
+  });
+
   it('marks the static scene ready for industrial throughput claims only with a fully verified calibration profile', () => {
     const contract = summarizeScenarioStaticSceneContract(createDefaultShuttleScenario({
       layoutProfile: {
@@ -13544,5 +13802,25 @@ describe('shuttle phase 0 SimCore', () => {
     expect(sim.setParam('/physicsParams/loadedSpeedMps', 2).accepted).toBe(true);
     const fasterLoaded = sim.getState().kpis.theoreticalCapacity!;
     expect(fasterLoaded.singleShuttlePph).toBeGreaterThan(baseline.singleShuttlePph);
+  });
+
+  it('reports top-lift theoretical capacity as four physical bounds instead of the legacy inbound-only formula', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario());
+    const theory = sim.getState().kpis.theoreticalCapacity!;
+
+    expect(theory.kind).toBe('top-lift-column');
+    expect(theory.formulaVersion).toBe('top-lift-four-bound-v1');
+    expect(theory.bounds.map((bound) => bound.kind).sort()).toEqual([
+      'column-resource',
+      'lift-port',
+      'network-min-cut',
+      'shuttle-cycle'
+    ]);
+    expect(theory.limitingBound).toBe(theory.bounds[0]!.kind);
+    expect(theory.fleetPph).toBe(theory.bounds[0]!.pph);
+    expect(theory.singleShuttlePph).toBeCloseTo(theory.fleetPph / 8, 3);
+    expect(theory.achievedOutboundPct).toBe(0);
+    expect(theory.achievedTotalPct).toBe(0);
+    expect(theory.assumptions.join(' ')).toContain('top-lift four-bound estimate');
   });
 });

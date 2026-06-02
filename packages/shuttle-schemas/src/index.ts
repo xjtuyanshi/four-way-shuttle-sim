@@ -493,11 +493,14 @@ export const KpiSnapshotSchema = z.object({
   livelockCount: z.number().int().nonnegative(),
   eventLogHash: z.string(),
   theoreticalCapacity: z.object({
-    kind: z.literal('inbound'),
+    kind: z.enum(['inbound', 'top-lift-column']),
+    formulaVersion: z.enum(['inbound-ideal-v1', 'top-lift-four-bound-v1']).default('inbound-ideal-v1'),
     shuttleCount: z.number().int().nonnegative(),
     singleShuttlePph: z.number().nonnegative(),
     fleetPph: z.number().nonnegative(),
     achievedInboundPct: z.number().nonnegative(),
+    achievedOutboundPct: z.number().nonnegative().default(0),
+    achievedTotalPct: z.number().nonnegative().default(0),
     idealCycleSec: z.number().nonnegative(),
     loadedTravelSec: z.number().nonnegative(),
     emptyReturnSec: z.number().nonnegative(),
@@ -505,6 +508,14 @@ export const KpiSnapshotSchema = z.object({
     averageLoadedDistanceM: z.number().nonnegative(),
     averageEmptyReturnDistanceM: z.number().nonnegative(),
     averageVehicleUtilizationPct: z.number().nonnegative(),
+    limitingBound: z.enum(['lift-port', 'shuttle-cycle', 'column-resource', 'network-min-cut']).optional(),
+    bounds: z.array(z.object({
+      kind: z.enum(['lift-port', 'shuttle-cycle', 'column-resource', 'network-min-cut']),
+      pph: z.number().nonnegative(),
+      cycleSec: z.number().nonnegative().optional(),
+      utilizationBasis: z.string().optional(),
+      assumptions: z.array(z.string()).default([])
+    })).default([]),
     assumptions: z.array(z.string())
   }).optional()
 });
