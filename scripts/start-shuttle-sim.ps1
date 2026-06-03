@@ -55,13 +55,7 @@ if (-not (Wait-Url $DashboardUrl 90)) {
   throw 'Dashboard did not become ready on http://localhost:5180.'
 }
 
-Write-Host 'Loading default all-inbound stress scenario...'
-Push-Location $RepoRoot
-try {
-  corepack pnpm exec tsx scripts/load-all-inbound-stress.ts
-} finally {
-  Pop-Location
-}
+Write-Host 'Using API default inbound + outbound column demo scenario.'
 
 Write-Host "Opening $DashboardUrl"
 Start-Process $DashboardUrl | Out-Null

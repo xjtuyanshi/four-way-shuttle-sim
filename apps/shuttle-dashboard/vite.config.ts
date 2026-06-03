@@ -7,7 +7,8 @@ const wsTarget = apiTarget.replace(/^http/, 'ws');
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 5179,
+    port: 5180,
+    strictPort: true,
     proxy: {
       '/api': apiTarget,
       '/shuttle-ws': {
@@ -18,6 +19,7 @@ export default defineConfig({
   },
   preview: {
     port: 5180,
+    strictPort: true,
     proxy: {
       '/api': apiTarget,
       '/shuttle-ws': {

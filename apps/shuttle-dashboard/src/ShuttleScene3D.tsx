@@ -344,6 +344,12 @@ function calibrationDimensionValue(staticScene: ShuttleStaticSceneContract, key:
   return staticScene.layoutCalibrationProfile?.dimensions.find((dimension) => dimension.key === key)?.valueM ?? null;
 }
 
+function liftPadRole(pad: ShuttleStaticScenePad): LoadFlowRole | null {
+  if (pad.category === 'inboundLift') return 'inbound';
+  if (pad.category === 'outboundLift') return 'outbound';
+  return null;
+}
+
 export function resolveCadDimensionAnnotations(staticScene: ShuttleStaticSceneContract): CadDimensionAnnotations {
   const rows = [...new Set(staticScene.storageCells.map((cell) => cell.zM))].sort((left, right) => left - right);
   const northInnerRowZ = rows.filter((z) => z < 0).at(-1);
@@ -439,6 +445,22 @@ function createCadFloorTexture(
 
   for (const rect of createStorageCellRects(staticScene)) {
     drawMeterRect(rect, 'rgba(157, 108, 255, 0.16)', 'rgba(184, 142, 255, 0.54)');
+  }
+
+  for (const pad of staticScene.liftPads) {
+    const role = liftPadRole(pad);
+    if (!role) continue;
+    const rect = rectForMeterBox(pad.xM, pad.zM, pad.lengthXM * 1.22, pad.lengthZM * 1.38);
+    ctx.fillStyle = role === 'inbound' ? 'rgba(79, 143, 203, 0.32)' : 'rgba(226, 184, 75, 0.36)';
+    ctx.strokeStyle = role === 'inbound' ? 'rgba(184, 226, 255, 0.9)' : 'rgba(255, 231, 158, 0.94)';
+    ctx.lineWidth = 5;
+    ctx.fillRect(rect.left, rect.top, rect.width, rect.height);
+    ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
+    ctx.fillStyle = role === 'inbound' ? '#dff4ff' : '#fff0bd';
+    ctx.font = '700 34px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(role === 'inbound' ? 'LIFT IN' : 'LIFT OUT', rect.left + rect.width / 2, rect.top + rect.height / 2);
   }
 
   for (const cell of staticScene.blockedCells) {
@@ -842,8 +864,8 @@ function createLiftBlackboxPort(node: ShuttleNode, pad?: ShuttleStaticScenePad):
 
   const isInbound = node.liftKind === 'inbound';
   const roleAccent = isInbound ? FLOW_VISUAL_COLORS.inbound.three : FLOW_VISUAL_COLORS.outbound.three;
-  const padLengthX = pad?.lengthXM ?? 1.5;
-  const padLengthZ = pad?.lengthZM ?? 1.15;
+  const padLengthX = Math.max(pad?.lengthXM ?? 1.5, 3.05);
+  const padLengthZ = Math.max(pad?.lengthZM ?? 1.15, 2.16);
 
   const base = new THREE.Mesh(new THREE.BoxGeometry(padLengthX * 1.08, 0.05, padLengthZ * 1.12), material(0x111820, 0.86, 0.08));
   base.position.y = 0.025;
@@ -933,6 +955,16 @@ function createLiftBlackboxPort(node: ShuttleNode, pad?: ShuttleStaticScenePad):
   portPlate.castShadow = true;
   group.add(portPlate);
 
+  const liftLabel = createTextBillboard(isInbound ? 'IN LIFT' : 'OUT LIFT', {
+    background: isInbound ? 'rgba(24, 86, 128, 0.96)' : 'rgba(130, 91, 18, 0.96)',
+    foreground: '#f8fbff',
+    border: isInbound ? 'rgba(201, 236, 255, 0.95)' : 'rgba(255, 235, 164, 0.95)',
+    scale: { x: 2.7, y: 0.96 },
+    y: 1.52
+  });
+  liftLabel.position.z = -padLengthZ * 0.64;
+  group.add(liftLabel);
+
   return group;
 }
 
@@ -961,6 +993,39 @@ function createLiftBufferPad(node: ShuttleNode): THREE.Group {
     rail.castShadow = true;
     group.add(rail);
   }
+
+  return group;
+}
+
+function createLiftServiceDockMarker(point: { x: number; z: number }, role: LoadFlowRole): THREE.Group {
+  const group = new THREE.Group();
+  group.position.set(point.x, 0, point.z);
+  const accent = FLOW_VISUAL_COLORS[role].three;
+
+  const base = new THREE.Mesh(
+    new THREE.BoxGeometry(1.08, 0.062, 0.68),
+    material(role === 'inbound' ? 0x17344c : 0x47371a, 0.7, 0.08)
+  );
+  base.position.y = 0.075;
+  base.receiveShadow = true;
+  group.add(base);
+
+  const halo = new THREE.Mesh(
+    new THREE.RingGeometry(0.44, 0.55, 36),
+    new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.74, side: THREE.DoubleSide })
+  );
+  halo.rotation.x = -Math.PI / 2;
+  halo.position.y = 0.135;
+  group.add(halo);
+
+  const label = createTextBillboard(role === 'inbound' ? 'P' : 'D', {
+    background: flowRgba(role, 0.96),
+    foreground: role === 'outbound' ? '#171207' : '#f8fbff',
+    border: role === 'outbound' ? 'rgba(255, 238, 180, 0.95)' : 'rgba(192, 226, 255, 0.95)',
+    scale: { x: 0.58, y: 0.44 },
+    y: 0.68
+  });
+  group.add(label);
 
   return group;
 }
@@ -999,11 +1064,12 @@ function createTextBillboard(
   context.strokeStyle = options.border ?? 'rgba(255,255,255,0.82)';
   context.lineWidth = 6;
   context.beginPath();
-  context.roundRect(20, 12, 88, 72, 18);
+  context.roundRect(10, 12, 108, 72, 18);
   context.fill();
   context.stroke();
   context.fillStyle = options.foreground ?? '#f8fbff';
-  context.font = '700 46px Arial, sans-serif';
+  const fontSize = text.length > 8 ? 20 : text.length > 4 ? 24 : 46;
+  context.font = `800 ${fontSize}px Arial, sans-serif`;
   context.textAlign = 'center';
   context.textBaseline = 'middle';
   context.fillText(text, 64, 50);
@@ -1023,9 +1089,9 @@ function createTextBillboard(
   return sprite;
 }
 
-function createTaskAssignmentMarker(node: ShuttleNode, label: string, role: LoadFlowRole): THREE.Group {
+function createTaskAssignmentMarker(point: { x: number; z: number }, label: string, role: LoadFlowRole): THREE.Group {
   const group = new THREE.Group();
-  group.position.set(node.x, 0, node.z);
+  group.position.set(point.x, 0, point.z);
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(0.52, 0.66, 40),
     new THREE.MeshBasicMaterial({ color: FLOW_VISUAL_COLORS[role].three, transparent: true, opacity: 0.88, side: THREE.DoubleSide, depthTest: false, depthWrite: false })
@@ -1796,10 +1862,14 @@ function updateDynamicScene(
       if (!vehicle || !pickupNode || vehicle.loaded || task.state === 'completed' || task.state === 'failed') {
         continue;
       }
-      if (selectedVehicleId !== vehicle.id || isLiftWorkcellNode(pickupNode)) {
+      if (selectedVehicleId !== vehicle.id) {
         continue;
       }
-      runtime.routeGroup.add(createTaskAssignmentMarker(pickupNode, vehicleDisplayNumber(vehicle.id), task.kind));
+      runtime.routeGroup.add(createTaskAssignmentMarker(
+        isLiftWorkcellNode(pickupNode) ? pickupNode : routeDisplayPointForNode(runtime, pickupNode.id, pickupNode),
+        vehicleDisplayNumber(vehicle.id),
+        task.kind
+      ));
     }
 
     for (const vehicle of state?.vehicles ?? []) {
@@ -1900,6 +1970,10 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
       continue;
     }
     if (isLiftServiceExitNode(node.id)) {
+      runtime.staticGroup.add(createLiftServiceDockMarker(
+        node,
+        liftWorkcellRole(node.id) ?? 'inbound'
+      ));
       continue;
     }
     if (node.type === 'parking') {

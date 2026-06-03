@@ -1997,19 +1997,20 @@ input[type="range"] {
   display: grid;
   place-items: center;
   pointer-events: none;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 900;
   letter-spacing: 0;
 }
 
 .map-lift-equipment.lift-main {
-  width: 42px;
-  height: 22px;
+  z-index: 7;
+  width: 92px;
+  height: 32px;
   border-radius: 5px;
   color: #edf7fb;
   background: rgba(18, 28, 36, 0.94);
-  border: 1px solid rgba(237, 247, 251, 0.38);
-  box-shadow: 0 0 0 2px rgba(18, 28, 36, 0.38);
+  border: 2px solid rgba(237, 247, 251, 0.62);
+  box-shadow: 0 0 0 2px rgba(18, 28, 36, 0.68), 0 0 22px rgba(130, 199, 255, 0.28);
 }
 
 .map-lift-equipment.lift-main.flow-inbound {
@@ -2023,6 +2024,7 @@ input[type="range"] {
 }
 
 .map-lift-equipment.lift-buffer {
+  z-index: 4;
   width: 10px;
   height: 10px;
   border-radius: 3px;
@@ -2042,12 +2044,15 @@ input[type="range"] {
 }
 
 .map-lift-equipment.lift-dock {
-  z-index: 6;
-  width: 10px;
-  height: 10px;
+  z-index: 8;
+  width: 18px;
+  height: 14px;
   border-radius: 3px;
   background: #101922;
   border: 2px solid currentColor;
+  color: #edf7fb;
+  font-size: 8px;
+  box-shadow: 0 0 14px currentColor;
 }
 
 .map-lift-equipment.lift-dock.flow-inbound {
@@ -2185,6 +2190,15 @@ input[type="range"] {
   background: rgba(var(--flow-outbound-rgb), 0.92);
   color: #15120b;
   box-shadow: 0 0 16px rgba(var(--flow-outbound-rgb), 0.34);
+}
+
+.map-task-badge.lift-dock-target {
+  z-index: 10;
+  transform: translate(8px, -30px);
+  min-width: 28px;
+  height: 18px;
+  border-width: 2px;
+  box-shadow: 0 0 0 2px rgba(6, 10, 14, 0.68), 0 0 18px rgba(130, 199, 255, 0.46);
 }
 
 .map-vehicle {

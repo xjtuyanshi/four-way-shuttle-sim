@@ -1740,6 +1740,8 @@ function createLiftVisualWorkcells(
     const visual = ensure(parts, node.type === 'lift-blackbox' ? node.id : '');
     if ((node.type === 'inbound' || node.type === 'outbound') && node.type === parts.role) {
       visual.bufferNodeIds.push(node.id);
+    } else if (isLiftServiceExitNode(node.id)) {
+      visual.dockNodeIds.push(node.id);
     }
   }
 
@@ -1751,7 +1753,7 @@ function createLiftVisualWorkcells(
       const expectedDockLevel = parts.role === 'inbound' ? 'b' : 'a';
       if (railLevel !== expectedDockLevel) continue;
       const visual = ensure(parts);
-      if (!visual.dockNodeIds.includes(railSide)) {
+      if (!visual.dockNodeIds.length && !visual.dockNodeIds.includes(railSide)) {
         visual.dockNodeIds.push(railSide);
       }
     }
@@ -1892,9 +1894,9 @@ function AuthoritativeMap({
       }))}
       {geometry.liftVisuals.flatMap((visual) => {
         const nodesToRender = [
-          { nodeId: visual.liftNodeId, className: 'lift-main', label: visual.role === 'inbound' ? 'IN' : 'OUT' },
+          { nodeId: visual.liftNodeId, className: 'lift-main', label: visual.role === 'inbound' ? 'IN LIFT' : 'OUT LIFT' },
           ...visual.bufferNodeIds.map((nodeId, index) => ({ nodeId, className: 'lift-buffer', label: String(index + 1) })),
-          ...visual.dockNodeIds.map((nodeId) => ({ nodeId, className: 'lift-dock', label: '' }))
+          ...visual.dockNodeIds.map((nodeId) => ({ nodeId, className: 'lift-dock', label: visual.role === 'inbound' ? 'P' : 'D' }))
         ];
         return nodesToRender.map((item) => {
           const node = geometry.nodeMap.get(item.nodeId);
@@ -1958,11 +1960,14 @@ function AuthoritativeMap({
         if (!vehicle || !pickupNode || vehicle.loaded) {
           return null;
         }
-        if (isLiftWorkcellDisplayNode(pickupNode)) {
-          return null;
-        }
+        const liftDockTarget = isLiftWorkcellDisplayNode(pickupNode);
+        const pickupPoint = liftDockTarget ? pickupNode : routeDisplayPointForNode(pickupNode.id, pickupNode, geometry.nodeMap);
         return (
-          <span className={`map-task-badge pickup flow-${task.kind}`} key={task.id} style={geometry.project(pickupNode)}>
+          <span
+            className={`map-task-badge pickup flow-${task.kind} ${liftDockTarget ? 'lift-dock-target' : ''}`}
+            key={task.id}
+            style={geometry.project(pickupPoint)}
+          >
             P{vehicleDisplayNumber(vehicle.id)}
           </span>
         );
@@ -2242,22 +2247,22 @@ function CanvasLiteMap({
         const point = project(node);
         context.save();
         if (node.type === 'lift-blackbox') {
-          const widthPx = 24;
-          const heightPx = 16;
+          const widthPx = 86;
+          const heightPx = 28;
           context.fillStyle = 'rgba(18, 28, 36, 0.94)';
           context.strokeStyle = flowRgba(role, 0.78);
-          context.lineWidth = 1.6;
+          context.lineWidth = 2;
           context.beginPath();
           context.roundRect(point.x - widthPx / 2, point.y - heightPx / 2, widthPx, heightPx, 4);
           context.fill();
           context.stroke();
           context.fillStyle = flowRgba(role, 0.88);
           context.fillRect(point.x - widthPx / 2 + 3, point.y - heightPx / 2 + 3, widthPx - 6, 2.4);
-          context.fillStyle = role === 'outbound' ? '#f3dc8d' : '#cceeff';
-          context.font = '800 8px system-ui, sans-serif';
+          context.fillStyle = role === 'outbound' ? '#fff0bd' : '#dff4ff';
+          context.font = '900 10px system-ui, sans-serif';
           context.textAlign = 'center';
           context.textBaseline = 'middle';
-          context.fillText(role === 'inbound' ? 'IN' : 'OUT', point.x, point.y + 1.8);
+          context.fillText(role === 'inbound' ? 'IN LIFT' : 'OUT LIFT', point.x + (role === 'inbound' ? -8 : 0), point.y + 1.8);
         } else if (node.type === 'inbound' || node.type === 'outbound' || isLiftServiceExitNode(node.id)) {
           const slotSize = isLiftServiceExitNode(node.id) ? 7.2 : 8.2;
           context.fillStyle = flowRgba(role, isLiftServiceExitNode(node.id) ? 0.72 : 0.52);
@@ -2288,16 +2293,21 @@ function CanvasLiteMap({
       const drawLiftDockMarker = (node: ShuttleScenario['layout']['nodes'][number], role: 'inbound' | 'outbound') => {
         const point = project(node);
         context.save();
-        context.fillStyle = '#101922';
+        context.fillStyle = role === 'inbound' ? 'rgba(18, 42, 62, 0.96)' : 'rgba(66, 49, 18, 0.96)';
         context.strokeStyle = flowRgba(role, 0.9);
         context.lineWidth = 1.8;
         context.beginPath();
-        context.roundRect(point.x - 4.5, point.y - 4.5, 9, 9, 2.4);
+        context.roundRect(point.x - 5.5, point.y - 5.5, 11, 11, 2.4);
         context.fill();
         context.stroke();
-        context.fillStyle = flowRgba(role, 0.9);
+        context.fillStyle = role === 'outbound' ? '#171207' : '#f8fbff';
+        context.font = '900 7px system-ui, sans-serif';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(role === 'inbound' ? 'P' : 'D', point.x, point.y + 0.2);
+        context.fillStyle = flowRgba(role, 0.96);
         context.beginPath();
-        context.arc(point.x, point.y, 2.2, 0, Math.PI * 2);
+        context.arc(point.x, point.y + 8, 2.2, 0, Math.PI * 2);
         context.fill();
         context.restore();
       };
@@ -2322,29 +2332,34 @@ function CanvasLiteMap({
         context.globalAlpha = 1;
       };
 
-      const drawPickupTargetBadge = (point: { x: number; y: number }, taskKind: 'inbound' | 'outbound', vehicleId: string) => {
+      const drawPickupTargetBadge = (
+        point: { x: number; y: number },
+        taskKind: 'inbound' | 'outbound',
+        vehicleId: string,
+        liftDockTarget = false
+      ) => {
         const label = `P${vehicleDisplayNumber(vehicleId)}`;
-        const badgeWidth = 22;
-        const badgeHeight = 14;
-        const badgeX = point.x + 13;
-        const badgeY = point.y - 23;
+        const badgeWidth = liftDockTarget ? 34 : 22;
+        const badgeHeight = liftDockTarget ? 18 : 14;
+        const badgeX = point.x + (liftDockTarget ? 13 : 13);
+        const badgeY = point.y - (liftDockTarget ? 36 : 23);
         const roleColor = FLOW_VISUAL_COLORS[taskKind].hex;
         context.save();
-        context.strokeStyle = flowRgba(taskKind, 0.46);
-        context.lineWidth = 1.2;
+        context.strokeStyle = flowRgba(taskKind, liftDockTarget ? 0.78 : 0.46);
+        context.lineWidth = liftDockTarget ? 2 : 1.2;
         context.beginPath();
         context.moveTo(point.x, point.y);
         context.lineTo(badgeX, badgeY + badgeHeight / 2);
         context.stroke();
         context.fillStyle = flowRgba(taskKind, 0.9);
         context.strokeStyle = '#ffffff';
-        context.lineWidth = 1.4;
+        context.lineWidth = liftDockTarget ? 1.8 : 1.4;
         context.beginPath();
         context.roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 4);
         context.fill();
         context.stroke();
         context.fillStyle = taskKind === 'outbound' ? '#15120b' : '#f8fbff';
-        context.font = '800 9px system-ui, sans-serif';
+        context.font = liftDockTarget ? '900 10px system-ui, sans-serif' : '800 9px system-ui, sans-serif';
         context.textAlign = 'center';
         context.textBaseline = 'middle';
         context.fillText(label, badgeX + badgeWidth / 2, badgeY + badgeHeight / 2 + 0.2);
@@ -2407,15 +2422,15 @@ function CanvasLiteMap({
           }
         }
         context.setLineDash([]);
-        const liftNode = geometry.nodeMap.get(visual.liftNodeId);
-        if (liftNode) {
-          drawLiftEquipmentNode(liftNode);
-        }
         for (const bufferNodeId of visual.bufferNodeIds) {
           const bufferNode = geometry.nodeMap.get(bufferNodeId);
           if (bufferNode) {
             drawLiftEquipmentNode(bufferNode);
           }
+        }
+        const liftNode = geometry.nodeMap.get(visual.liftNodeId);
+        if (liftNode) {
+          drawLiftEquipmentNode(liftNode);
         }
         for (const dockNodeId of visual.dockNodeIds) {
           const dockNode = geometry.nodeMap.get(dockNodeId);
@@ -2568,9 +2583,10 @@ function CanvasLiteMap({
         const vehicle = task.vehicleId ? vehicleById.get(task.vehicleId) : null;
         const pickupNode = geometry.nodeMap.get(task.pickupNodeId);
         if (!vehicle || !pickupNode || vehicle.loaded) continue;
-        if (isLiftWorkcellDisplayNode(pickupNode)) continue;
-        const point = project(routeDisplayPointForNode(pickupNode.id, pickupNode, geometry.nodeMap));
-        drawPickupTargetBadge(point, task.kind, vehicle.id);
+        const liftDockTarget = isLiftWorkcellDisplayNode(pickupNode);
+        const displayPoint = liftDockTarget ? pickupNode : routeDisplayPointForNode(pickupNode.id, pickupNode, geometry.nodeMap);
+        const point = project(displayPoint);
+        drawPickupTargetBadge(point, task.kind, vehicle.id, liftDockTarget);
       }
 
       for (const vehicle of renderVehicles) {
@@ -3869,24 +3885,35 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
-      requestJson<ShuttleScenario>('/api/shuttle/scenario'),
-      requestJson<ShuttleSimState>('/api/shuttle/state'),
-      requestJson<PrerequisiteReport>('/api/shuttle/prerequisites'),
-      requestJson<PlaybackSpeedResponse>('/api/shuttle/playbackSpeed')
-    ])
-      .then(([nextScenario, nextState, report, speedReport]) => {
+    requestJson<ScenarioSetupResponse>('/api/shuttle/setup')
+      .then((response) => {
         if (cancelled) return;
-        setScenario(nextScenario);
-        setState(nextState);
-        commitLiveStreamFromState(nextState);
-        setEvents(nextState.recentEvents);
+        setScenario(response.scenario);
+        setState(response.state);
+        commitLiveStreamFromState(response.state);
+        setEvents(response.state.recentEvents);
+      })
+      .catch((error) => setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' }));
+    requestJson<PrerequisiteReport>('/api/shuttle/prerequisites')
+      .then((report) => {
+        if (cancelled) return;
         setPrerequisites(report);
+      })
+      .catch(() => {
+        if (!cancelled) setPrerequisites(null);
+      });
+    requestJson<PlaybackSpeedResponse>('/api/shuttle/playbackSpeed')
+      .then((speedReport) => {
+        if (cancelled) return;
         if (!playbackSpeedChangedRef.current) {
           setPlaybackSpeedState(speedReport.speed);
         }
       })
-      .catch((error) => setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' }));
+      .catch(() => {
+        if (!cancelled && !playbackSpeedChangedRef.current) {
+          setPlaybackSpeedState(1);
+        }
+      });
     return () => {
       cancelled = true;
     };
