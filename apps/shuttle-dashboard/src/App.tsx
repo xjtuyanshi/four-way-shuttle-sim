@@ -719,9 +719,14 @@ function physicalRecordingFramePair(
 }
 
 const MAX_VISUAL_INTERPOLATION_STEP_M = 3;
+const VEHICLE_VISUAL_BODY_SCALE = 0.78;
 
 function vehicleSquareFootprintSideM(scenario: ShuttleScenario | null | undefined): number {
   return Math.max(scenario?.vehicles.lengthM ?? 1.03, scenario?.vehicles.widthM ?? 1.03);
+}
+
+export function vehicleVisualBodySideM(scenario: ShuttleScenario | null | undefined): number {
+  return vehicleSquareFootprintSideM(scenario) * VEHICLE_VISUAL_BODY_SCALE;
 }
 
 export function vehicleListHasSquareFootprintOverlap(
@@ -2642,8 +2647,8 @@ function CanvasLiteMap({
           (width - padding * 2) / geometry.width,
           (height - padding * 2) / geometry.depth
         );
-        const visibleFootprintSideM = vehicleSquareFootprintSideM(scenario);
-        const vehicleWidthPx = clampNumber(visibleFootprintSideM * pxPerMeter, 15, 20);
+        const visibleBodySideM = vehicleVisualBodySideM(scenario);
+        const vehicleWidthPx = clampNumber(visibleBodySideM * pxPerMeter, 10, 18);
         const vehicleHeightPx = vehicleWidthPx;
         if (layers.physics) {
           const safetyRadiusPx = clampNumber(

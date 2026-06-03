@@ -90,6 +90,7 @@ const CAD_STORAGE_STROKE = 'rgba(177, 138, 255, 0.66)';
 const CAD_AISLE_FILL = 'rgba(220, 178, 58, 0.14)';
 const CAD_BLOCKED_FILL = 'rgba(101, 118, 111, 0.26)';
 const CAD_BLOCKED_STROKE = 'rgba(151, 183, 167, 0.88)';
+const VEHICLE_VISUAL_BODY_SCALE = 0.78;
 const TEXTURE_ASSETS = {
   fabric: {
     color: '/assets/textures/ambientcg-fabric001/color.jpg',
@@ -226,6 +227,10 @@ function normalizeAngle(angle: number): number {
 
 function vehicleSquareFootprintSideM(scenario: ShuttleScenario): number {
   return Math.max(scenario.vehicles.lengthM, scenario.vehicles.widthM);
+}
+
+export function vehicleVisualBodySideM(scenario: ShuttleScenario): number {
+  return vehicleSquareFootprintSideM(scenario) * VEHICLE_VISUAL_BODY_SCALE;
 }
 
 function detectRendererInfo(renderer: THREE.WebGLRenderer): ShuttleSceneRendererInfo {
@@ -1146,8 +1151,9 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
     side: THREE.DoubleSide
   });
   const visualFootprintM = vehicleSquareFootprintSideM(scenario);
-  const visualLengthM = visualFootprintM * 0.94;
-  const visualWidthM = visualFootprintM * 0.94;
+  const visualBodySideM = vehicleVisualBodySideM(scenario);
+  const visualLengthM = visualBodySideM;
+  const visualWidthM = visualBodySideM;
 
   const chassis = new THREE.Mesh(
     new THREE.BoxGeometry(visualLengthM * 0.98, scenario.vehicles.heightM * 0.34, visualWidthM * 0.92),

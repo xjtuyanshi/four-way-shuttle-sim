@@ -12,7 +12,8 @@ import {
   summarizeScenarioSetup,
   summarizeResourceUtilization,
   vehicleCanInterpolateVisual,
-  vehicleListHasSquareFootprintOverlap
+  vehicleListHasSquareFootprintOverlap,
+  vehicleVisualBodySideM as vehicleVisualBodySideM2D
 } from './App.js';
 import {
   resolveCadDimensionAnnotations,
@@ -20,7 +21,8 @@ import {
   resolveScene3DVehicleBodyPose,
   resolveScene3DVisualScenario,
   resolveScene3DVisualState,
-  resolveScene3DVisualStaticScene
+  resolveScene3DVisualStaticScene,
+  vehicleVisualBodySideM as vehicleVisualBodySideM3D
 } from './ShuttleScene3D.js';
 import { FLOW_VISUAL_COLORS, resolveLoadFlowRole, resolveVehicleLoadFlowRole } from './flowColors.js';
 
@@ -168,6 +170,15 @@ describe('dashboard live vehicle interpolation', () => {
       vehicle({ id: 'SH-01', x: 10, z: 5 }),
       vehicle({ id: 'SH-02', x: 10 + sideM + 0.25, z: 5 })
     ], scenario)).toBe(false);
+  });
+
+  it('keeps 2D and 3D visible shuttle bodies inside the physical square envelope', () => {
+    const scenario = createDefaultShuttleScenario();
+    const physicalSideM = Math.max(scenario.vehicles.lengthM, scenario.vehicles.widthM);
+
+    expect(vehicleVisualBodySideM2D(scenario)).toBeCloseTo(vehicleVisualBodySideM3D(scenario), 6);
+    expect(vehicleVisualBodySideM2D(scenario)).toBeGreaterThan(0);
+    expect(vehicleVisualBodySideM2D(scenario)).toBeLessThan(physicalSideM);
   });
 
   it('allows interpolation only while the vehicle remains on the same motion leg', () => {
