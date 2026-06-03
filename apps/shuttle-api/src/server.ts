@@ -25,8 +25,9 @@ import { validatePhase0Scenario } from './validation.js';
 
 const port = Number(process.env.SHUTTLE_PORT ?? process.env.PORT ?? 8791);
 const tickMs = Number(process.env.SHUTTLE_TICK_MS ?? 100);
-const streamBroadcastIntervalMs = Number(process.env.SHUTTLE_STREAM_TICK_MS ?? 250);
+const streamBroadcastIntervalMs = Number(process.env.SHUTTLE_STREAM_TICK_MS ?? tickMs);
 const fullStateBroadcastIntervalMs = Number(process.env.SHUTTLE_FULL_STATE_TICK_MS ?? 1000);
+const liveStepStreamMaxPlaybackSpeed = Number(process.env.SHUTTLE_LIVE_STEP_STREAM_MAX_SPEED ?? 10);
 const traceSnapshotCadenceSec = Number(process.env.SHUTTLE_TRACE_SNAPSHOT_SEC ?? 0);
 const maxTraceSnapshots = Number(process.env.SHUTTLE_TRACE_MAX_SNAPSHOTS ?? 1800);
 const longRunTraceSnapshotThresholdSec = Number(process.env.SHUTTLE_LONG_RUN_TRACE_SNAPSHOT_THRESHOLD_SEC ?? 1800);
@@ -668,10 +669,11 @@ function broadcast(message: ShuttleStreamMessage): void {
   }
 }
 
-function broadcastState(options: { full?: boolean } = {}): void {
+function broadcastState(options: { full?: boolean; forceStream?: boolean } = {}): void {
   const nowMs = Date.now();
   const shouldBroadcastStream =
     options.full === true ||
+    options.forceStream === true ||
     nowMs - lastStreamBroadcastMs >= streamBroadcastIntervalMs;
   const shouldBroadcastFull =
     options.full === true ||
@@ -704,11 +706,15 @@ function commandResponse(response: Response): void {
 function advanceLiveSimulation(deltaSec: number): void {
   liveTickCreditSec += deltaSec;
   const fixedDtSec = sim.getScenario().timeStepSec;
+  const streamEveryCoreStep = playbackSpeed <= liveStepStreamMaxPlaybackSpeed;
   let guard = 0;
   while (liveTickCreditSec + 1e-9 >= fixedDtSec && sim.getStatus() === 'running') {
     sim.advanceByInPlace(fixedDtSec);
     liveTickCreditSec = Math.max(0, liveTickCreditSec - fixedDtSec);
     guard += 1;
+    if (streamEveryCoreStep) {
+      broadcastState({ forceStream: true });
+    }
     if (guard > 1000) {
       throw new Error('Live simulation tick guard tripped; playback speed or tick interval is too high.');
     }

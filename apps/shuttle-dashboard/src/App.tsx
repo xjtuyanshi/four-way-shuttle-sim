@@ -720,11 +720,17 @@ function physicalRecordingFramePair(
 
 const MAX_VISUAL_INTERPOLATION_STEP_M = 3;
 
-function vehicleCanInterpolateVisual(left: VehicleState, right: VehicleState): boolean {
+export function vehicleCanInterpolateVisual(left: VehicleState, right: VehicleState): boolean {
   if (left.id !== right.id) {
     return false;
   }
-  if (left.loaded !== right.loaded || left.taskId !== right.taskId) {
+  if (
+    left.loaded !== right.loaded ||
+    left.taskId !== right.taskId ||
+    left.currentEdgeId !== right.currentEdgeId ||
+    left.currentNodeId !== right.currentNodeId ||
+    left.targetNodeId !== right.targetNodeId
+  ) {
     return false;
   }
   const distanceM = Math.hypot(right.x - left.x, right.z - left.z);

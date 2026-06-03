@@ -10,7 +10,8 @@ import {
   shouldResetAfterParamUpdate,
   shouldResumeAfterParamUpdate,
   summarizeScenarioSetup,
-  summarizeResourceUtilization
+  summarizeResourceUtilization,
+  vehicleCanInterpolateVisual
 } from './App.js';
 import {
   resolveCadDimensionAnnotations,
@@ -149,6 +150,51 @@ describe('dashboard stream reducers', () => {
     expect(next?.simTimeSec).toBe(22);
     expect(next?.kpis.totalPph).toBe(120);
     expect(next?.kpis.reservationConflictCount).toBe(4);
+  });
+});
+
+describe('dashboard live vehicle interpolation', () => {
+  it('allows interpolation only while the vehicle remains on the same motion leg', () => {
+    const previous = vehicle({
+      id: 'SH-01',
+      state: 'moving-to-pickup',
+      currentNodeId: 'column-top-b-c08',
+      targetNodeId: 'column-top-b-c09',
+      currentEdgeId: 'column-top-b-c08-column-top-b-c09',
+      taskId: 'task-0001',
+      x: 12.5,
+      z: 0.8
+    });
+    const next = vehicle({
+      ...previous,
+      x: 13,
+      z: 0.8
+    });
+
+    expect(vehicleCanInterpolateVisual(previous, next)).toBe(true);
+  });
+
+  it('does not interpolate across node or edge changes because that draws false shortcuts', () => {
+    const previous = vehicle({
+      id: 'SH-01',
+      state: 'moving-to-pickup',
+      currentNodeId: 'column-top-b-c08',
+      targetNodeId: 'column-top-b-c09',
+      currentEdgeId: 'column-top-b-c08-column-top-b-c09',
+      taskId: 'task-0001',
+      x: 12.5,
+      z: 0.8
+    });
+    const next = vehicle({
+      ...previous,
+      currentNodeId: 'column-top-b-c09',
+      targetNodeId: 'lift-01-inbound-queue-01-entry-access',
+      currentEdgeId: 'lift-01-inbound-queue-01-entry-access-column-top-b-c09',
+      x: 13.75,
+      z: 0.1
+    });
+
+    expect(vehicleCanInterpolateVisual(previous, next)).toBe(false);
   });
 });
 
