@@ -720,6 +720,30 @@ function physicalRecordingFramePair(
 
 const MAX_VISUAL_INTERPOLATION_STEP_M = 3;
 
+function vehicleSquareFootprintSideM(scenario: ShuttleScenario | null | undefined): number {
+  return Math.max(scenario?.vehicles.lengthM ?? 1.03, scenario?.vehicles.widthM ?? 1.03);
+}
+
+export function vehicleListHasSquareFootprintOverlap(
+  vehicles: readonly VehicleState[],
+  scenario: ShuttleScenario | null | undefined
+): boolean {
+  if (!scenario) {
+    return false;
+  }
+  const sideM = vehicleSquareFootprintSideM(scenario);
+  for (let leftIndex = 0; leftIndex < vehicles.length; leftIndex += 1) {
+    const left = vehicles[leftIndex]!;
+    for (let rightIndex = leftIndex + 1; rightIndex < vehicles.length; rightIndex += 1) {
+      const right = vehicles[rightIndex]!;
+      if (Math.abs(left.x - right.x) <= sideM + 1e-6 && Math.abs(left.z - right.z) <= sideM + 1e-6) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 export function vehicleCanInterpolateVisual(left: VehicleState, right: VehicleState): boolean {
   if (left.id !== right.id) {
     return false;
@@ -765,6 +789,11 @@ function physicalRecordingStateAt(
       yaw: lerpAngleRad(previous.yaw, vehicle.yaw, alpha)
     };
   });
+  const displayVehicles =
+    vehicleListHasSquareFootprintOverlap(vehicles, recording.scenario) &&
+    !vehicleListHasSquareFootprintOverlap(after.vehicles, recording.scenario)
+      ? after.vehicles
+      : vehicles;
 
   return {
     schemaVersion: 'shuttle.phase0.state.v0',
@@ -774,7 +803,7 @@ function physicalRecordingStateAt(
     simTimeSec: clampedSec,
     durationSec: recording.durationSec,
     seed: recording.scenario.seed,
-    vehicles,
+    vehicles: displayVehicles,
     tasks: after.tasks,
     loads: after.loads,
     reservations: after.reservations,
@@ -2071,6 +2100,7 @@ function visualRenderSimTime(
 
 function interpolateVehiclesForFrame(
   snapshots: LiteMapSnapshot[],
+  scenario: ShuttleScenario | null,
   playbackSpeed: number,
   running: boolean,
   nowMs: number,
@@ -2090,7 +2120,7 @@ function interpolateVehiclesForFrame(
   if (snapshotDtSec <= 0) return list;
 
   const alpha = Math.min(1, Math.max(0, (renderTime - before.simTime) / snapshotDtSec));
-  return Array.from(after.vehicles.values()).map((vehicle) => {
+  const vehicles = Array.from(after.vehicles.values()).map((vehicle) => {
     const previous = before.vehicles.get(vehicle.id);
     if (!previous) return vehicle;
     if (!vehicleCanInterpolateVisual(previous, vehicle)) return alpha >= 1 ? vehicle : previous;
@@ -2101,6 +2131,14 @@ function interpolateVehiclesForFrame(
       yaw: lerpAngleRad(previous.yaw, vehicle.yaw, alpha)
     };
   });
+  const afterVehicles = Array.from(after.vehicles.values());
+  if (
+    vehicleListHasSquareFootprintOverlap(vehicles, scenario) &&
+    !vehicleListHasSquareFootprintOverlap(afterVehicles, scenario)
+  ) {
+    return afterVehicles;
+  }
+  return vehicles;
 }
 
 function CanvasLiteMap({
@@ -2533,6 +2571,7 @@ function CanvasLiteMap({
       const running = state?.status === 'running';
       const renderVehicles = interpolateVehiclesForFrame(
         snapshotsRef.current,
+        scenario,
         playbackSpeed,
         running,
         nowMs,
@@ -2603,7 +2642,8 @@ function CanvasLiteMap({
           (width - padding * 2) / geometry.width,
           (height - padding * 2) / geometry.depth
         );
-        const vehicleWidthPx = clampNumber((scenario?.vehicles.widthM ?? 1.03) * pxPerMeter, 15, 20);
+        const visibleFootprintSideM = vehicleSquareFootprintSideM(scenario);
+        const vehicleWidthPx = clampNumber(visibleFootprintSideM * pxPerMeter, 15, 20);
         const vehicleHeightPx = vehicleWidthPx;
         if (layers.physics) {
           const safetyRadiusPx = clampNumber(

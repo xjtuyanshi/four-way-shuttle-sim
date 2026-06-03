@@ -11,7 +11,8 @@ import {
   shouldResumeAfterParamUpdate,
   summarizeScenarioSetup,
   summarizeResourceUtilization,
-  vehicleCanInterpolateVisual
+  vehicleCanInterpolateVisual,
+  vehicleListHasSquareFootprintOverlap
 } from './App.js';
 import {
   resolveCadDimensionAnnotations,
@@ -155,6 +156,20 @@ describe('dashboard stream reducers', () => {
 });
 
 describe('dashboard live vehicle interpolation', () => {
+  it('detects visual shuttle footprint overlap from the scenario dimensions', () => {
+    const scenario = createDefaultShuttleScenario();
+    const sideM = Math.max(scenario.vehicles.lengthM, scenario.vehicles.widthM);
+
+    expect(vehicleListHasSquareFootprintOverlap([
+      vehicle({ id: 'SH-01', x: 10, z: 5 }),
+      vehicle({ id: 'SH-02', x: 10 + sideM * 0.5, z: 5 })
+    ], scenario)).toBe(true);
+    expect(vehicleListHasSquareFootprintOverlap([
+      vehicle({ id: 'SH-01', x: 10, z: 5 }),
+      vehicle({ id: 'SH-02', x: 10 + sideM + 0.25, z: 5 })
+    ], scenario)).toBe(false);
+  });
+
   it('allows interpolation only while the vehicle remains on the same motion leg', () => {
     const previous = vehicle({
       id: 'SH-01',

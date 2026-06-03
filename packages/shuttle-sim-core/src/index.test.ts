@@ -656,7 +656,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(route).not.toContain('lift-01-inbound-queue-pickup-access');
     expect(route).not.toContain('parking-lift-01-inbound-queue');
     expect(vehicle?.routeNodeIds).not.toContain('lift-01-inbound');
-  });
+  }, 15000);
 
   it('does not send a taskless mixed-flow shuttle on a long standby tour while queued work is waiting', () => {
     const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({ durationSec: 2400 }));

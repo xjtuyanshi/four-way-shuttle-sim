@@ -224,6 +224,10 @@ function normalizeAngle(angle: number): number {
   return Math.atan2(Math.sin(angle), Math.cos(angle));
 }
 
+function vehicleSquareFootprintSideM(scenario: ShuttleScenario): number {
+  return Math.max(scenario.vehicles.lengthM, scenario.vehicles.widthM);
+}
+
 function detectRendererInfo(renderer: THREE.WebGLRenderer): ShuttleSceneRendererInfo {
   const gl = renderer.getContext();
   const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
@@ -1141,8 +1145,9 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
     depthWrite: false,
     side: THREE.DoubleSide
   });
-  const visualLengthM = scenario.vehicles.widthM * 0.96;
-  const visualWidthM = scenario.vehicles.widthM * 0.96;
+  const visualFootprintM = vehicleSquareFootprintSideM(scenario);
+  const visualLengthM = visualFootprintM * 0.94;
+  const visualWidthM = visualFootprintM * 0.94;
 
   const chassis = new THREE.Mesh(
     new THREE.BoxGeometry(visualLengthM * 0.98, scenario.vehicles.heightM * 0.34, visualWidthM * 0.92),
@@ -1215,18 +1220,19 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   group.add(beacon);
 
   const noseMaterial = material(0xf4f9fa, 0.36, 0.16);
+  const noseLengthM = Math.min(0.13, visualLengthM * 0.12);
   const nose = new THREE.Mesh(
-    new THREE.BoxGeometry(0.16, scenario.vehicles.heightM * 0.44, visualWidthM * 0.46),
+    new THREE.BoxGeometry(noseLengthM, scenario.vehicles.heightM * 0.44, visualWidthM * 0.46),
     noseMaterial
   );
-  nose.position.set(visualLengthM * 0.49, VEHICLE_BASE_Y + scenario.vehicles.heightM * 0.62, 0);
+  nose.position.set(visualLengthM * 0.42, VEHICLE_BASE_Y + scenario.vehicles.heightM * 0.62, 0);
   nose.castShadow = true;
   group.add(nose);
 
   const lightMaterial = new THREE.MeshBasicMaterial({ color: 0x82c7ff, transparent: true, opacity: 0.86 });
   for (const z of [-visualWidthM * 0.36, visualWidthM * 0.36]) {
     const light = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.035, 0.16), lightMaterial);
-    light.position.set(visualLengthM * 0.52, VEHICLE_BASE_Y + scenario.vehicles.heightM * 0.73, z);
+    light.position.set(visualLengthM * 0.45, VEHICLE_BASE_Y + scenario.vehicles.heightM * 0.73, z);
     group.add(light);
   }
 
@@ -1247,10 +1253,12 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
     group.add(fork);
   }
 
-  const wheelMaterial = material(0x26323b, 0.68, 0.18);
+  const wheelMaterial = material(0x51616a, 0.68, 0.18);
+  const wheelRadiusM = Math.min(0.07, visualFootprintM * 0.07);
+  const wheelDepthM = Math.min(0.065, visualFootprintM * 0.065);
   for (const x of [-visualLengthM * 0.34, visualLengthM * 0.34]) {
-    for (const z of [-visualWidthM * 0.48, visualWidthM * 0.48]) {
-      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.105, 0.105, 0.07, 18), wheelMaterial);
+    for (const z of [-visualWidthM * 0.46, visualWidthM * 0.46]) {
+      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(wheelRadiusM, wheelRadiusM, wheelDepthM, 18), wheelMaterial);
       wheel.rotation.x = Math.PI / 2;
       wheel.position.set(x, VEHICLE_BASE_Y + 0.08, z);
       wheel.castShadow = true;
@@ -2094,6 +2102,7 @@ function visualRenderSimTime(
 
 function sampleVehiclePosesForFrame(
   snapshots: VehicleSnapshot[],
+  scenario: ShuttleScenario | null,
   playbackSpeed: number,
   running: boolean,
   nowMs: number,
@@ -2130,7 +2139,32 @@ function sampleVehiclePosesForFrame(
       yaw: previous.yaw + normalizeAngle(pose.yaw - previous.yaw) * alpha
     });
   }
+  if (
+    scenario &&
+    vehiclePoseMapHasSquareFootprintOverlap(sampled, scenario) &&
+    !vehiclePoseMapHasSquareFootprintOverlap(after.vehicles, scenario)
+  ) {
+    return after.vehicles;
+  }
   return sampled;
+}
+
+function vehiclePoseMapHasSquareFootprintOverlap(
+  poses: Map<string, VehiclePoseSnapshot>,
+  scenario: ShuttleScenario
+): boolean {
+  const sideM = vehicleSquareFootprintSideM(scenario);
+  const poseEntries = [...poses.entries()];
+  for (let leftIndex = 0; leftIndex < poseEntries.length; leftIndex += 1) {
+    const [, left] = poseEntries[leftIndex]!;
+    for (let rightIndex = leftIndex + 1; rightIndex < poseEntries.length; rightIndex += 1) {
+      const [, right] = poseEntries[rightIndex]!;
+      if (Math.abs(left.x - right.x) <= sideM + 1e-6 && Math.abs(left.z - right.z) <= sideM + 1e-6) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 export function ShuttleScene3D({
@@ -2154,6 +2188,7 @@ export function ShuttleScene3D({
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const runtimeRef = useRef<SceneRuntime | null>(null);
+  const scenarioRef = useRef<ShuttleScenario | null>(scenario);
   const cameraViewRef = useRef<ShuttleSceneCameraView>(cameraView);
   const onCameraViewChangeRef = useRef(onCameraViewChange);
   const onRendererInfoRef = useRef(onRendererInfo);
@@ -2161,6 +2196,10 @@ export function ShuttleScene3D({
   const visualClockRef = useRef<VisualClock>({ latestSimTime: null, simTime: null, wallMs: null });
   const playbackSpeedRef = useRef<number>(playbackSpeed ?? 1);
   const runningRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    scenarioRef.current = scenario;
+  }, [scenario]);
 
   useEffect(() => {
     cameraViewRef.current = cameraView;
@@ -2315,7 +2354,14 @@ export function ShuttleScene3D({
       const fallbackYawAlpha = 1 - Math.exp(-dtSec * 14);
       const running = runningRef.current;
       const speed = playbackSpeedRef.current;
-      const sampledPoses = sampleVehiclePosesForFrame(snapshotsRef.current, speed, running, nowMs, visualClockRef.current);
+      const sampledPoses = sampleVehiclePosesForFrame(
+        snapshotsRef.current,
+        scenarioRef.current,
+        speed,
+        running,
+        nowMs,
+        visualClockRef.current
+      );
       for (const [vehicleId, object] of runtime.vehicleObjects.entries()) {
         const data = vehicleUserData(object);
         const sampledPose = sampledPoses.get(vehicleId);
