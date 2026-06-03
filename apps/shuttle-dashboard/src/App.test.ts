@@ -16,6 +16,7 @@ import {
 import {
   resolveCadDimensionAnnotations,
   resolveDashboardStaticSceneContract,
+  resolveScene3DVehicleBodyPose,
   resolveScene3DVisualScenario,
   resolveScene3DVisualState,
   resolveScene3DVisualStaticScene
@@ -450,6 +451,61 @@ describe('dashboard resource utilization', () => {
 });
 
 describe('dashboard static scene contract', () => {
+  it('keeps the 3D shuttle body on the physical graph instead of route-display snap rails', () => {
+    const liftHelper = {
+      id: 'lift-01-inbound-queue-01-entry-access',
+      type: 'aisle' as const,
+      x: 8,
+      y: 0,
+      z: 2,
+      noStop: false,
+      noParking: true,
+      capacity: 1,
+      allowedDirections: []
+    };
+    const serviceExit = {
+      id: 'lift-01-inbound-queue-01-service-exit',
+      type: 'aisle' as const,
+      x: 8,
+      y: 0,
+      z: 5,
+      noStop: false,
+      noParking: true,
+      capacity: 1,
+      allowedDirections: []
+    };
+    const railNode = {
+      id: 'column-top-b-c08',
+      type: 'aisle' as const,
+      x: 14,
+      y: 0,
+      z: 5,
+      noStop: false,
+      noParking: true,
+      capacity: 1,
+      allowedDirections: []
+    };
+    const bodyPose = resolveScene3DVehicleBodyPose(new Map([
+      [liftHelper.id, liftHelper],
+      [serviceExit.id, serviceExit],
+      [railNode.id, railNode]
+    ]), vehicle({
+      id: 'SH-03',
+      state: 'moving-to-pickup',
+      currentNodeId: liftHelper.id,
+      targetNodeId: serviceExit.id,
+      currentEdgeId: `${liftHelper.id}-${serviceExit.id}`,
+      x: 9.4,
+      z: 3.25,
+      yaw: 1.25
+    }));
+
+    expect(bodyPose.x).toBeCloseTo(8, 6);
+    expect(bodyPose.z).toBeCloseTo(3.25, 6);
+    expect(bodyPose.yaw).toBeCloseTo(1.25, 6);
+    expect(bodyPose.x).not.toBeCloseTo(railNode.x, 6);
+  });
+
   it('keeps the 3D visual coordinates aligned with the authoritative 2D map', () => {
     const scenario = createDefaultShuttleScenario();
     const visualScenario = resolveScene3DVisualScenario(scenario);

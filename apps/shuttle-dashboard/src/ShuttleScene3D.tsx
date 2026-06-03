@@ -1335,9 +1335,9 @@ function applyVehicleState(runtime: SceneRuntime, group: THREE.Group, state: Shu
     data.labelSprite.position.y = selected ? 0.86 : 0.74;
     data.labelSprite.scale.set(selected ? 0.72 : 0.62, selected ? 0.52 : 0.45, 1);
   }
-  const displayPose = routeDisplayPoseForVehicle(runtime, vehicle);
-  data.targetPosition.set(displayPose.x, 0, displayPose.z);
-  data.targetYaw = displayPose.yaw;
+  const bodyPose = resolveScene3DVehicleBodyPose(runtime.nodeById, vehicle);
+  data.targetPosition.set(bodyPose.x, 0, bodyPose.z);
+  data.targetYaw = bodyPose.yaw;
   data.loadedMesh.visible = vehicle.loaded;
   setPalletLoadColor(data.loadedMesh, FLOW_VISUAL_COLORS[resolveVehicleLoadFlowRole(state, vehicle)].three);
   data.safetyRing.visible = layers.physics;
@@ -1687,6 +1687,21 @@ function snapPointToAxisAlignedLeg(
   return { x: clamp(point.x, minX, maxX), z: from.z };
 }
 
+export function resolveScene3DVehicleBodyPose(
+  nodeById: Map<string, ShuttleNode>,
+  vehicle: VehicleState
+): { x: number; z: number; yaw: number } {
+  const currentNode = nodeById.get(vehicle.currentNodeId);
+  const targetNode = vehicle.targetNodeId ? nodeById.get(vehicle.targetNodeId) : null;
+  if (vehicle.currentEdgeId && currentNode && targetNode) {
+    return { ...snapPointToAxisAlignedLeg(vehicle, currentNode, targetNode), yaw: vehicle.yaw };
+  }
+  if (!vehicle.currentEdgeId && currentNode) {
+    return { x: currentNode.x, z: currentNode.z, yaw: vehicle.yaw };
+  }
+  return { x: vehicle.x, z: vehicle.z, yaw: vehicle.yaw };
+}
+
 function routeRenderStartPoint(runtime: SceneRuntime, vehicle: VehicleState): { x: number; z: number } {
   const currentNode = runtime.nodeById.get(vehicle.currentNodeId);
   const targetNode = vehicle.targetNodeId ? runtime.nodeById.get(vehicle.targetNodeId) : null;
@@ -1777,9 +1792,9 @@ function updateDynamicScene(
     let object = runtime.vehicleObjects.get(vehicle.id);
     if (!object) {
       object = createVehicleObject(scenario);
-      const displayPose = routeDisplayPoseForVehicle(runtime, vehicle);
-      object.position.set(displayPose.x, 0, displayPose.z);
-      object.rotation.y = displayPose.yaw;
+      const bodyPose = resolveScene3DVehicleBodyPose(runtime.nodeById, vehicle);
+      object.position.set(bodyPose.x, 0, bodyPose.z);
+      object.rotation.y = bodyPose.yaw;
       runtime.vehicleObjects.set(vehicle.id, object);
       runtime.vehicleGroup.add(object);
     }
@@ -2358,13 +2373,13 @@ export function ShuttleScene3D({
         simTime: visualState.simTimeSec,
         wallMs: performance.now(),
         vehicles: new Map(visualState.vehicles.map((vehicle) => {
-          const displayPose = routeDisplayPoseForVehicle(runtime, vehicle);
+          const bodyPose = resolveScene3DVehicleBodyPose(runtime.nodeById, vehicle);
           return [
             vehicle.id,
             {
-              x: displayPose.x,
-              z: displayPose.z,
-              yaw: displayPose.yaw,
+              x: bodyPose.x,
+              z: bodyPose.z,
+              yaw: bodyPose.yaw,
               currentEdgeId: vehicle.currentEdgeId,
               currentNodeId: vehicle.currentNodeId,
               targetNodeId: vehicle.targetNodeId,
