@@ -65,6 +65,7 @@ const checkpointMode = stringArg('--checkpoint-mode') ?? 'compact';
 const inlineTrace = process.argv.includes('--inline-trace') || checkpointMode === 'full';
 const eventLogRetain = integerArg('--event-log-retain', 5000);
 const stopOnCritical = process.argv.includes('--stop-on-critical');
+const maxPhysicalAnomalyEvents = integerArg('--max-physical-anomaly-events', 25);
 
 mkdirSync(dirname(outputPath), { recursive: true });
 mkdirSync(dirname(tracePath), { recursive: true });
@@ -99,7 +100,11 @@ let nextCheckpointSec = 0;
 let checkpointSequence = 0;
 let lastDeadlocks = 0;
 let lastLivelocks = 0;
-let lastPhysicalViolations = 0;
+let maxPhysicalViolationCount = 0;
+let physicalViolationStepCount = 0;
+let physicalViolationFirstSec: number | null = null;
+let physicalViolationSessions = 0;
+let inPhysicalViolation = false;
 let zeroThroughputWithWorkSinceSec: number | null = null;
 
 sim.start();
@@ -122,14 +127,16 @@ console.log(JSON.stringify({
 
 while (sim.getClock().simTimeSec < durationSec - 1e-9 && sim.getClock().status === 'running') {
   const clock = sim.getClock();
-  const nextStopSec = Math.min(durationSec, nextDueTime(clock.simTimeSec));
-  sim.advanceByInPlace(Math.max(0, nextStopSec - clock.simTimeSec));
-  const state = sim.getState();
+  const stepSec = Math.min(scenario.timeStepSec, durationSec - clock.simTimeSec);
+  if (stepSec <= 1e-9) {
+    break;
+  }
+  const state = sim.step(stepSec);
+  auditState(state);
 
   if (state.simTimeSec + 1e-9 >= nextSampleSec) {
     const sample = createSample(state);
     samples.push(sample);
-    auditState(state);
     console.log(JSON.stringify({ type: 'physical-sample', ...sample }));
     sim.retainRecentEventLog(eventLogRetain);
     nextSampleSec += sampleSec;
@@ -189,7 +196,11 @@ const result = {
     livelocks: finalState.kpis.livelockCount,
     physicalViolations: finalState.traffic.physicalViolationCount,
     waitingVehicles: finalState.traffic.waitingVehicles.length,
-    minVehicleSeparationM: finalState.traffic.minVehicleSeparationM
+    minVehicleSeparationM: finalState.traffic.minVehicleSeparationM,
+    maxPhysicalViolationCount,
+    physicalViolationStepCount,
+    physicalViolationFirstSec,
+    physicalViolationSessions
   },
   finalHash: {
     eventLogHash: finalState.kpis.eventLogHash,
@@ -243,12 +254,6 @@ if (anomalies.some((anomaly) => anomaly.severity === 'critical')) {
   process.exitCode = 1;
 }
 
-function nextDueTime(currentSec: number): number {
-  const candidates = [durationSec, nextSampleSec, nextCheckpointSec]
-    .filter((value) => value > currentSec + 1e-9);
-  return Math.min(...candidates);
-}
-
 function createSample(state: ShuttleSimState): PhysicalSample {
   const breakdowns = Object.values(state.kpis.vehicleUtilizationBreakdown);
   return {
@@ -291,9 +296,24 @@ function auditState(state: ShuttleSimState): void {
     addAnomaly(state.simTimeSec, 'critical', 'livelock-count-increased', `${lastLivelocks} -> ${state.kpis.livelockCount}`);
     lastLivelocks = state.kpis.livelockCount;
   }
-  if (state.traffic.physicalViolationCount > lastPhysicalViolations) {
-    addAnomaly(state.simTimeSec, 'critical', 'physical-violation-count-increased', `${lastPhysicalViolations} -> ${state.traffic.physicalViolationCount}`);
-    lastPhysicalViolations = state.traffic.physicalViolationCount;
+  if (state.traffic.physicalViolationCount > 0) {
+    maxPhysicalViolationCount = Math.max(maxPhysicalViolationCount, state.traffic.physicalViolationCount);
+    physicalViolationStepCount += 1;
+    physicalViolationFirstSec ??= state.simTimeSec;
+    if (!inPhysicalViolation) {
+      physicalViolationSessions += 1;
+      if (physicalViolationSessions <= maxPhysicalAnomalyEvents) {
+        addAnomaly(
+          state.simTimeSec,
+          'critical',
+          'physical-violation-active',
+          `count=${state.traffic.physicalViolationCount} minSeparationM=${state.traffic.minVehicleSeparationM ?? 'unknown'}`
+        );
+      }
+      inPhysicalViolation = true;
+    }
+  } else {
+    inPhysicalViolation = false;
   }
   if (state.status === 'faulted') {
     addAnomaly(state.simTimeSec, 'critical', 'sim-faulted', state.error ?? 'unknown fault');

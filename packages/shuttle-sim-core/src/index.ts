@@ -1337,23 +1337,13 @@ function createTopLiftColumnLayout(
           if (entryNode) {
             const entryColumnIndex = columnXs.findIndex((x) => Math.abs(x - entryNode.x) < 1e-6);
             if (entryColumnIndex >= 0) {
-              const entryApproachNodeId = columnAccessNodeId(lift.kind === 'outbound' ? 'bottom-a' : 'top-a', entryColumnIndex);
               const entryExitNodeId = columnAccessNodeId(lift.kind === 'outbound' ? 'bottom-b' : 'top-b', entryColumnIndex);
-              if (lift.kind !== 'inbound') {
-                addEdge(
-                  `${entryApproachNodeId}-${queueEntryNodeId}`,
-                  entryApproachNodeId,
-                  queueEntryNodeId,
-                  `${lift.id}-standby-queue-entry-drop-${String(queueIndex + 1).padStart(2, '0')}`,
-                  'oneWay'
-                );
-              }
               addEdge(
                 `${queueEntryNodeId}-${entryExitNodeId}`,
                 queueEntryNodeId,
                 entryExitNodeId,
                 `${lift.id}-standby-queue-main-exit-${String(queueIndex + 1).padStart(2, '0')}`,
-                lift.kind === 'inbound' ? 'twoWay' : 'oneWay'
+                'twoWay'
               );
             }
             if (lift.kind === 'inbound') {

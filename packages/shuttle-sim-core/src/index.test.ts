@@ -6589,6 +6589,7 @@ describe('shuttle phase 0 SimCore', () => {
       'column-bottom-a-c18',
       'column-bottom-a-c19',
       'column-bottom-a-c20',
+      'column-bottom-b-c20',
       'lift-02-outbound-queue-01-entry-access',
       'lift-02-outbound-queue-01-service-exit'
     ]);
@@ -6974,8 +6975,9 @@ describe('shuttle phase 0 SimCore', () => {
     const goalNodeId = internals.taskDispatchGoalNodeId(task, vehicle);
     const route = internals.agentRouteToGoal(vehicle, task, goalNodeId);
 
-    expect(route.slice(0, 3)).toEqual([
+    expect(route.slice(0, 4)).toEqual([
       'column-bottom-a-c06',
+      'column-bottom-b-c06',
       'lift-01-outbound-queue-01-entry-access',
       'lift-01-outbound-queue-01-service-exit'
     ]);
@@ -7526,7 +7528,10 @@ describe('shuttle phase 0 SimCore', () => {
     const scenario = createInboundOutboundDemoScenario();
     const nodesById = new Map(scenario.layout.nodes.map((node) => [node.id, node]));
     const hasDirectedEdge = (from: string, to: string): boolean =>
-      scenario.layout.edges.some((edge) => edge.from === from && edge.to === to);
+      scenario.layout.edges.some((edge) =>
+        edge.from === from && edge.to === to ||
+        edge.directionMode === 'twoWay' && edge.from === to && edge.to === from
+      );
     const findColumnAccessAtX = (level: 'top-a' | 'top-b' | 'bottom-a' | 'bottom-b', x: number): string => {
       const node = scenario.layout.nodes.find((candidate) =>
         candidate.id.startsWith(`column-${level}-c`) && Math.abs(candidate.x - x) < 1e-6
@@ -7578,8 +7583,10 @@ describe('shuttle phase 0 SimCore', () => {
       const outboundExitId = findColumnAccessAtX('bottom-b', outboundEntry.x);
       const oldTopApproachId = findColumnAccessAtX('top-a', outboundEntry.x);
 
-      expect(hasDirectedEdge(outboundApproachId, outboundEntryId)).toBe(true);
+      expect(hasDirectedEdge(outboundApproachId, outboundExitId)).toBe(true);
+      expect(hasDirectedEdge(outboundExitId, outboundEntryId)).toBe(true);
       expect(hasDirectedEdge(outboundEntryId, outboundExitId)).toBe(true);
+      expect(hasDirectedEdge(outboundApproachId, outboundEntryId)).toBe(false);
       expect(hasDirectedEdge(oldTopApproachId, outboundEntryId)).toBe(false);
     }
   });
@@ -10746,6 +10753,7 @@ describe('shuttle phase 0 SimCore', () => {
     });
     sim.setVehicleRouteForTest('SH-05', [
       'column-bottom-a-c06',
+      'column-bottom-b-c06',
       'lift-01-outbound-queue-01-entry-access',
       'lift-01-outbound-queue-01-service-exit'
     ]);
@@ -10758,7 +10766,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(outbound).toMatchObject({
       state: 'loaded-moving',
       currentNodeId: 'column-bottom-a-c06',
-      targetNodeId: 'lift-01-outbound-queue-01-entry-access',
+      targetNodeId: 'column-bottom-b-c06',
       waitReason: null
     });
     expect(inbound).toMatchObject({
@@ -11057,7 +11065,7 @@ describe('shuttle phase 0 SimCore', () => {
     const route = internals.agentRouteToGoal(vehicle, task, task.dropoffNodeId);
 
     expect(route.slice(0, 2)).toEqual(['column-top-a-c18', 'column-top-a-c19']);
-    expect(route).toContain('column-bottom-a-c20');
+    expect(route).toContain('column-bottom-b-c20');
     expect(route).not.toContain('column-top-a-c22');
     expect(route).not.toContain('column-top-b-c21');
     expect(route.at(-1)).toBe('lift-02-outbound-queue-01-service-exit');
