@@ -477,7 +477,7 @@ describe('dashboard resource utilization', () => {
 });
 
 describe('dashboard static scene contract', () => {
-  it('keeps the 3D shuttle body on the physical graph instead of route-display snap rails', () => {
+  it('keeps the 3D shuttle body on distinct physical lift queue positions', () => {
     const liftHelper = {
       id: 'lift-01-inbound-queue-01-entry-access',
       type: 'aisle' as const,
@@ -500,6 +500,17 @@ describe('dashboard static scene contract', () => {
       capacity: 1,
       allowedDirections: []
     };
+    const secondLiftHelper = {
+      id: 'lift-01-inbound-queue-03-entry-access',
+      type: 'aisle' as const,
+      x: 8,
+      y: 0,
+      z: 6.2,
+      noStop: false,
+      noParking: true,
+      capacity: 1,
+      allowedDirections: []
+    };
     const railNode = {
       id: 'column-top-b-c08',
       type: 'aisle' as const,
@@ -513,6 +524,7 @@ describe('dashboard static scene contract', () => {
     };
     const bodyPose = resolveScene3DVehicleBodyPose(new Map([
       [liftHelper.id, liftHelper],
+      [secondLiftHelper.id, secondLiftHelper],
       [serviceExit.id, serviceExit],
       [railNode.id, railNode]
     ]), vehicle({
@@ -523,13 +535,32 @@ describe('dashboard static scene contract', () => {
       currentEdgeId: `${liftHelper.id}-${serviceExit.id}`,
       x: 9.4,
       z: 3.25,
-      yaw: 1.25
+      yaw: 1.25,
+      plannedRouteNodeIds: [liftHelper.id, serviceExit.id, railNode.id]
+    }));
+    const secondBodyPose = resolveScene3DVehicleBodyPose(new Map([
+      [liftHelper.id, liftHelper],
+      [secondLiftHelper.id, secondLiftHelper],
+      [serviceExit.id, serviceExit],
+      [railNode.id, railNode]
+    ]), vehicle({
+      id: 'SH-04',
+      state: 'moving-to-pickup',
+      currentNodeId: secondLiftHelper.id,
+      targetNodeId: railNode.id,
+      currentEdgeId: `${secondLiftHelper.id}-${railNode.id}`,
+      x: 8,
+      z: 6.2,
+      yaw: -0.5,
+      plannedRouteNodeIds: [secondLiftHelper.id, railNode.id]
     }));
 
     expect(bodyPose.x).toBeCloseTo(8, 6);
     expect(bodyPose.z).toBeCloseTo(3.25, 6);
     expect(bodyPose.yaw).toBeCloseTo(1.25, 6);
-    expect(bodyPose.x).not.toBeCloseTo(railNode.x, 6);
+    expect(secondBodyPose.x).toBeCloseTo(secondLiftHelper.x, 6);
+    expect(secondBodyPose.z).toBeCloseTo(secondLiftHelper.z, 6);
+    expect(Math.hypot(bodyPose.x - secondBodyPose.x, bodyPose.z - secondBodyPose.z)).toBeGreaterThan(1);
   });
 
   it('keeps the 3D visual coordinates aligned with the authoritative 2D map', () => {

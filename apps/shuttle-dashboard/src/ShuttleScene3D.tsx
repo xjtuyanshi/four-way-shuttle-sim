@@ -1504,38 +1504,27 @@ function isLiftRouteDisplaySnapNode(nodeId: string): boolean {
     /^parking-lift-\d{2}-(?:inbound|outbound)-queue(?:-\d{2})?$/.test(nodeId);
 }
 
-type TopLiftDisplayRailLevel = 'top-a' | 'top-b';
+type LiftDisplayRailLevel = 'top-a' | 'top-b' | 'bottom-a' | 'bottom-b';
 
-function topLiftDisplayRailLevel(nodeId: string): TopLiftDisplayRailLevel | null {
-  const column = /^column-(top-[ab])-c\d+$/.exec(nodeId);
+function liftDisplayRailLevel(nodeId: string): LiftDisplayRailLevel | null {
+  const column = /^column-((?:top|bottom)-[ab])-c\d+$/.exec(nodeId);
   if (column) {
-    return column[1] as TopLiftDisplayRailLevel;
+    return column[1] as LiftDisplayRailLevel;
   }
-  const spine = /^(?:module-\d+|module-boundary-\d+)-spine-(top-[ab])$/.exec(nodeId);
-  return spine ? spine[1] as TopLiftDisplayRailLevel : null;
+  const spine = /^(?:module-\d+|module-boundary-\d+)-spine-((?:top|bottom)-[ab])$/.exec(nodeId);
+  return spine ? spine[1] as LiftDisplayRailLevel : null;
 }
 
-function isTopLiftDisplayRailNode(nodeId: string): boolean {
-  return topLiftDisplayRailLevel(nodeId) !== null;
+function isLiftDisplayRailNode(nodeId: string): boolean {
+  return liftDisplayRailLevel(nodeId) !== null;
 }
 
-function defaultLiftRouteDisplaySnapLevel(nodeId: string): TopLiftDisplayRailLevel | null {
-  const role = liftWorkcellRole(nodeId);
-  if (role === 'outbound') {
-    return 'top-a';
-  }
-  if (role === 'inbound') {
-    return 'top-b';
-  }
-  return null;
-}
-
-function isTopLiftDisplayRailLevelNode(nodeId: string, level: TopLiftDisplayRailLevel): boolean {
+function isLiftDisplayRailLevelNode(nodeId: string, level: LiftDisplayRailLevel): boolean {
   return new RegExp(`^column-${level}-c\\d+$`).test(nodeId) ||
     new RegExp(`^(?:module-\\d+|module-boundary-\\d+)-spine-${level}$`).test(nodeId);
 }
 
-function liftDisplayLevelForRouteNode(nodeIds: string[], index: number): TopLiftDisplayRailLevel | null {
+function liftDisplayLevelForRouteNode(nodeIds: string[], index: number): LiftDisplayRailLevel | null {
   const nodeId = nodeIds[index];
   if (!nodeId || !isLiftRouteDisplaySnapNode(nodeId)) {
     return null;
@@ -1543,7 +1532,7 @@ function liftDisplayLevelForRouteNode(nodeIds: string[], index: number): TopLift
 
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
     const previousNodeId = nodeIds[cursor]!;
-    const railLevel = topLiftDisplayRailLevel(previousNodeId);
+    const railLevel = liftDisplayRailLevel(previousNodeId);
     if (railLevel) {
       return railLevel;
     }
@@ -1554,7 +1543,7 @@ function liftDisplayLevelForRouteNode(nodeIds: string[], index: number): TopLift
 
   for (let cursor = index + 1; cursor < nodeIds.length; cursor += 1) {
     const nextNodeId = nodeIds[cursor]!;
-    const railLevel = topLiftDisplayRailLevel(nextNodeId);
+    const railLevel = liftDisplayRailLevel(nextNodeId);
     if (railLevel) {
       return railLevel;
     }
@@ -1563,27 +1552,29 @@ function liftDisplayLevelForRouteNode(nodeIds: string[], index: number): TopLift
     }
   }
 
-  return defaultLiftRouteDisplaySnapLevel(nodeId);
+  return null;
 }
 
-function liftDisplayLevelsForRoute(nodeIds: string[]): Array<TopLiftDisplayRailLevel | null> {
+function liftDisplayLevelsForRoute(nodeIds: string[]): Array<LiftDisplayRailLevel | null> {
   return nodeIds.map((_, index) => liftDisplayLevelForRouteNode(nodeIds, index));
 }
 
+type RouteDisplayRuntime = Pick<SceneRuntime, 'nodeById'>;
+
 function routeDisplayPointForNode(
-  runtime: SceneRuntime,
+  runtime: RouteDisplayRuntime,
   nodeId: string,
   fallback: { x: number; z: number },
-  preferredLevel: TopLiftDisplayRailLevel | null = null
+  preferredLevel: LiftDisplayRailLevel | null = null
 ): { x: number; z: number } {
   if (!isLiftRouteDisplaySnapNode(nodeId)) {
     return fallback;
   }
   let nearest: ShuttleNode | null = null;
   let nearestDistance = Number.POSITIVE_INFINITY;
-  const displayLevel = preferredLevel ?? defaultLiftRouteDisplaySnapLevel(nodeId);
+  const displayLevel = preferredLevel;
   for (const node of runtime.nodeById.values()) {
-    if (displayLevel ? !isTopLiftDisplayRailLevelNode(node.id, displayLevel) : !isTopLiftDisplayRailNode(node.id)) {
+    if (displayLevel ? !isLiftDisplayRailLevelNode(node.id, displayLevel) : !isLiftDisplayRailNode(node.id)) {
       continue;
     }
     const distance = Math.hypot(node.x - fallback.x, node.z - fallback.z);
@@ -1596,10 +1587,10 @@ function routeDisplayPointForNode(
 }
 
 function routeDisplayPointForVehicle(
-  runtime: SceneRuntime,
+  runtime: RouteDisplayRuntime,
   vehicle: VehicleState,
-  currentPreferredLevel: TopLiftDisplayRailLevel | null = null,
-  targetPreferredLevel: TopLiftDisplayRailLevel | null = null
+  currentPreferredLevel: LiftDisplayRailLevel | null = null,
+  targetPreferredLevel: LiftDisplayRailLevel | null = null
 ): { x: number; z: number } {
   const rawPoint = { x: vehicle.x, z: vehicle.z };
   const currentNode = runtime.nodeById.get(vehicle.currentNodeId);
@@ -1626,7 +1617,7 @@ function routeDisplayPointForVehicle(
   return routeDisplayPointForNode(runtime, vehicle.currentNodeId, rawPoint, currentPreferredLevel);
 }
 
-function routeDisplayPoseForVehicle(runtime: SceneRuntime, vehicle: VehicleState): { x: number; z: number; yaw: number } {
+function routeDisplayPoseForVehicle(runtime: RouteDisplayRuntime, vehicle: VehicleState): { x: number; z: number; yaw: number } {
   const routeNodeIds = remainingRouteNodeIds(vehicle, vehicle.plannedRouteNodeIds);
   const fallbackRouteNodeIds = routeNodeIds.length >= 2 ? routeNodeIds : remainingRouteNodeIds(vehicle, vehicle.routeNodeIds);
   const displayLevels = liftDisplayLevelsForRoute(fallbackRouteNodeIds);
