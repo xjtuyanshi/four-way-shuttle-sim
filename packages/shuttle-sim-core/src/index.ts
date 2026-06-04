@@ -3531,6 +3531,10 @@ export class ShuttleSimCore {
     if (!this.topLiftColumnLayoutEnabled() || this.liftPortKindForNodeId(liftNodeId) !== 'inbound') {
       return null;
     }
+    const serviceNodeId = liftQueueServiceExitNodeId(liftNodeId, 1);
+    if (this.layoutNode(serviceNodeId)) {
+      return serviceNodeId;
+    }
     const entryNodeId = liftQueueTailEntryNodeId(liftNodeId, 1);
     return this.topLiftQueueEntryBottomAccessNodeId(entryNodeId);
   }
@@ -3538,6 +3542,10 @@ export class ShuttleSimCore {
   private topLiftOutboundDropoffStopNodeId(liftNodeId: string): string | null {
     if (!this.topLiftColumnLayoutEnabled() || this.liftPortKindForNodeId(liftNodeId) !== 'outbound') {
       return null;
+    }
+    const serviceNodeId = liftQueueServiceExitNodeId(liftNodeId, 1);
+    if (this.layoutNode(serviceNodeId)) {
+      return serviceNodeId;
     }
     const entryNodeId = liftQueueTailEntryNodeId(liftNodeId, 1);
     return this.topLiftQueueEntryTopAccessNodeId(entryNodeId);
@@ -3839,8 +3847,9 @@ export class ShuttleSimCore {
     if (!this.topLiftColumnLayoutEnabled() || this.liftPortKindForNodeId(liftNodeId) !== 'outbound') {
       return [];
     }
-    const dropoffNodeId = this.topLiftOutboundDropoffStopNodeId(liftNodeId);
-    const match = /^column-bottom-a-c(\d+)$/.exec(dropoffNodeId ?? '');
+    const serviceEntryNodeId = liftQueueTailEntryNodeId(liftNodeId, 1);
+    const serviceEntryTopNodeId = this.topLiftQueueEntryTopAccessNodeId(serviceEntryNodeId);
+    const match = /^column-bottom-a-c(\d+)$/.exec(serviceEntryTopNodeId ?? '');
     if (!match) {
       return [];
     }
@@ -8849,7 +8858,12 @@ export class ShuttleSimCore {
       vehicle.loaded = false;
       const load = this.loadById(task.loadId);
       if (load) {
-        this.setLoadPlacement(load, task.kind === 'inbound' ? 'stored' : 'delivered', task.dropoffNodeId, null);
+        this.setLoadPlacement(
+          load,
+          task.kind === 'inbound' ? 'stored' : 'delivered',
+          task.kind === 'inbound' ? task.dropoffNodeId : null,
+          null
+        );
       }
       this.setTaskState(task, 'completed');
       task.completedAtSec = this.simTimeSec;

@@ -11,6 +11,14 @@ type ShuttleEdge = ShuttleScenario['layout']['edges'][number];
 type ShuttleStaticSceneBlockedCell = ShuttleStaticSceneContract['blockedCells'][number];
 type ShuttleStaticScenePad = ShuttleStaticSceneContract['liftPads'][number];
 type ShuttleStaticSceneTrackBed = ShuttleStaticSceneContract['trackBeds'][number];
+type LiftNoDriveRect = {
+  id: string;
+  role: LoadFlowRole;
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+};
 
 type SceneRuntime = {
   renderer: THREE.WebGLRenderer;
@@ -1039,6 +1047,74 @@ function createLiftServiceDockMarker(point: { x: number; z: number }, role: Load
   return group;
 }
 
+function createLiftGridTargetMarker(point: { x: number; z: number }, role: LoadFlowRole): THREE.Group {
+  const group = new THREE.Group();
+  group.position.set(point.x, 0, point.z);
+
+  const pad = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.46, 0.46, 0.035, 40),
+    new THREE.MeshBasicMaterial({ color: 0xff3b30, transparent: true, opacity: 0.2, depthWrite: false })
+  );
+  pad.position.y = 0.17;
+  pad.renderOrder = 130;
+  group.add(pad);
+
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.44, 0.58, 48),
+    new THREE.MeshBasicMaterial({ color: 0xff3b30, transparent: true, opacity: 0.96, side: THREE.DoubleSide, depthTest: false, depthWrite: false })
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.23;
+  ring.renderOrder = 155;
+  group.add(ring);
+
+  const core = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.12, 0.12, 0.04, 24),
+    new THREE.MeshBasicMaterial({ color: FLOW_VISUAL_COLORS[role].three, transparent: true, opacity: 0.92, depthTest: false, depthWrite: false })
+  );
+  core.position.y = 0.255;
+  core.renderOrder = 156;
+  group.add(core);
+
+  return group;
+}
+
+function createLiftNoDriveZone(rect: LiftNoDriveRect): THREE.Group {
+  const group = new THREE.Group();
+  const width = Math.max(0.08, rect.maxX - rect.minX);
+  const depth = Math.max(0.08, rect.maxZ - rect.minZ);
+  group.position.set((rect.minX + rect.maxX) / 2, 0, (rect.minZ + rect.maxZ) / 2);
+
+  const zone = new THREE.Mesh(
+    new THREE.BoxGeometry(width, 0.02, depth),
+    new THREE.MeshBasicMaterial({
+      color: 0x5a2026,
+      transparent: true,
+      opacity: 0.28,
+      depthWrite: false
+    })
+  );
+  zone.position.y = 0.105;
+  zone.renderOrder = 68;
+  group.add(zone);
+
+  const borderMaterial = new THREE.MeshBasicMaterial({ color: 0xff5a4f, transparent: true, opacity: 0.54, depthWrite: false });
+  for (const z of [-depth / 2, depth / 2]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(width, 0.024, 0.035), borderMaterial);
+    rail.position.set(0, 0.13, z);
+    rail.renderOrder = 69;
+    group.add(rail);
+  }
+  for (const x of [-width / 2, width / 2]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.024, depth), borderMaterial);
+    rail.position.set(x, 0.13, 0);
+    rail.renderOrder = 69;
+    group.add(rail);
+  }
+
+  return group;
+}
+
 function createParkingPad(node: ShuttleNode, pad?: ShuttleStaticScenePad): THREE.Group {
   const group = new THREE.Group();
   group.position.set(node.x, 0, node.z);
@@ -1434,7 +1510,7 @@ function createLoadMesh(state: ShuttleSimState, load: LoadStateRecord, node: Shu
 function loadOverlayKey(state: ShuttleSimState | null, layers: ShuttleSceneLayers): string {
   if (!layers.loads) return 'off';
   return (state?.loads ?? [])
-    .filter((load) => load.nodeId && load.state !== 'carried')
+    .filter((load) => load.nodeId && load.state !== 'carried' && load.state !== 'delivered')
     .map((load) => `${load.id}:${load.state}:${load.nodeId ?? ''}:${load.vehicleId ?? ''}:${state ? resolveLoadFlowRole(state, load) : 'inbound'}`)
     .sort()
     .join('|');
@@ -1499,8 +1575,94 @@ function liftWorkcellRole(nodeId: string): 'inbound' | 'outbound' | null {
   return match ? match[1] as 'inbound' | 'outbound' : null;
 }
 
+function liftWorkcellKeyParts(nodeId: string): { key: string; role: LoadFlowRole; liftNodeId: string } | null {
+  const match = /^(?:lift|parking-lift)-(\d{2})-(inbound|outbound)(?:$|-)/.exec(nodeId);
+  if (!match) {
+    return null;
+  }
+  const role = match[2] as LoadFlowRole;
+  return {
+    key: `lift-${match[1]}-${role}`,
+    role,
+    liftNodeId: `lift-${match[1]}-${role}`
+  };
+}
+
+function liftGridDockNodeId(
+  nodeById: Map<string, ShuttleNode>,
+  liftNodeId: string,
+  role: LoadFlowRole
+): string | null {
+  const serviceDockNodeId = `${liftNodeId}-queue-01-service-exit`;
+  if (nodeById.has(serviceDockNodeId)) {
+    return serviceDockNodeId;
+  }
+  const entryNode = nodeById.get(`${liftNodeId}-queue-01-entry-access`) ?? nodeById.get(`${liftNodeId}-queue-access`);
+  if (!entryNode) {
+    return null;
+  }
+  const targetLevel = role === 'inbound' ? 'top-b' : 'bottom-a';
+  let nearest: ShuttleNode | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const node of nodeById.values()) {
+    if (!new RegExp(`^column-${targetLevel}-c\\d+$`).test(node.id)) {
+      continue;
+    }
+    const distance = Math.hypot(node.x - entryNode.x, node.z - entryNode.z);
+    if (distance < nearestDistance) {
+      nearest = node;
+      nearestDistance = distance;
+    }
+  }
+  return nearest?.id ?? null;
+}
+
+function createLiftGridDockMarkers(nodes: ShuttleNode[]): Array<{ node: ShuttleNode; role: LoadFlowRole; liftNodeId: string }> {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  return nodes
+    .filter((node) => node.type === 'lift-blackbox' && (node.liftKind === 'inbound' || node.liftKind === 'outbound'))
+    .map((liftNode) => {
+      const role = liftNode.liftKind as LoadFlowRole;
+      const dockNodeId = liftGridDockNodeId(nodeById, liftNode.id, role);
+      const dockNode = dockNodeId ? nodeById.get(dockNodeId) : null;
+      return dockNode ? { node: dockNode, role, liftNodeId: liftNode.id } : null;
+    })
+    .filter((entry): entry is { node: ShuttleNode; role: LoadFlowRole; liftNodeId: string } => entry !== null);
+}
+
+function createLiftNoDriveRects(nodes: ShuttleNode[]): LiftNoDriveRect[] {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const dockNodeIds = new Set(createLiftGridDockMarkers(nodes).map((entry) => entry.node.id));
+  const byKey = new Map<string, { role: LoadFlowRole; nodes: ShuttleNode[] }>();
+  for (const node of nodes) {
+    if (dockNodeIds.has(node.id)) {
+      continue;
+    }
+    const parts = liftWorkcellKeyParts(node.id);
+    if (!parts) {
+      continue;
+    }
+    const entry = byKey.get(parts.key) ?? { role: parts.role, nodes: [] };
+    entry.nodes.push(nodeById.get(node.id) ?? node);
+    byKey.set(parts.key, entry);
+  }
+  return [...byKey.entries()].flatMap(([key, entry]) => {
+    if (entry.nodes.length === 0) {
+      return [];
+    }
+    return [{
+      id: `${key}-no-drive`,
+      role: entry.role,
+      minX: Math.min(...entry.nodes.map((node) => node.x)) - 0.78,
+      maxX: Math.max(...entry.nodes.map((node) => node.x)) + 0.78,
+      minZ: Math.min(...entry.nodes.map((node) => node.z)) - 0.62,
+      maxZ: Math.max(...entry.nodes.map((node) => node.z)) + 0.62
+    }];
+  });
+}
+
 function isLiftRouteDisplaySnapNode(nodeId: string): boolean {
-  return /^lift-\d{2}-(?:inbound|outbound)-(?:buffer-access|queue-access|queue-\d{2}-(?:access|entry-access|service-exit))$/.test(nodeId) ||
+  return /^lift-\d{2}-(?:inbound|outbound)-(?:buffer-access|queue-access|queue-\d{2}-(?:access|entry-access))$/.test(nodeId) ||
     /^parking-lift-\d{2}-(?:inbound|outbound)-queue(?:-\d{2})?$/.test(nodeId);
 }
 
@@ -1814,7 +1976,7 @@ function updateDynamicScene(
     clearGroup(runtime.loadGroup);
   }
   if (layers.loads && state && runtime.loadGroup.children.length === 0) {
-    const loads = state.loads.filter((load) => load.nodeId && load.state !== 'carried');
+    const loads = state.loads.filter((load) => load.nodeId && load.state !== 'carried' && load.state !== 'delivered');
     loads.forEach((load, index) => {
       const node = load.nodeId ? runtime.nodeById.get(load.nodeId) : null;
       if (node && (!isLiftWorkcellNode(node) || load.state === 'waiting')) {
@@ -1971,10 +2133,18 @@ function buildStaticScene(runtime: SceneRuntime, scenario: ShuttleScenario, came
     runtime.staticGroup.add(createTrackAreaBlock(rect, aisleAreaMaterial));
   }
 
+  for (const rect of createLiftNoDriveRects(visualScenario.layout.nodes)) {
+    runtime.staticGroup.add(createLiftNoDriveZone(rect));
+  }
+
   runtime.networkGroup.add(createRouteNetwork(visualStaticScene));
 
   for (const cell of visualStaticScene.blockedCells) {
     runtime.staticGroup.add(createBlockedCellMarker(cell));
+  }
+
+  for (const dock of createLiftGridDockMarkers(visualScenario.layout.nodes)) {
+    runtime.staticGroup.add(createLiftGridTargetMarker(dock.node, dock.role));
   }
 
   for (const node of visualScenario.layout.nodes) {

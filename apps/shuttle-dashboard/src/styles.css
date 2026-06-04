@@ -1941,7 +1941,8 @@ input[type="range"] {
 }
 
 .map-area,
-.map-storage-cell {
+.map-storage-cell,
+.map-lift-wall {
   position: absolute;
   display: block;
   pointer-events: none;
@@ -1964,6 +1965,21 @@ input[type="range"] {
 
 .map-area.outboundConnector {
   background: rgba(var(--flow-outbound-rgb), 0.16);
+}
+
+.map-lift-wall {
+  z-index: 0;
+  border-radius: 6px;
+  background:
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 90, 79, 0.16) 0,
+      rgba(255, 90, 79, 0.16) 6px,
+      rgba(61, 25, 30, 0.2) 6px,
+      rgba(61, 25, 30, 0.2) 12px
+    );
+  border: 1px solid rgba(255, 90, 79, 0.48);
+  box-shadow: inset 0 0 0 1px rgba(16, 10, 12, 0.48);
 }
 
 .map-lift-transfer {
@@ -2068,6 +2084,27 @@ input[type="range"] {
 
 .map-lift-equipment.lift-dock.flow-outbound {
   color: rgb(var(--flow-outbound-rgb));
+}
+
+.map-lift-grid-target {
+  position: absolute;
+  z-index: 10;
+  width: 24px;
+  height: 24px;
+  transform: translate(-50%, -50%);
+  border: 3px solid #ff3b30;
+  border-radius: 999px;
+  background: rgba(255, 59, 48, 0.12);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5), 0 0 18px rgba(255, 59, 48, 0.46);
+  pointer-events: none;
+}
+
+.map-lift-grid-target::after {
+  content: "";
+  position: absolute;
+  inset: 7px;
+  border-radius: inherit;
+  background: #ff3b30;
 }
 
 .map-storage-cell {
