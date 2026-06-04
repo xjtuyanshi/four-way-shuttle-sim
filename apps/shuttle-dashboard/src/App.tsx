@@ -4046,6 +4046,37 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    const recordingId = new URLSearchParams(window.location.search).get('recordingId')?.trim();
+    if (!recordingId) {
+      return;
+    }
+
+    let cancelled = false;
+    recordingPollTokenRef.current += 1;
+    setCommandStatus({ label: `loading recording ${recordingId.slice(0, 8)}...`, tone: 'idle' });
+    requestJson<PhysicalRecordingResponse>(`/api/shuttle/physicalRecordings/${encodeURIComponent(recordingId)}`)
+      .then((response) => {
+        if (cancelled) return;
+        setPhysicalRecordingJob(null);
+        setPhysicalRecording(response.recording);
+        setReplay({ active: true, playing: false, cursorSec: 0, speed: 4 });
+        setCommandStatus({
+          label: `loaded ${formatClock(response.recording.durationSec)} replay · ${formatNumber(response.recording.summary.totalPph, 1)} PPH`,
+          tone: response.recording.anomalyMarkers.length === 0 ? 'ok' : 'warn'
+        });
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!physicalRecording || !replay.active || !replay.playing) {
       if (replayFrameRef.current !== null) {
         window.cancelAnimationFrame(replayFrameRef.current);

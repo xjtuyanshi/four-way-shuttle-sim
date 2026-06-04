@@ -32,7 +32,7 @@ const traceSnapshotCadenceSec = Number(process.env.SHUTTLE_TRACE_SNAPSHOT_SEC ??
 const maxTraceSnapshots = Number(process.env.SHUTTLE_TRACE_MAX_SNAPSHOTS ?? 1800);
 const longRunTraceSnapshotThresholdSec = Number(process.env.SHUTTLE_LONG_RUN_TRACE_SNAPSHOT_THRESHOLD_SEC ?? 1800);
 const maxPhysicalRecordingFrames = Number(process.env.SHUTTLE_PHYSICAL_RECORDING_MAX_FRAMES ?? 7200);
-const physicalRecordingJobChunkFrames = Number(process.env.SHUTTLE_PHYSICAL_RECORDING_CHUNK_FRAMES ?? 80);
+const physicalRecordingJobChunkFrames = Number(process.env.SHUTTLE_PHYSICAL_RECORDING_CHUNK_FRAMES ?? 10);
 const maxRetainedPhysicalRecordings = Number(process.env.SHUTTLE_PHYSICAL_RECORDING_RETAIN ?? 3);
 
 type ReplayCommandRecordV1 = {
@@ -468,9 +468,15 @@ function processPhysicalRecordingJob(jobId: string): void {
     let framesThisChunk = 0;
     while (framesThisChunk < frameBudget && job.latestSec < job.durationSec - 1e-9 && job.sim.getClock().status === 'running') {
       const targetSec = Math.min(job.durationSec, job.nextSampleSec);
-      const currentSec = job.sim.getClock().simTimeSec;
-      if (targetSec > currentSec + 1e-9) {
-        job.sim.advanceByInPlace(targetSec - currentSec);
+      while (job.sim.getClock().simTimeSec < targetSec - 1e-9 && job.sim.getClock().status === 'running') {
+        const clock = job.sim.getClock();
+        const stepSec = Math.min(job.scenario.timeStepSec, targetSec - clock.simTimeSec);
+        if (stepSec <= 1e-9) {
+          break;
+        }
+        const stepState = job.sim.step(stepSec);
+        job.latestSec = stepState.simTimeSec;
+        appendPhysicalRecordingAnomalies(job, stepState);
       }
       const state = job.sim.getState();
       job.latestSec = state.simTimeSec;
