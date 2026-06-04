@@ -3539,8 +3539,8 @@ export class ShuttleSimCore {
     if (!this.topLiftColumnLayoutEnabled() || this.liftPortKindForNodeId(liftNodeId) !== 'outbound') {
       return null;
     }
-    const serviceNodeId = liftQueueServiceExitNodeId(liftNodeId, 1);
-    return this.layoutNode(serviceNodeId) ? serviceNodeId : null;
+    const entryNodeId = liftQueueTailEntryNodeId(liftNodeId, 1);
+    return this.topLiftQueueEntryTopAccessNodeId(entryNodeId);
   }
 
   private topLiftServiceStopLiftNodeId(kind: LiftKind, nodeId: string): string | null {
@@ -3839,7 +3839,13 @@ export class ShuttleSimCore {
     if (!this.topLiftColumnLayoutEnabled() || this.liftPortKindForNodeId(liftNodeId) !== 'outbound') {
       return [];
     }
-    return Array.from({ length: 3 }, (_, index) => liftQueueNodeId(liftNodeId, index + 1))
+    const dropoffNodeId = this.topLiftOutboundDropoffStopNodeId(liftNodeId);
+    const match = /^column-bottom-a-c(\d+)$/.exec(dropoffNodeId ?? '');
+    if (!match) {
+      return [];
+    }
+    const dropoffColumn = Number(match[1]!);
+    return Array.from({ length: 3 }, (_, index) => `column-bottom-a-c${String(dropoffColumn - index - 1).padStart(2, '0')}`)
       .filter((nodeId) => this.layoutNode(nodeId) !== null);
   }
 
@@ -4092,14 +4098,11 @@ export class ShuttleSimCore {
   }
 
   private topLiftOutboundClearanceNodeIds(liftNodeId: string): string[] {
-    const finalServiceSlotIndex = 3;
-    const nodeIds = Array.from({ length: finalServiceSlotIndex }, (_, index) =>
-      liftQueueServiceExitNodeId(liftNodeId, index + 1)
-    );
-    for (let slotIndex = finalServiceSlotIndex; slotIndex >= 1; slotIndex -= 1) {
-      const entryNodeId = liftQueueTailEntryNodeId(liftNodeId, slotIndex);
-      nodeIds.push(entryNodeId);
-      const exitNodeId = this.topLiftQueueEntryBottomAccessNodeId(entryNodeId);
+    const dropoffNodeId = this.topLiftOutboundDropoffStopNodeId(liftNodeId);
+    const nodeIds: string[] = [];
+    if (dropoffNodeId) {
+      nodeIds.push(dropoffNodeId);
+      const exitNodeId = this.topLiftOutboundDropoffExitNodeId(dropoffNodeId);
       if (exitNodeId) {
         nodeIds.push(exitNodeId);
       }
@@ -4136,6 +4139,9 @@ export class ShuttleSimCore {
   private outboundLoadedVehicleAlreadyInServiceLane(task: TaskStateRecord, vehicle?: MutableVehicle | VehicleState | null): boolean {
     if (task.kind !== 'outbound' || !vehicle?.loaded || !this.topLiftColumnLayoutEnabled()) {
       return false;
+    }
+    if (vehicle.currentNodeId === task.dropoffNodeId) {
+      return true;
     }
     const liftNodeId = this.taskLiftPortNodeId(task);
     if (!liftNodeId) {
@@ -7188,6 +7194,10 @@ export class ShuttleSimCore {
     if (!liftNodeId) {
       return null;
     }
+    const yellowGridExitNodeId = this.topLiftOutboundDropoffExitNodeId(task.dropoffNodeId);
+    if (yellowGridExitNodeId && this.traffic.findEdge(task.dropoffNodeId, yellowGridExitNodeId)) {
+      return [task.dropoffNodeId, yellowGridExitNodeId];
+    }
     const serviceSlot = topLiftQueueServiceSlot(task.dropoffNodeId);
     if (serviceSlot?.liftNodeId === liftNodeId && this.liftPortKindForNodeId(liftNodeId) === 'outbound') {
       const finalServiceSlotIndex = 3;
@@ -7221,6 +7231,15 @@ export class ShuttleSimCore {
       return null;
     }
     return [task.dropoffNodeId, exitNodeId];
+  }
+
+  private topLiftOutboundDropoffExitNodeId(dropoffNodeId: string): string | null {
+    const match = /^column-bottom-a-c(\d+)$/.exec(dropoffNodeId);
+    if (!match) {
+      return null;
+    }
+    const exitNodeId = `column-bottom-b-c${match[1]}`;
+    return this.layoutNode(exitNodeId) ? exitNodeId : null;
   }
 
   private topLiftQueueEntryTopAccessNodeId(entryNodeId: string): string | null {

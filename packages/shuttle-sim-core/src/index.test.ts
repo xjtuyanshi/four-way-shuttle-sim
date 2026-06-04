@@ -690,8 +690,9 @@ describe('shuttle phase 0 SimCore', () => {
 
     const state = sim.getState();
     const loadedFollower = state.vehicles.find((vehicle) => vehicle.id === 'SH-01');
-    expect(loadedFollower?.currentNodeId).toBe('lift-01-outbound-queue-01-entry-access');
-    expect(loadedFollower?.targetNodeId).toBe('lift-01-outbound-queue-01-service-exit');
+    expect(loadedFollower?.currentNodeId).toBe('column-bottom-a-c06');
+    expect(loadedFollower?.targetNodeId).not.toMatch(/^lift-\d{2}-outbound-queue-\d{2}-service-exit$/);
+    expect(loadedFollower?.routeNodeIds).not.toContain('lift-01-outbound-queue-01-service-exit');
     expect(loadedFollower?.waitReason).toBeNull();
     expect(loadedFollower?.currentEdgeId).not.toBeNull();
   });
@@ -899,7 +900,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(stagedVehicle?.plannedRouteNodeIds).not.toContain('lift-01-inbound-queue-01-service-exit');
   });
 
-  it('clears empty outbound dropoff shuttles down the service rail before reassignment', () => {
+  it('clears empty outbound dropoff shuttles from the legal yellow dropoff line before reassignment', () => {
     const sim = new ShuttleSimCore(createInboundOutboundDemoScenario());
     sim.start();
 
@@ -918,13 +919,10 @@ describe('shuttle phase 0 SimCore', () => {
     }
 
     expect(clearanceRoute).toEqual([
-      'lift-01-outbound-queue-01-service-exit',
-      'lift-01-outbound-queue-02-service-exit',
-      'lift-01-outbound-queue-03-service-exit',
-      'lift-01-outbound-queue-03-entry-access',
+      'column-bottom-a-c06',
       'column-bottom-b-c06'
     ]);
-    expect(clearanceRoute).not.toContain('column-bottom-a-c06');
+    expect(clearanceRoute).not.toContain('lift-01-outbound-queue-01-service-exit');
   });
 
   it('moves a later same-lift task off the pickup point when the earlier load is still first', () => {
@@ -1766,7 +1764,7 @@ describe('shuttle phase 0 SimCore', () => {
     });
   }, 10000);
 
-  it('creates top-lift outbound work against the lift-side service drop point aligned with the third buffer', () => {
+  it('creates top-lift outbound work against the nearest legal yellow-grid dropoff line', () => {
     const scenario = createInboundOutboundDemoScenario({
       vehicles: { count: 1 },
       taskGeneration: {
@@ -1787,11 +1785,11 @@ describe('shuttle phase 0 SimCore', () => {
     }
 
     const outboundTask = state.tasks.find((task) => task.kind === 'outbound');
-    expect(outboundTask?.dropoffNodeId).toBe('lift-01-outbound-queue-01-service-exit');
+    expect(outboundTask?.dropoffNodeId).toBe('column-bottom-a-c06');
     const outboundDropoffNode = scenario.layout.nodes.find((node) => node.id === outboundTask?.dropoffNodeId);
-    const outboundBufferAccessNode = scenario.layout.nodes.find((node) => node.id === 'lift-01-outbound-buffer-access');
-    expect(outboundDropoffNode?.z).toBeCloseTo(outboundBufferAccessNode?.z ?? Number.NaN, 6);
-    expect(outboundTask?.dropoffNodeId).not.toMatch(/^column-top-[ab]-/);
+    const outboundExitNode = scenario.layout.nodes.find((node) => node.id === 'column-bottom-b-c06');
+    expect(outboundDropoffNode?.x).toBeCloseTo(outboundExitNode?.x ?? Number.NaN, 6);
+    expect(outboundTask?.dropoffNodeId).toMatch(/^column-bottom-a-/);
   });
 
   it('lets a top double-lane side-yield continue from the alternate lane instead of routing back', () => {
@@ -6482,7 +6480,7 @@ describe('shuttle phase 0 SimCore', () => {
     expect(internals.topLiftQueueFifoBlocker(later, 'parking-lift-01-outbound-queue')).toBeNull();
   });
 
-  it('stages outbound lift queues at certified parking meters outside the service lane', () => {
+  it('stages outbound lift queues on upstream yellow-grid approach nodes outside the service lane', () => {
     const scenario = createInboundOutboundDemoScenario({
       vehicles: { count: 2 },
       taskGeneration: {
@@ -6531,14 +6529,10 @@ describe('shuttle phase 0 SimCore', () => {
     };
     const later = internals.tasks.find((task) => task.id === 'later-outbound')!;
 
-    expect(internals.topLiftOutboundQueueNodeIdForTask(later)).toBe('parking-lift-01-outbound-queue');
+    expect(internals.topLiftOutboundQueueNodeIdForTask(later)).toBe('column-bottom-a-c05');
     expect(scenario.layout.edges.find((edge) =>
-      edge.from === 'lift-01-outbound-queue-01-access' &&
-      edge.to === 'parking-lift-01-outbound-queue'
-    )?.directionMode).toBe('twoWay');
-    expect(scenario.layout.edges.find((edge) =>
-      edge.from === 'lift-01-outbound-queue-01-entry-access' &&
-      edge.to === 'lift-01-outbound-queue-01-access'
+      edge.from === 'column-bottom-a-c05' &&
+      edge.to === 'column-bottom-a-c06'
     )?.directionMode).toBe('twoWay');
     expect(scenario.layout.edges.find((edge) =>
       edge.from === 'lift-01-outbound-queue-01-entry-access' &&
@@ -6809,7 +6803,7 @@ describe('shuttle phase 0 SimCore', () => {
     const laterVehicle = internals.vehicles.find((vehicle) => vehicle.id === 'SH-02')!;
     const laterTask = internals.tasks.find((task) => task.id === 'later-outbound')!;
 
-    expect(internals.outboundDropoffDispatchGoalNodeId(laterTask, laterVehicle)).toBe('parking-lift-01-outbound-queue');
+    expect(internals.outboundDropoffDispatchGoalNodeId(laterTask, laterVehicle)).toBe('column-bottom-a-c05');
   });
 
   it('drops an obsolete station-entry sticky goal and re-meters the outbound follower', () => {
@@ -6868,7 +6862,7 @@ describe('shuttle phase 0 SimCore', () => {
     laterVehicle.plannedGoalNodeId = 'lift-01-outbound-queue-03-entry-access';
     const laterTask = internals.tasks.find((task) => task.id === 'later-outbound')!;
 
-    expect(internals.outboundDropoffDispatchGoalNodeId(laterTask, laterVehicle)).toBe('parking-lift-01-outbound-queue');
+    expect(internals.outboundDropoffDispatchGoalNodeId(laterTask, laterVehicle)).toBe('column-bottom-a-c05');
   });
 
   it('lets a leading top-lift shuttle move away from a trailing shuttle targeting its current node', () => {
