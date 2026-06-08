@@ -1,0 +1,155 @@
+{
+  "schemaVersion": "shuttle.customerSiteCalibration.v1",
+  "status": "internal-review-assumption",
+  "site": {
+    "customerName": "not-site-calibrated",
+    "facilityName": "not-site-calibrated",
+    "timezone": "America/Los_Angeles review-machine context; customer site timezone not calibrated",
+    "coordinateSystem": "generated top-lift-column demo layout, meter units; customer CAD origin not calibrated",
+    "preparedBy": "Codex review pack",
+    "preparedAtIso": "2026-06-08T00:00:00-07:00"
+  },
+  "demandProfile": {
+    "grain": "hour",
+    "source": "internal DES stress input, not WCS/MES export",
+    "units": "loads/hour",
+    "rows": [
+      {
+        "startIso": "review-window-hour",
+        "endIso": "review-window-hour-plus-1",
+        "inboundArrivals": 3600,
+        "inboundCompleted": "output metric, not input; see generated review JSON",
+        "outboundRequested": 3600,
+        "outboundCompleted": "output metric, not input; see generated review JSON",
+        "notes": "Stress input used for the review DES. Replace with measured hourly WCS/MES exports before site capacity claim."
+      }
+    ]
+  },
+  "liftCycle": {
+    "source": "internal review assumption, not PLC/video",
+    "units": "seconds",
+    "ports": [
+      {
+        "portId": "all-review-lift-ports",
+        "direction": "inbound and outbound",
+        "sampleCount": 0,
+        "pickupLiftP50Sec": 30,
+        "pickupLiftP95Sec": "not-site-calibrated",
+        "dropLowerP50Sec": 30,
+        "dropLowerP95Sec": "not-site-calibrated",
+        "bufferReleaseP50Sec": "not-site-calibrated",
+        "bufferReleaseP95Sec": "not-site-calibrated",
+        "notes": "Review baseline uses 30s lift and 30s lower. Replace with PLC or synchronized video timing."
+      }
+    ]
+  },
+  "shuttleMotion": {
+    "source": "demo scenario physics parameters, not vendor commissioning log",
+    "units": {
+      "speed": "m/s",
+      "acceleration": "m/s^2",
+      "dwell": "seconds",
+      "tolerance": "mm"
+    },
+    "loadedSpeedMps": 1.5,
+    "emptySpeedMps": 2,
+    "accelerationMps2": "scenario default, not site-calibrated",
+    "decelerationMps2": "scenario default, not site-calibrated",
+    "turnDwellSec": "not-site-calibrated",
+    "reverseDwellSec": "not-site-calibrated",
+    "positionToleranceMm": "not-site-calibrated",
+    "notes": "Replace with vendor motion spec and commissioning logs before real-site claim."
+  },
+  "layoutDimensions": {
+    "source": "generated top-lift-column layout; remaining dimensions are assumption-grade",
+    "units": "meter in simulation, convert from customer CAD if supplied in mm",
+    "storagePitchX": "generated scenario default",
+    "storagePitchZ": "generated scenario default",
+    "aisleCenterSpacing": "generated scenario default",
+    "liftPorts": [
+      {
+        "portId": "generated-review-lift-ports",
+        "x": "generated scenario coordinate",
+        "z": "generated scenario coordinate",
+        "direction": "inbound or outbound by generated top-lift region",
+        "notes": "Replace with CAD export or dimensioned top-down drawing."
+      }
+    ],
+    "parkingNodes": [
+      {
+        "nodeId": "generated-review-parking-nodes",
+        "x": "generated scenario coordinate",
+        "z": "generated scenario coordinate",
+        "notes": "Replace with site staging/parking coordinates."
+      }
+    ]
+  },
+  "loadAndClearanceEnvelope": {
+    "source": "phase0 assumption-grade profile",
+    "units": "mm",
+    "loadFootprintX": "not-site-calibrated",
+    "loadFootprintZ": "not-site-calibrated",
+    "loadOverhangX": "not-site-calibrated",
+    "loadOverhangZ": "not-site-calibrated",
+    "shuttleFootprintX": "not-site-calibrated",
+    "shuttleFootprintZ": "not-site-calibrated",
+    "rollerTransferFootprintX": "not-site-calibrated",
+    "rollerTransferFootprintZ": "not-site-calibrated",
+    "requiredClearance": "not-site-calibrated",
+    "notes": "Replace with vendor drawings and customer clearance standard."
+  },
+  "blockedCellsAndNoDriveZones": {
+    "source": "current generated profile; no customer CAD exclusions loaded",
+    "blockedCells": [
+      {
+        "cellId": "none-in-current-review-profile",
+        "reason": "0 blocked cells in current internal review profile",
+        "notes": "Replace with structural blocked cells and maintenance exclusion zones from CAD/site survey."
+      }
+    ],
+    "noDriveRectangles": [
+      {
+        "zoneId": "none-in-current-review-profile",
+        "minX": "not-site-calibrated",
+        "maxX": "not-site-calibrated",
+        "minZ": "not-site-calibrated",
+        "maxZ": "not-site-calibrated",
+        "reason": "No customer no-drive rectangles loaded."
+      }
+    ]
+  },
+  "controlPolicy": {
+    "source": "internal DES review policy",
+    "dispatchPriority": "DES default task release order",
+    "storageAssignmentRule": "generated top-lift-column scenario defaults",
+    "retrievalRule": "generated outbound task defaults",
+    "liftQueueCapacity": "scenario/API default; not customer WCS export",
+    "sourceBufferCapacity": "scenario/API default; not customer WCS export",
+    "maxConcurrentReleasedTasks": 6,
+    "repositionPolicy": "review DES baseline; cap 6 balanced against cap 8 congestion",
+    "notes": "Replace with WCS/WES dispatch, queue, storage, and release rules."
+  },
+  "visualValidationSamples": [
+    {
+      "sampleId": "internal-dashboard-screenshots",
+      "videoFileOrUrl": "output/review/screenshots/dashboard-live-actual-3d-animation.png",
+      "taskId": "not-site-calibrated",
+      "eventTimestampIso": "not-site-calibrated",
+      "expectedObservation": "vehicle arrival, lift action, load attach/detach, and departure",
+      "notes": "Internal visual evidence only. Replace with synchronized site video and task timestamps."
+    }
+  ],
+  "acceptanceThresholds": {
+    "source": "internal review bands, not customer signed threshold",
+    "inboundPphTarget": "not-customer-supplied",
+    "outboundPphTarget": "not-customer-supplied",
+    "totalPphTarget": "not-customer-supplied",
+    "maxWaitingSharePct": "internal watch band only",
+    "maxRepositionSharePct": "internal observation metric only",
+    "acceptableLiftUtilizationRangePct": {
+      "min": "not-customer-supplied",
+      "max": "not-customer-supplied"
+    },
+    "notes": "Customer acceptance thresholds are required before pass/fail capacity claim."
+  }
+}

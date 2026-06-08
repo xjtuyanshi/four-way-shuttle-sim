@@ -151,6 +151,8 @@ export type ScenarioSetup = {
   inboundLiftCount: number;
   outboundLiftCount: number;
   initialOutboundFullColumns: number;
+  initialStorageFillPolicy: ShuttleScenario['taskGeneration']['initialStorageFillPolicy'];
+  storageSelectionPolicy: ShuttleScenario['taskGeneration']['storageSelectionPolicy'];
   maxInitialOutboundFullColumns: number;
 };
 
@@ -169,10 +171,46 @@ type LiveStreamSnapshot = {
 
 type PphHistorySample = {
   simTimeSec: number;
+  completedInbound?: number;
+  completedOutbound?: number;
   inboundPph: number;
   outboundPph: number;
   totalPph: number;
+  waitingPct: number;
+  repositionPct: number;
   liftPph: Record<string, number>;
+};
+
+export type LiveTrendDiagnosis = {
+  id: string;
+  label: string;
+  status: 'pass' | 'watch' | 'critical';
+  value: string;
+  detail: string;
+  evidence: string;
+};
+
+export type ReviewTrafficReadout = {
+  id: string;
+  label: string;
+  status: 'pass' | 'watch' | 'critical';
+  value: string;
+  detail: string;
+  evidence: string;
+};
+
+export type ReviewDesEvidence = {
+  routeStatus: 'pass' | 'watch' | 'critical';
+  routeMisses: number;
+  reservationWindows: number;
+  tracedTasks: number;
+  routePass: number;
+  routeWatch: number;
+  routeFail: number;
+  trafficWaitHours: number;
+  topBottleneck: string;
+  topWaitTask: string;
+  evidence: string;
 };
 
 type FastRunProgress = {
@@ -192,7 +230,7 @@ type ReplayControlState = {
 };
 
 type MapViewMode = '3d' | 'lite' | '2d';
-type WorkspaceTab = 'view' | 'statistics' | 'diagnostics';
+type WorkspaceTab = 'review' | 'view' | 'statistics' | 'diagnostics';
 
 const MAX_PPH_HISTORY_SAMPLES = 240;
 const SIX_HOURS_SEC = 6 * 60 * 60;
@@ -200,6 +238,7 @@ const THREE_HOURS_SEC = 3 * 60 * 60;
 const TWELVE_HOURS_SEC = 12 * 60 * 60;
 const FAST_RUN_CHUNK_SEC = 10;
 const RECORDING_SAMPLE_INTERVAL_SEC = 5;
+const LONG_RECORDING_SAMPLE_INTERVAL_SEC = 60;
 const REPLAY_SPEEDS = [1, 2, 4, 10, 20] as const;
 
 type BottleneckBreakdown = Record<string, number>;
@@ -412,16 +451,16 @@ const CONTROLLED_PARAMS = [
     label: 'Lift time',
     path: '/physicsParams/liftTimeSec',
     min: 0,
-    max: 1,
-    step: 0.01,
+    max: 60,
+    step: 1,
     unit: 's'
   },
   {
     label: 'Lower time',
     path: '/physicsParams/lowerTimeSec',
     min: 0,
-    max: 1,
-    step: 0.01,
+    max: 60,
+    step: 1,
     unit: 's'
   },
   {
@@ -468,6 +507,7 @@ const CONTROLLED_PARAMS = [
 
 const PLAYBACK_SPEEDS = [1, 2, 4, 10, 100] as const;
 const WORKSPACE_TABS: Array<{ id: WorkspaceTab; label: string }> = [
+  { id: 'review', label: 'Review Cockpit' },
   { id: 'view', label: '2D / 3D View' },
   { id: 'statistics', label: 'Statistics' },
   { id: 'diagnostics', label: 'Diagnostics' }
@@ -626,6 +666,8 @@ export function summarizeScenarioSetup(scenario: ShuttleScenario | null | undefi
     inboundLiftCount,
     outboundLiftCount,
     initialOutboundFullColumns: scenario.taskGeneration.initialOutboundFullColumns,
+    initialStorageFillPolicy: scenario.taskGeneration.initialStorageFillPolicy,
+    storageSelectionPolicy: scenario.taskGeneration.storageSelectionPolicy,
     maxInitialOutboundFullColumns: contract.storageColumns
   };
 }
@@ -648,28 +690,50 @@ function mergeEvents(previous: EventLogEntry[], next: EventLogEntry[]): EventLog
 
 function createPphHistorySample(simTimeSec: number, kpis: KpiSnapshot): PphHistorySample {
   const outboundPph = displayOutboundPph(kpis);
+  const utilizationBreakdowns = Object.values(kpis.vehicleUtilizationBreakdown ?? {});
+  const waitingPct = average(utilizationBreakdowns.map((breakdown) => breakdown.waiting)) * 100;
+  const repositionPct = average(utilizationBreakdowns.map((breakdown) => breakdown.tasklessTravel)) * 100;
   return {
     simTimeSec,
+    completedInbound: kpis.completedInbound,
+    completedOutbound: kpis.completedOutbound,
     inboundPph: displayInboundPph(kpis),
     outboundPph,
     totalPph: displayTotalPph(kpis),
+    waitingPct,
+    repositionPct,
     liftPph: Object.fromEntries(Object.entries(kpis.liftPph ?? {}).map(([nodeId, value]) => [nodeId, value.pph]))
   };
 }
 
 function displayInboundPph(kpis: KpiSnapshot): number {
-  return kpis.pphWindowSec > 0 ? kpis.windowInboundPph : kpis.inboundPph;
+  return displayWindowOrAveragePph(kpis.windowInboundPph, kpis.inboundPph, kpis.completedInbound, kpis.pphWindowSec);
 }
 
 function displayOutboundPph(kpis: KpiSnapshot): number {
-  return kpis.pphWindowSec > 0 ? kpis.windowOutboundPph : kpis.outboundPph;
+  return displayWindowOrAveragePph(kpis.windowOutboundPph, kpis.outboundPph, kpis.completedOutbound, kpis.pphWindowSec);
 }
 
 function displayTotalPph(kpis: KpiSnapshot): number {
-  return kpis.pphWindowSec > 0 ? kpis.windowTotalPph : kpis.totalPph;
+  return displayWindowOrAveragePph(
+    kpis.windowTotalPph,
+    kpis.totalPph,
+    kpis.completedInbound + kpis.completedOutbound,
+    kpis.pphWindowSec
+  );
 }
 
-function appendPphHistorySample(previous: PphHistorySample[], sample: PphHistorySample): PphHistorySample[] {
+function displayWindowOrAveragePph(windowPph: number, averagePph: number, completedCount: number, windowSec: number): number {
+  if (windowSec <= 0) {
+    return averagePph;
+  }
+  if (windowPph <= 0 && averagePph > 0 && completedCount > 0) {
+    return averagePph;
+  }
+  return windowPph;
+}
+
+export function appendPphHistorySample(previous: PphHistorySample[], sample: PphHistorySample): PphHistorySample[] {
   const last = previous.at(-1);
   if (last && sample.simTimeSec < last.simTimeSec) {
     return [sample];
@@ -942,8 +1006,7 @@ function routeRenderStartPoint(
 }
 
 function isLiftRouteDisplaySnapNode(nodeId: string): boolean {
-  return /^lift-\d{2}-(?:inbound|outbound)-(?:buffer-access|queue-access|queue-\d{2}-(?:access|entry-access))$/.test(nodeId) ||
-    /^parking-lift-\d{2}-(?:inbound|outbound)-queue(?:-\d{2})?$/.test(nodeId);
+  return /^(?:lift|parking-lift)-\d{2}-(?:inbound|outbound)(?:$|-throat|-buffer-access|-buffer-\d{2}|-queue-access|-queue-\d{2}-(?:access|entry-access|service-exit)|-queue(?:-\d{2})?)$/.test(nodeId);
 }
 
 type LiftDisplayRailLevel = 'top-a' | 'top-b' | 'bottom-a' | 'bottom-b';
@@ -1071,7 +1134,7 @@ function vehicleBodyDisplayPointForVehicleState(
   vehicle: VehicleState,
   nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>
 ): { x: number; z: number } {
-  return routeRenderStartPoint(vehicle, nodeMap);
+  return routeDisplayPointForVehicleState(vehicle, nodeMap);
 }
 
 function routeRenderSegments(
@@ -1110,6 +1173,39 @@ function routeRenderSegments(
     displayFromPoint = displayToPoint;
   }
   return segments;
+}
+
+function routeDistanceFromVehicleM(
+  vehicle: VehicleState,
+  nodeIds: string[],
+  nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>
+): number {
+  if (nodeIds.length < 2) {
+    return 0;
+  }
+  let distanceM = 0;
+  let cursor = { x: vehicle.x, z: vehicle.z };
+  for (const nodeId of nodeIds.slice(1)) {
+    const node = nodeMap.get(nodeId);
+    if (!node) {
+      continue;
+    }
+    distanceM += Math.hypot(node.x - cursor.x, node.z - cursor.z);
+    cursor = { x: node.x, z: node.z };
+  }
+  return distanceM;
+}
+
+function routeLowerBoundM(
+  vehicle: VehicleState,
+  goalNodeId: string,
+  nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>
+): number {
+  const goalNode = nodeMap.get(goalNodeId);
+  if (!goalNode) {
+    return 0;
+  }
+  return Math.abs(goalNode.x - vehicle.x) + Math.abs(goalNode.z - vehicle.z);
 }
 
 function isModuleBoundaryEdge(edge: ShuttleScenario['layout']['edges'][number]): boolean {
@@ -1240,28 +1336,100 @@ function KpiStrip({ scenario, kpis }: { scenario: ShuttleScenario | null; kpis: 
   );
 }
 
+function DesAnswerFirstPanel({ result }: { result: HeadlessDesResult | null }) {
+  const rows = useMemo(() => buildDesPeriodRows(result), [result]);
+  const latest = rows.at(-1) ?? null;
+  const minRow = rows.reduce<DesPeriodThroughputRow | null>(
+    (best, row) => (best === null || row.totalPph < best.totalPph ? row : best),
+    null
+  );
+  const maxRow = rows.reduce<DesPeriodThroughputRow | null>(
+    (best, row) => (best === null || row.totalPph > best.totalPph ? row : best),
+    null
+  );
+  const topBottleneck = result?.trafficBottlenecks[0] ?? null;
+  const criticalIssues = result?.issues.filter((issue) => issue.severity === 'critical').length ?? 0;
+  const warningIssues = result?.issues.filter((issue) => issue.severity === 'warning').length ?? 0;
+  const routeMisses = result?.routeModel.routeUnavailableCount ?? 0;
+  const internalReady = Boolean(result) && criticalIssues === 0 && routeMisses === 0;
+
+  return (
+    <section className="des-answer-panel" aria-label="DES answer first summary">
+      <div className="panel-head compact">
+        <div>
+          <h2>Answer First</h2>
+          <p>{result
+            ? `This DES run delivered ${formatNumber(result.totalPph, 1)} total PPH: inbound ${formatNumber(result.inboundPph, 1)} and outbound ${formatNumber(result.outboundPph, 1)}.`
+            : 'Run DES 6h or DES 7d to generate the review summary.'}</p>
+        </div>
+        <span>{internalReady ? 'internal review ready' : result ? 'watch' : 'run DES first'}</span>
+      </div>
+      <div className="des-answer-grid">
+        <div className="des-answer-primary">
+          <span>Total PPH</span>
+          <strong>{result ? formatNumber(result.totalPph, 1) : '--'}</strong>
+          <small>{result ? `in ${formatNumber(result.inboundPph, 1)} / out ${formatNumber(result.outboundPph, 1)} · latest ${latest ? formatNumber(latest.totalPph, 1) : '--'}` : 'waiting for DES result'}</small>
+        </div>
+        <div>
+          <span>Lowest Period</span>
+          <strong>{minRow ? formatNumber(minRow.totalPph, 1) : '--'}</strong>
+          <small>{minRow ? `${minRow.label} · wait ${formatNumber(minRow.waitingPct, 1)}%` : 'no period rows'}</small>
+        </div>
+        <div>
+          <span>Highest Period</span>
+          <strong>{maxRow ? formatNumber(maxRow.totalPph, 1) : '--'}</strong>
+          <small>{maxRow ? `${maxRow.label} · in ${formatNumber(maxRow.inboundPph, 1)} / out ${formatNumber(maxRow.outboundPph, 1)}` : 'no period rows'}</small>
+        </div>
+        <div>
+          <span>First Bottleneck</span>
+          <strong>{topBottleneck ? formatNumber(topBottleneck.waitSec, 0) : '--'}s</strong>
+          <small>{topBottleneck ? `${resourceShortName(topBottleneck.resourceId)} · ${topBottleneck.waitCount} waits` : 'no traffic wait recorded'}</small>
+        </div>
+        <div className="des-answer-boundary">
+          <span>Review Boundary</span>
+          <strong>{result ? 'site data needed' : '--'}</strong>
+          <small>{result ? `${criticalIssues} critical, ${warningIssues} warning, ${routeMisses} route misses; customer data still required for site-calibrated claim` : 'run DES first'}</small>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function DesSummaryPanel({ result }: { result: HeadlessDesResult | null }) {
   const durationHours = result ? result.durationSec / 3600 : 0;
+  const waitingPct = result?.averageWaitingPct ?? 0;
+  const trafficWaitPct = result?.waitReasonBreakdown['traffic-reservation-wait']?.pct ?? 0;
+  const liftWaitPct = result?.waitReasonBreakdown['lift-resource-wait']?.pct ?? 0;
   const items = [
     {
-      label: 'Capacity horizon',
+      label: 'DES horizon',
       value: result ? `${formatNumber(durationHours, durationHours >= 24 ? 0 : 1)}h` : '--',
-      detail: result ? `${formatNumber(result.wallClockMs, 0)} ms wall clock, ${formatNumber(result.processedEvents, 0)} events` : 'capacity DES, not physical traffic'
+      detail: result ? `${formatNumber(result.wallClockMs, 0)} ms wall clock, ${formatNumber(result.processedEvents, 0)} events` : 'event-driven analytical run'
     },
     {
-      label: 'Capacity PPH',
+      label: 'DES PPH',
       value: result ? formatNumber(result.totalPph, 1) : '--',
-      detail: result ? `in ${formatNumber(result.inboundPph, 1)} / out ${formatNumber(result.outboundPph, 1)}` : 'excludes avoidance and deadlock risk'
+      detail: result ? `in ${formatNumber(result.inboundPph, 1)} / out ${formatNumber(result.outboundPph, 1)}` : 'inbound / outbound'
     },
     {
-      label: 'Capacity queues',
-      value: result ? `${result.activeTasks}/${result.queuedTasks}` : '--',
-      detail: result ? `active / queued, skipped ${formatNumber(result.skippedInbound + result.skippedOutbound, 0)} demand ticks` : 'skipped means not backlogged'
+      label: 'Reservation wait',
+      value: result ? `${formatNumber(waitingPct, 1)}%` : '--',
+      detail: result ? `${formatNumber(trafficWaitPct, 1)}% traffic, ${formatNumber(liftWaitPct, 1)}% lift` : 'fleet time share'
     },
     {
-      label: 'Capacity storage',
-      value: result ? `${formatNumber(result.storageUtilization * 100, 1)}%` : '--',
-      detail: result ? `${result.storedLoads}/${result.storageCapacity} stored, anomalies ${result.anomalyMarkers.length}` : 'long-run inventory balance'
+      label: 'Control policy',
+      value: result ? `cap ${result.controlPolicy.maxActiveTasks}` : '--',
+      detail: result ? `${formatNumber(result.controlPolicy.backpressureHoldCount, 0)} backpressure holds` : 'review policy'
+    },
+    {
+      label: 'Yellow-grid routes',
+      value: result ? String(result.routeModel.routeUnavailableCount) : '--',
+      detail: result ? `${result.routeModel.reservationWindowCount} reservation windows` : 'route misses / windows'
+    },
+    {
+      label: 'DES issues',
+      value: result ? String(result.issues.length) : '--',
+      detail: result ? result.issues.map((issue) => issue.severity).join(', ') || 'none' : 'V&V flags'
     }
   ];
 
@@ -1269,8 +1437,8 @@ function DesSummaryPanel({ result }: { result: HeadlessDesResult | null }) {
     <section className="des-summary-panel" aria-label="Headless DES summary">
       <div className="panel-head compact">
         <div>
-          <h2>Capacity DES</h2>
-          <p>Fast capacity estimate for long horizons. It does not validate grid traffic, avoidance, queue behavior, or animation.</p>
+          <h2>Reservation-Window DES</h2>
+          <p>Event-driven long-run model with yellow-grid node/edge reservation windows. This is the analytical V&V view; physical replay remains the animated smoke check.</p>
         </div>
       </div>
       <div className="des-summary-grid">
@@ -1284,6 +1452,1423 @@ function DesSummaryPanel({ result }: { result: HeadlessDesResult | null }) {
       </div>
     </section>
   );
+}
+
+type DesPeriodThroughputRow = {
+  label: string;
+  startSec: number;
+  endSec: number;
+  periodSec: number;
+  inboundDelta: number;
+  outboundDelta: number;
+  inboundPph: number;
+  outboundPph: number;
+  totalPph: number;
+  waitingPct: number;
+  repositionPct: number;
+};
+
+type LiveHourlyThroughputRow = {
+  label: string;
+  startSec: number;
+  endSec: number;
+  periodSec: number;
+  inboundDelta: number;
+  outboundDelta: number;
+  inboundPph: number;
+  outboundPph: number;
+  totalPph: number;
+  completedInbound: number;
+  completedOutbound: number;
+  isPartial: boolean;
+};
+
+function DesPeriodPphPanel({ result }: { result: HeadlessDesResult | null }) {
+  const rows = useMemo(() => buildDesPeriodRows(result), [result]);
+  const latest = rows.at(-1) ?? null;
+  const minRow = rows.reduce<DesPeriodThroughputRow | null>(
+    (best, row) => (best === null || row.totalPph < best.totalPph ? row : best),
+    null
+  );
+  const maxRow = rows.reduce<DesPeriodThroughputRow | null>(
+    (best, row) => (best === null || row.totalPph > best.totalPph ? row : best),
+    null
+  );
+  const periodMinutes = latest ? latest.periodSec / 60 : 0;
+  const maxPph = niceAxisCeil(Math.max(1, ...rows.flatMap((row) => [row.totalPph, row.inboundPph, row.outboundPph])));
+  const inboundPoints = desPeriodLinePoints(rows, (row) => row.inboundPph, maxPph);
+  const outboundPoints = desPeriodLinePoints(rows, (row) => row.outboundPph, maxPph);
+  const totalPoints = desPeriodLinePoints(rows, (row) => row.totalPph, maxPph);
+  const callouts = [
+    { key: 'latest', label: 'latest', row: latest, className: 'latest' },
+    { key: 'low', label: 'low', row: minRow, className: 'low' },
+    { key: 'high', label: 'high', row: maxRow, className: 'high' }
+  ];
+
+  return (
+    <section className="des-hourly-panel" aria-label="DES period PPH">
+      <div className="panel-head compact">
+        <div>
+          <h2>DES Period PPH</h2>
+          <p>Completed loads inside each DES sample period. Total = Inbound + Outbound; this is the local service curve, not the cumulative average.</p>
+        </div>
+        <span>{rows.length > 0 ? `${rows.length} samples · ${formatNumber(periodMinutes, periodMinutes >= 10 ? 0 : 1)} min` : 'run DES first'}</span>
+      </div>
+      {rows.length === 0 ? (
+        <p className="empty-panel-note">Run DES 6h or DES 7d to show the period-by-period inbound/outbound/total curve.</p>
+      ) : (
+        <>
+          <div className="des-hourly-chart-wrap">
+            <svg className="des-hourly-chart" viewBox="0 0 120 68" role="img" aria-label="DES inbound outbound total period PPH curve">
+              {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+                const y = 52 - ratio * 44;
+                const value = maxPph * ratio;
+                return (
+                  <g key={ratio}>
+                    <line className="chart-grid-line" x1="14" x2="114" y1={y} y2={y} />
+                    <text className="chart-axis-label y-axis" x="11" y={y + 1.8}>{formatNumber(value, value >= 100 ? 0 : 1)}</text>
+                  </g>
+                );
+              })}
+              <line className="chart-axis-line" x1="14" x2="114" y1="52" y2="52" />
+              <line className="chart-axis-line" x1="14" x2="14" y1="8" y2="52" />
+              <polyline className="pph-line inbound" points={inboundPoints} />
+              <polyline className="pph-line outbound" points={outboundPoints} />
+              <polyline className="pph-line total" points={totalPoints} />
+              {callouts.flatMap((callout) => {
+                if (!callout.row) return [];
+                const point = desPeriodPointForRow(rows, callout.row, callout.row.totalPph, maxPph);
+                return (
+                  <g className={`des-hourly-callout ${callout.className}`} key={callout.key}>
+                    <circle cx={point.x} cy={point.y} r="1.6" />
+                    <text x={Math.min(103, point.x + 2.2)} y={Math.max(9, point.y - 2)}>
+                      {callout.label} {formatNumber(callout.row.totalPph, 1)}
+                    </text>
+                  </g>
+                );
+              })}
+              <text className="chart-axis-label x-axis" x="14" y="64">{rows[0]?.label ?? '--'}</text>
+              <text className="chart-axis-label x-axis end" x="114" y="64">{latest?.label ?? '--'}</text>
+            </svg>
+          </div>
+          <div className="des-hourly-summary">
+            <DesPeriodSummaryCard label="Latest" row={latest} />
+            <DesPeriodSummaryCard label="Lowest total" row={minRow} />
+            <DesPeriodSummaryCard label="Highest total" row={maxRow} />
+          </div>
+          <div className="des-hourly-table-wrap">
+            <table className="des-hourly-table">
+              <thead>
+                <tr>
+                  <th>Period</th>
+                  <th>In</th>
+                  <th>Out</th>
+                  <th>Total PPH</th>
+                  <th>Waiting</th>
+                  <th>Reposition</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={`${row.startSec}-${row.endSec}`} className={row === minRow ? 'is-low' : row === maxRow ? 'is-high' : undefined}>
+                    <td>{row.label}</td>
+                    <td>{formatNumber(row.inboundPph, 1)} <small>({row.inboundDelta})</small></td>
+                    <td>{formatNumber(row.outboundPph, 1)} <small>({row.outboundDelta})</small></td>
+                    <td>{formatNumber(row.totalPph, 1)}</td>
+                    <td>{formatNumber(row.waitingPct, 1)}%</td>
+                    <td>{formatNumber(row.repositionPct, 1)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function LiveHourlyPphPanel({ history }: { history: PphHistorySample[] }) {
+  const rows = useMemo(() => buildLiveHourlyRows(history), [history]);
+  const latest = rows.at(-1) ?? null;
+  const minRow = rows.reduce<LiveHourlyThroughputRow | null>(
+    (best, row) => (best === null || row.totalPph < best.totalPph ? row : best),
+    null
+  );
+  const maxRow = rows.reduce<LiveHourlyThroughputRow | null>(
+    (best, row) => (best === null || row.totalPph > best.totalPph ? row : best),
+    null
+  );
+  const maxPph = niceAxisCeil(Math.max(1, ...rows.flatMap((row) => [row.totalPph, row.inboundPph, row.outboundPph])));
+  const inboundPoints = liveHourlyLinePoints(rows, (row) => row.inboundPph, maxPph);
+  const outboundPoints = liveHourlyLinePoints(rows, (row) => row.outboundPph, maxPph);
+  const totalPoints = liveHourlyLinePoints(rows, (row) => row.totalPph, maxPph);
+  const sampleCount = history.filter((sample) => sample.completedInbound !== undefined && sample.completedOutbound !== undefined).length;
+  const finalSample = history.at(-1);
+  const firstSample = history[0];
+  const netInboundMinusOutbound = firstSample && finalSample
+    ? (finalSample.completedInbound ?? 0) - (firstSample.completedInbound ?? 0) -
+      ((finalSample.completedOutbound ?? 0) - (firstSample.completedOutbound ?? 0))
+    : 0;
+
+  return (
+    <section className="live-hourly-panel" aria-label="Live hourly PPH">
+      <div className="panel-head compact">
+        <div>
+          <h2>Live Hourly PPH</h2>
+          <p>Physical/3D tick run split into hourly buckets from cumulative completed counts. This is the live counterpart to DES Period PPH.</p>
+        </div>
+        <span>{rows.length > 0 ? `${rows.length} buckets · ${sampleCount} samples` : 'start or fast-run simulation'}</span>
+      </div>
+      {rows.length === 0 ? (
+        <p className="empty-panel-note">Run the physical/3D simulation past a few completed loads to build hourly inbound/outbound buckets.</p>
+      ) : (
+        <>
+          <div className="des-hourly-chart-wrap">
+            <svg className="des-hourly-chart" viewBox="0 0 120 68" role="img" aria-label="Live hourly inbound outbound total PPH curve">
+              {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+                const y = 52 - ratio * 44;
+                const value = maxPph * ratio;
+                return (
+                  <g key={ratio}>
+                    <line className="chart-grid-line" x1="14" x2="114" y1={y} y2={y} />
+                    <text className="chart-axis-label y-axis" x="11" y={y + 1.8}>{formatNumber(value, value >= 100 ? 0 : 1)}</text>
+                  </g>
+                );
+              })}
+              <line className="chart-axis-line" x1="14" x2="114" y1="52" y2="52" />
+              <line className="chart-axis-line" x1="14" x2="14" y1="8" y2="52" />
+              <polyline className="pph-line inbound" points={inboundPoints} />
+              <polyline className="pph-line outbound" points={outboundPoints} />
+              <polyline className="pph-line total" points={totalPoints} />
+              <text className="chart-axis-label x-axis" x="14" y="64">{rows[0]?.label ?? '--'}</text>
+              <text className="chart-axis-label x-axis end" x="114" y="64">{latest?.label ?? '--'}</text>
+            </svg>
+          </div>
+          <div className="des-hourly-summary">
+            <LiveHourlySummaryCard label="Latest bucket" row={latest} />
+            <LiveHourlySummaryCard label="Lowest total" row={minRow} />
+            <LiveHourlySummaryCard label="Highest total" row={maxRow} />
+          </div>
+          <div className="trend-readout-grid">
+            <div className="trend-readout">
+              <span>Live balance since reset</span>
+              <strong>{formatNumber(netInboundMinusOutbound, 0)}</strong>
+              <small>completed inbound minus outbound; negative means outbound is consuming initial inventory.</small>
+            </div>
+            <div className="trend-readout">
+              <span>Completed so far</span>
+              <strong>{formatNumber(finalSample?.completedInbound ?? 0, 0)} / {formatNumber(finalSample?.completedOutbound ?? 0, 0)}</strong>
+              <small>cumulative inbound / outbound from the physical tick model.</small>
+            </div>
+          </div>
+          <div className="des-hourly-table-wrap">
+            <table className="des-hourly-table">
+              <thead>
+                <tr>
+                  <th>Bucket</th>
+                  <th>In</th>
+                  <th>Out</th>
+                  <th>Total PPH</th>
+                  <th>Cum In</th>
+                  <th>Cum Out</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={`${row.startSec}-${row.endSec}`} className={row === minRow ? 'is-low' : row === maxRow ? 'is-high' : undefined}>
+                    <td>{row.label}{row.isPartial ? ' partial' : ''}</td>
+                    <td>{formatNumber(row.inboundPph, 1)} <small>({row.inboundDelta})</small></td>
+                    <td>{formatNumber(row.outboundPph, 1)} <small>({row.outboundDelta})</small></td>
+                    <td>{formatNumber(row.totalPph, 1)}</td>
+                    <td>{row.completedInbound}</td>
+                    <td>{row.completedOutbound}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="trend-definition">Live hourly PPH = bucket completed load delta / bucket hours. The latest bucket may be partial until the next full hour closes.</p>
+        </>
+      )}
+    </section>
+  );
+}
+
+function LiveHourlySummaryCard({ label, row }: { label: string; row: LiveHourlyThroughputRow | null }) {
+  return (
+    <div className="des-hourly-summary-card">
+      <span>{label}</span>
+      <strong>{row ? formatNumber(row.totalPph, 1) : '--'} PPH</strong>
+      <small>{row ? `${row.label}${row.isPartial ? ' partial' : ''} · in ${formatNumber(row.inboundPph, 1)} / out ${formatNumber(row.outboundPph, 1)}` : 'waiting for live history'}</small>
+    </div>
+  );
+}
+
+export function buildLiveHourlyRows(history: PphHistorySample[]): LiveHourlyThroughputRow[] {
+  const samples = history
+    .filter((sample) => sample.completedInbound !== undefined && sample.completedOutbound !== undefined)
+    .sort((left, right) => left.simTimeSec - right.simTimeSec);
+  if (samples.length < 2) {
+    return [];
+  }
+
+  const first = samples[0]!;
+  const last = samples.at(-1)!;
+  if (last.simTimeSec <= first.simTimeSec) {
+    return [];
+  }
+
+  const anchors: Array<{ timeSec: number; sample: PphHistorySample }> = [{ timeSec: first.simTimeSec, sample: first }];
+  const firstBoundary = Math.floor(first.simTimeSec / 3600) * 3600 + 3600;
+  for (let boundarySec = firstBoundary; boundarySec < last.simTimeSec - 1e-9; boundarySec += 3600) {
+    const sample = latestSampleAtOrBefore(samples, boundarySec);
+    const previousAnchor = anchors.at(-1)!;
+    if (sample.simTimeSec > previousAnchor.sample.simTimeSec + 1e-9) {
+      anchors.push({ timeSec: boundarySec, sample });
+    }
+  }
+  if (last.simTimeSec > anchors.at(-1)!.timeSec + 1e-9) {
+    anchors.push({ timeSec: last.simTimeSec, sample: last });
+  }
+
+  const rows: LiveHourlyThroughputRow[] = [];
+  for (let index = 1; index < anchors.length; index += 1) {
+    const previous = anchors[index - 1]!;
+    const current = anchors[index]!;
+    const periodSec = Math.max(1, current.timeSec - previous.timeSec);
+    const periodHours = periodSec / 3600;
+    const inboundDelta = Math.max(0, (current.sample.completedInbound ?? 0) - (previous.sample.completedInbound ?? 0));
+    const outboundDelta = Math.max(0, (current.sample.completedOutbound ?? 0) - (previous.sample.completedOutbound ?? 0));
+    rows.push({
+      label: liveHourlyLabel(current.timeSec),
+      startSec: previous.timeSec,
+      endSec: current.timeSec,
+      periodSec,
+      inboundDelta,
+      outboundDelta,
+      inboundPph: inboundDelta / periodHours,
+      outboundPph: outboundDelta / periodHours,
+      totalPph: (inboundDelta + outboundDelta) / periodHours,
+      completedInbound: current.sample.completedInbound ?? 0,
+      completedOutbound: current.sample.completedOutbound ?? 0,
+      isPartial: Math.abs(current.timeSec % 3600) > 1e-6
+    });
+  }
+  return rows;
+}
+
+function latestSampleAtOrBefore(samples: PphHistorySample[], timeSec: number): PphHistorySample {
+  let selected = samples[0]!;
+  for (const sample of samples) {
+    if (sample.simTimeSec > timeSec + 1e-9) {
+      break;
+    }
+    selected = sample;
+  }
+  return selected;
+}
+
+function liveHourlyLabel(timeSec: number): string {
+  const hour = Math.max(1, Math.ceil(timeSec / 3600));
+  return `H${String(hour).padStart(2, '0')}`;
+}
+
+function liveHourlyLinePoints(
+  rows: LiveHourlyThroughputRow[],
+  valueForRow: (row: LiveHourlyThroughputRow) => number,
+  maxValue: number
+): string {
+  return rows.map((row) => {
+    const point = liveHourlyPointForRow(rows, row, valueForRow(row), maxValue);
+    return `${point.x.toFixed(2)},${point.y.toFixed(2)}`;
+  }).join(' ');
+}
+
+function liveHourlyPointForRow(
+  rows: LiveHourlyThroughputRow[],
+  row: LiveHourlyThroughputRow,
+  value: number,
+  maxValue: number
+): { x: number; y: number } {
+  const minTime = rows[0]?.endSec ?? row.endSec;
+  const maxTime = Math.max(minTime + 1, rows.at(-1)?.endSec ?? row.endSec);
+  const x = 14 + ((row.endSec - minTime) / (maxTime - minTime)) * 100;
+  const y = 52 - Math.max(0, Math.min(1, value / Math.max(1, maxValue))) * 44;
+  return { x, y };
+}
+
+function DesPeriodSummaryCard({ label, row }: { label: string; row: DesPeriodThroughputRow | null }) {
+  return (
+    <div className="des-hourly-summary-card">
+      <span>{label}</span>
+      <strong>{row ? formatNumber(row.totalPph, 1) : '--'} PPH</strong>
+      <small>{row ? `${row.label} · in ${formatNumber(row.inboundPph, 1)} / out ${formatNumber(row.outboundPph, 1)}` : 'waiting for DES result'}</small>
+    </div>
+  );
+}
+
+function buildDesPeriodRows(result: HeadlessDesResult | null): DesPeriodThroughputRow[] {
+  if (!result || result.samples.length < 2) {
+    return [];
+  }
+  const samples = [...result.samples].sort((left, right) => left.timeSec - right.timeSec);
+  const rows: DesPeriodThroughputRow[] = [];
+  for (let index = 1; index < samples.length; index += 1) {
+    const previous = samples[index - 1]!;
+    const current = samples[index]!;
+    const periodSec = Math.max(1, current.timeSec - previous.timeSec);
+    const periodHours = periodSec / 3600;
+    const inboundDelta = current.completedInbound - previous.completedInbound;
+    const outboundDelta = current.completedOutbound - previous.completedOutbound;
+    rows.push({
+      label: desPeriodLabel(previous.timeSec, current.timeSec),
+      startSec: previous.timeSec,
+      endSec: current.timeSec,
+      periodSec,
+      inboundDelta,
+      outboundDelta,
+      inboundPph: inboundDelta / periodHours,
+      outboundPph: outboundDelta / periodHours,
+      totalPph: (inboundDelta + outboundDelta) / periodHours,
+      waitingPct: current.averageWaitingPct,
+      repositionPct: current.averageRepositionPct
+    });
+  }
+  return rows;
+}
+
+function desPeriodLabel(startSec: number, endSec: number): string {
+  const periodSec = Math.max(1, endSec - startSec);
+  if (periodSec >= 3599) {
+    const endHour = Math.round(endSec / 3600);
+    const day = Math.floor((endHour - 1) / 24) + 1;
+    const hourOfDay = ((endHour - 1) % 24) + 1;
+    return `D${day} H${String(hourOfDay).padStart(2, '0')}`;
+  }
+  return `${formatClock(startSec)}-${formatClock(endSec)}`;
+}
+
+function desPeriodLinePoints(
+  rows: DesPeriodThroughputRow[],
+  valueForRow: (row: DesPeriodThroughputRow) => number,
+  maxValue: number
+): string {
+  return rows.map((row) => {
+    const point = desPeriodPointForRow(rows, row, valueForRow(row), maxValue);
+    return `${point.x.toFixed(2)},${point.y.toFixed(2)}`;
+  }).join(' ');
+}
+
+function desPeriodPointForRow(
+  rows: DesPeriodThroughputRow[],
+  row: DesPeriodThroughputRow,
+  value: number,
+  maxValue: number
+): { x: number; y: number } {
+  const minTime = rows[0]?.endSec ?? row.endSec;
+  const maxTime = Math.max(minTime + 1, rows.at(-1)?.endSec ?? row.endSec);
+  const x = 14 + ((row.endSec - minTime) / (maxTime - minTime)) * 100;
+  const y = 52 - Math.max(0, Math.min(1, value / Math.max(1, maxValue))) * 44;
+  return { x, y };
+}
+
+type DesIntegrityCheck = {
+  id: string;
+  label: string;
+  status: 'pass' | 'warn' | 'fail';
+  evidence: string;
+  formula: string;
+};
+
+function DesDataIntegrityPanel({ result }: { result: HeadlessDesResult | null }) {
+  const checks = useMemo(() => buildDesIntegrityChecks(result), [result]);
+  const failCount = checks.filter((check) => check.status === 'fail').length;
+  const warnCount = checks.filter((check) => check.status === 'warn').length;
+  const statusLabel = !result ? 'run DES first' : failCount > 0 ? `${failCount} fail` : warnCount > 0 ? `${warnCount} warning` : 'all pass';
+
+  return (
+    <section className="des-integrity-panel" aria-label="DES data integrity checks">
+      <div className="panel-head compact">
+        <div>
+          <h2>DES Data Integrity</h2>
+          <p>Formula-level checks proving the DES totals, period deltas, and yellow-grid route contract are internally consistent before using the run for review.</p>
+        </div>
+        <span>{statusLabel}</span>
+      </div>
+      {!result ? (
+        <p className="empty-panel-note">Run DES 6h or DES 7d to recompute the evidence checks.</p>
+      ) : (
+        <div className="des-integrity-grid">
+          {checks.map((check) => (
+            <div className={`des-integrity-card ${check.status}`} key={check.id}>
+              <span>{check.label}</span>
+              <strong>{check.status}</strong>
+              <small>{check.evidence}</small>
+              <em>{check.formula}</em>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+type DesReadinessCard = {
+  label: string;
+  status: 'pass' | 'watch' | 'site-data';
+  value: string;
+  detail: string;
+};
+
+function DesReviewReadinessPanel({ result }: { result: HeadlessDesResult | null }) {
+  const integrityChecks = useMemo(() => buildDesIntegrityChecks(result), [result]);
+  const failedIntegrityChecks = integrityChecks.filter((check) => check.status === 'fail').length;
+  const criticalIssues = result?.issues.filter((issue) => issue.severity === 'critical').length ?? 0;
+  const warningIssues = result?.issues.filter((issue) => issue.severity === 'warning').length ?? 0;
+  const routeMisses = result?.routeModel.routeUnavailableCount ?? null;
+  const cards: DesReadinessCard[] = [
+    {
+      label: 'Metric Evidence',
+      status: !result ? 'watch' : failedIntegrityChecks === 0 ? 'pass' : 'watch',
+      value: result ? `${failedIntegrityChecks} fail` : '--',
+      detail: result ? `${integrityChecks.length} formula checks recomputed from DES samples` : 'run DES first'
+    },
+    {
+      label: 'Yellow-grid Contract',
+      status: !result ? 'watch' : routeMisses === 0 ? 'pass' : 'watch',
+      value: routeMisses === null ? '--' : String(routeMisses),
+      detail: result ? `${result.routeModel.reservationWindowCount} node/edge reservation windows` : 'route misses'
+    },
+    {
+      label: 'DES Issue Gate',
+      status: !result ? 'watch' : criticalIssues === 0 && warningIssues === 0 ? 'pass' : criticalIssues === 0 ? 'watch' : 'watch',
+      value: result ? `${criticalIssues} critical` : '--',
+      detail: result ? `${warningIssues} warning; ${result.issues.length} total DES issue(s)` : 'critical issue gate'
+    },
+    {
+      label: 'Site Calibration',
+      status: 'site-data',
+      value: 'needed',
+      detail: 'capacity is internally verified, not customer site-calibrated until WCS/MES, PLC/video, CAD, motion, and controls data replace assumptions'
+    }
+  ];
+
+  return (
+    <section className="des-readiness-panel" aria-label="DES review readiness">
+      <div className="panel-head compact">
+        <div>
+          <h2>Review Readiness</h2>
+          <p>Pass/fail boundary for Monday review: internal DES evidence can be discussed, but site-calibrated capacity still needs customer data.</p>
+        </div>
+        <span>{result ? (failedIntegrityChecks === 0 && routeMisses === 0 && criticalIssues === 0 ? 'internal pass' : 'watch') : 'run DES first'}</span>
+      </div>
+      <div className="des-readiness-grid">
+        {cards.map((card) => (
+          <div className={`des-readiness-card ${card.status}`} key={card.label}>
+            <span>{card.label}</span>
+            <strong>{card.value}</strong>
+            <small>{card.detail}</small>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function buildDesIntegrityChecks(result: HeadlessDesResult | null): DesIntegrityCheck[] {
+  if (!result) return [];
+  const samples = [...result.samples].sort((left, right) => left.timeSec - right.timeSec);
+  const rows = buildDesPeriodRows(result);
+  const firstSample = samples[0] ?? null;
+  const finalSample = samples.at(-1) ?? null;
+  const durationHours = Math.max(1e-9, result.durationSec / 3600);
+  const inboundDeltaSum = rows.reduce((sum, row) => sum + row.inboundDelta, 0);
+  const outboundDeltaSum = rows.reduce((sum, row) => sum + row.outboundDelta, 0);
+  const finalCountsMatch = Boolean(finalSample)
+    && finalSample!.completedInbound === result.completedInbound
+    && finalSample!.completedOutbound === result.completedOutbound;
+  const deltaCountsMatch = Boolean(firstSample)
+    && inboundDeltaSum === result.completedInbound - firstSample!.completedInbound
+    && outboundDeltaSum === result.completedOutbound - firstSample!.completedOutbound;
+  const cumulativePphPass = closeEnough(result.inboundPph, result.completedInbound / durationHours)
+    && closeEnough(result.outboundPph, result.completedOutbound / durationHours)
+    && closeEnough(result.totalPph, (result.completedInbound + result.completedOutbound) / durationHours);
+  const periodFormulaPass = rows.every((row) => {
+    const periodHours = Math.max(1e-9, row.periodSec / 3600);
+    return closeEnough(row.inboundPph, row.inboundDelta / periodHours)
+      && closeEnough(row.outboundPph, row.outboundDelta / periodHours)
+      && closeEnough(row.totalPph, (row.inboundDelta + row.outboundDelta) / periodHours)
+      && closeEnough(row.totalPph, row.inboundPph + row.outboundPph);
+  });
+  const sampleMonotonicPass = samples.every((sample, index) => {
+    if (index === 0) return Number.isFinite(sample.timeSec);
+    const previous = samples[index - 1]!;
+    return sample.timeSec > previous.timeSec
+      && sample.completedInbound >= previous.completedInbound
+      && sample.completedOutbound >= previous.completedOutbound;
+  });
+  const finiteMetricsPass = samples.every((sample) =>
+    [
+      sample.inboundPph,
+      sample.outboundPph,
+      sample.totalPph,
+      sample.windowTotalPph,
+      sample.averageWaitingPct,
+      sample.averageRepositionPct
+    ].every(Number.isFinite)
+  ) && [
+    result.inboundPph,
+    result.outboundPph,
+    result.totalPph,
+    result.averageWaitingPct,
+    result.averageRepositionPct
+  ].every(Number.isFinite);
+  const criticalIssueCount = result.issues.filter((issue) => issue.severity === 'critical').length;
+
+  return [
+    {
+      id: 'final-counts',
+      label: 'Final Counts',
+      status: finalCountsMatch ? 'pass' : 'fail',
+      evidence: `sample ${finalSample?.completedInbound ?? '-'} / ${finalSample?.completedOutbound ?? '-'}; result ${result.completedInbound} / ${result.completedOutbound}`,
+      formula: 'final sample completed in/out = DES result completed in/out'
+    },
+    {
+      id: 'period-deltas',
+      label: 'Period Delta Sum',
+      status: deltaCountsMatch ? 'pass' : 'fail',
+      evidence: `delta sum in/out ${inboundDeltaSum} / ${outboundDeltaSum}; rows ${rows.length}`,
+      formula: 'sum(period completed deltas) = final cumulative - first cumulative'
+    },
+    {
+      id: 'cumulative-pph',
+      label: 'Cumulative PPH',
+      status: cumulativePphPass ? 'pass' : 'fail',
+      evidence: `in ${formatNumber(result.inboundPph, 3)}, out ${formatNumber(result.outboundPph, 3)}, total ${formatNumber(result.totalPph, 3)}`,
+      formula: 'PPH = completed loads / elapsed hours'
+    },
+    {
+      id: 'period-pph',
+      label: 'Period PPH',
+      status: periodFormulaPass ? 'pass' : 'fail',
+      evidence: `${rows.length} period rows recomputed from sample deltas`,
+      formula: 'period PPH = period delta / period hours; total = inbound + outbound'
+    },
+    {
+      id: 'samples-monotonic',
+      label: 'Sample Order',
+      status: sampleMonotonicPass ? 'pass' : 'fail',
+      evidence: `${samples.length} samples; final time ${formatClock(finalSample?.timeSec ?? 0)}`,
+      formula: 'time and completed counts are monotonic'
+    },
+    {
+      id: 'finite-metrics',
+      label: 'Finite Metrics',
+      status: finiteMetricsPass ? 'pass' : 'fail',
+      evidence: finiteMetricsPass ? 'all DES result and sample metrics are finite' : 'non-finite metric detected',
+      formula: 'all displayed DES numeric fields must be finite'
+    },
+    {
+      id: 'yellow-route-contract',
+      label: 'Yellow-grid Routes',
+      status: result.routeModel.routeUnavailableCount === 0 ? 'pass' : 'fail',
+      evidence: `${result.routeModel.routeUnavailableCount} unavailable; ${result.routeModel.reservationWindowCount} reservation windows`,
+      formula: 'every DES task endpoint must route on the verified yellow-grid graph'
+    },
+    {
+      id: 'critical-issues',
+      label: 'Critical Issues',
+      status: criticalIssueCount === 0 ? (result.issues.length > 0 ? 'warn' : 'pass') : 'fail',
+      evidence: `${criticalIssueCount} critical; ${result.issues.length} total DES issue(s)`,
+      formula: 'critical DES issue count must be zero for review use'
+    }
+  ];
+}
+
+function closeEnough(actual: number, expected: number, tolerance = 0.02): boolean {
+  return Number.isFinite(actual) && Number.isFinite(expected) && Math.abs(actual - expected) <= tolerance;
+}
+
+function DesIeFindingsPanel({ result }: { result: HeadlessDesResult | null }) {
+  const issues = useMemo(() => (
+    [...(result?.issues ?? [])].sort((left, right) => issueSeverityRank(left.severity) - issueSeverityRank(right.severity))
+  ), [result]);
+  const topBottlenecks = result?.trafficBottlenecks.slice(0, 6) ?? [];
+  const trafficWaitPct = result?.waitReasonBreakdown['traffic-reservation-wait']?.pct ?? 0;
+  const liftWaitPct = result?.waitReasonBreakdown['lift-resource-wait']?.pct ?? 0;
+  const topResource = topBottlenecks[0] ?? null;
+  const findingLabel = !result
+    ? 'run DES first'
+    : issues.some((issue) => issue.severity === 'critical')
+      ? 'critical'
+      : issues.some((issue) => issue.severity === 'warning')
+        ? 'watch'
+        : 'observation';
+
+  return (
+    <section className="des-findings-panel" aria-label="DES industrial engineering findings">
+      <div className="panel-head compact">
+        <div>
+          <h2>DES IE Findings</h2>
+          <p>Industrial-engineering readout from the DES run: what tripped, where traffic waits accumulate, and what to inspect first.</p>
+        </div>
+        <span>{findingLabel}</span>
+      </div>
+      {!result ? (
+        <p className="empty-panel-note">Run DES 6h or DES 7d to generate findings and bottleneck evidence.</p>
+      ) : (
+        <div className="des-findings-layout">
+          <div className="des-issue-list">
+            {issues.map((issue) => (
+              <article className={`des-issue-card ${issue.severity}`} key={issue.id}>
+                <span>{issue.severity}</span>
+                <h3>{issue.title}</h3>
+                <strong>{issue.metric}</strong>
+                <p>{issue.detail}</p>
+                <em>{issue.recommendation}</em>
+              </article>
+            ))}
+          </div>
+          <div className="des-bottleneck-card">
+            <div className="des-bottleneck-summary">
+              <div>
+                <span>Traffic Wait</span>
+                <strong>{formatNumber(trafficWaitPct, 1)}%</strong>
+              </div>
+              <div>
+                <span>Lift Wait</span>
+                <strong>{formatNumber(liftWaitPct, 1)}%</strong>
+              </div>
+              <div>
+                <span>First Inspect</span>
+                <strong>{topResource ? resourceShortName(topResource.resourceId) : 'none'}</strong>
+              </div>
+            </div>
+            <h3>Top Traffic Resources</h3>
+            {topBottlenecks.length === 0 ? (
+              <p className="muted">No traffic reservation waits recorded.</p>
+            ) : (
+              <table className="des-bottleneck-table">
+                <thead>
+                  <tr>
+                    <th>Resource</th>
+                    <th>Wait</th>
+                    <th>Count</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topBottlenecks.map((resource) => (
+                    <tr key={resource.resourceId}>
+                      <td title={resource.resourceId}>{resourceShortName(resource.resourceId)}</td>
+                      <td>{formatNumber(resource.waitSec, 1)}s</td>
+                      <td>{resource.waitCount}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <p className="trend-definition">
+              Top traffic resources are yellow-grid node/edge reservation windows with the largest accumulated wait. Use these IDs to inspect the DES replay and route map around congestion periods.
+            </p>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+export type DesDispatchAuditRow = {
+  taskId: string;
+  shuttleId: string;
+  kind: HeadlessDesResult['reservationReplay']['tasks'][number]['kind'];
+  dispatchSec: number;
+  completeSec: number;
+  emptyRouteNodeCount: number;
+  loadedRouteNodeCount: number;
+  routeNodeCount: number;
+  movementSec: number;
+  handlingSec: number;
+  trafficWaitSec: number;
+  liftWaitSec: number;
+  totalWaitSec: number;
+  primaryWaitResource: string;
+  routeStatus: 'pass' | 'watch' | 'fail';
+  routeEvidence: string;
+  dispatchEvidence: string;
+  avoidanceEvidence: string;
+};
+
+function DesDispatchAvoidanceAuditPanel({ scenario, result }: { scenario: ShuttleScenario | null; result: HeadlessDesResult | null }) {
+  const rows = useMemo(() => buildDesDispatchAuditRows(scenario, result), [result, scenario]);
+  const passCount = rows.filter((row) => row.routeStatus === 'pass').length;
+  const watchCount = rows.filter((row) => row.routeStatus === 'watch').length;
+  const failCount = rows.filter((row) => row.routeStatus === 'fail').length;
+  const topWaitRow = rows.reduce<DesDispatchAuditRow | null>(
+    (best, row) => (best === null || row.totalWaitSec > best.totalWaitSec ? row : best),
+    null
+  );
+  const totalTraceWaitSec = rows.reduce((sum, row) => sum + row.totalWaitSec, 0);
+  const rowLimit = rows.slice(0, 12);
+
+  return (
+    <section className="des-dispatch-audit-panel" aria-label="DES dispatch and avoidance audit">
+      <div className="panel-head compact">
+        <div>
+          <h2>DES Dispatch & Avoidance Audit</h2>
+          <p>Trace-level IE check of task assignment, yellow-grid route contract, and reservation waits. This is the table to use when a path looks wrong in 3D.</p>
+        </div>
+        <span>{result ? `${rows.length} traced tasks` : 'run DES first'}</span>
+      </div>
+      {!result ? (
+        <p className="empty-panel-note">Run DES 6h or DES 7d to show dispatch and avoidance evidence.</p>
+      ) : (
+        <>
+          <div className="des-dispatch-rule-grid">
+            <div>
+              <span>Dispatch Gate</span>
+              <strong>cap {result.controlPolicy.maxActiveTasks}</strong>
+              <small>{formatNumber(result.controlPolicy.backpressureHoldCount, 0)} held releases; active tasks are bounded before routing.</small>
+            </div>
+            <div>
+              <span>Route Contract</span>
+              <strong>{failCount === 0 ? 'yellow-grid pass' : 'route fail'}</strong>
+              <small>{passCount} pass, {watchCount} watch, {failCount} fail across traced tasks.</small>
+            </div>
+            <div>
+              <span>Avoidance Rule</span>
+              <strong>capacity 1</strong>
+              <small>Node/edge/lift reservation waits are explicit; shuttles wait instead of crossing occupied resources.</small>
+            </div>
+            <div>
+              <span>Worst Trace Wait</span>
+              <strong>{topWaitRow ? `${formatNumber(topWaitRow.totalWaitSec, 1)}s` : '--'}</strong>
+              <small>{topWaitRow ? `${topWaitRow.shuttleId} ${topWaitRow.taskId} · ${topWaitRow.primaryWaitResource}` : `${formatNumber(totalTraceWaitSec, 1)}s traced wait`}</small>
+            </div>
+          </div>
+          <div className="des-dispatch-table-wrap">
+            <table className="des-dispatch-table">
+              <thead>
+                <tr>
+                  <th>Task</th>
+                  <th>Dispatch</th>
+                  <th>Yellow Route</th>
+                  <th>Wait / Avoidance</th>
+                  <th>IE Read</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rowLimit.map((row) => (
+                  <tr className={`status-${row.routeStatus}`} key={row.taskId}>
+                    <td>
+                      <strong>{row.taskId}</strong>
+                      <small>{row.shuttleId} · {row.kind}</small>
+                    </td>
+                    <td>
+                      <strong>{formatClock(row.dispatchSec)}</strong>
+                      <small>{row.dispatchEvidence}</small>
+                    </td>
+                    <td>
+                      <strong>{row.routeStatus}</strong>
+                      <small>{row.routeEvidence}</small>
+                    </td>
+                    <td>
+                      <strong>{formatNumber(row.totalWaitSec, 1)}s</strong>
+                      <small>{row.avoidanceEvidence}</small>
+                    </td>
+                    <td>
+                      <strong>{row.primaryWaitResource}</strong>
+                      <small>{formatNumber(row.movementSec, 1)}s move, {formatNumber(row.handlingSec, 1)}s handle</small>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {rows.length > rowLimit.length ? (
+            <p className="trend-definition">Showing first {rowLimit.length} traced tasks from the DES replay sample; aggregate bottlenecks remain summarized above and on the route map.</p>
+          ) : null}
+        </>
+      )}
+    </section>
+  );
+}
+
+export function buildDesDispatchAuditRows(
+  scenario: ShuttleScenario | null,
+  result: HeadlessDesResult | null,
+  limit = 24
+): DesDispatchAuditRow[] {
+  if (!result) return [];
+  const nodes = new Set((scenario?.layout.nodes ?? []).map((node) => node.id));
+  const edgePairs = new Set<string>();
+  for (const edge of scenario?.layout.edges ?? []) {
+    edgePairs.add(`${edge.from}->${edge.to}`);
+    edgePairs.add(`${edge.to}->${edge.from}`);
+  }
+
+  return result.reservationReplay.tasks.slice(0, limit).map((trace) => {
+    const allRouteNodeIds = [...trace.emptyRouteNodeIds, ...trace.loadedRouteNodeIds];
+    const missingNodes = allRouteNodeIds.filter((nodeId) => !nodes.has(nodeId));
+    const missingEdges = [...adjacentPairs(trace.emptyRouteNodeIds), ...adjacentPairs(trace.loadedRouteNodeIds)]
+      .filter(([from, to]) => !edgePairs.has(`${from}->${to}`));
+    const waitPhases = trace.phases
+      .filter((phase) => phase.kind === 'traffic-wait' || phase.kind === 'lift-wait')
+      .map((phase) => ({
+        ...phase,
+        waitSec: Math.max(0, phase.endSec - phase.startSec)
+      }))
+      .sort((left, right) => right.waitSec - left.waitSec);
+    const topWait = waitPhases[0] ?? null;
+    const totalWaitSec = trace.trafficWaitSec + trace.liftWaitSec;
+    const routeStatus: DesDispatchAuditRow['routeStatus'] = missingNodes.length > 0 || missingEdges.length > 0 || result.routeModel.routeUnavailableCount > 0
+      ? 'fail'
+      : totalWaitSec >= 30 || allRouteNodeIds.length >= 46
+        ? 'watch'
+        : 'pass';
+    const routeEvidence = missingNodes.length > 0
+      ? `off-grid nodes: ${missingNodes.slice(0, 3).join(', ')}`
+      : missingEdges.length > 0
+        ? `missing edge: ${missingEdges[0]![0]} -> ${missingEdges[0]![1]}`
+        : `empty ${trace.emptyRouteNodeIds.length} nodes, loaded ${trace.loadedRouteNodeIds.length} nodes`;
+    const primaryWaitResource = topWait?.resourceId
+      ? resourceShortName(topWait.resourceId)
+      : totalWaitSec > 0
+        ? 'wait without resource id'
+        : 'no wait';
+
+    return {
+      taskId: trace.taskId,
+      shuttleId: trace.shuttleId,
+      kind: trace.kind,
+      dispatchSec: trace.dispatchSec,
+      completeSec: trace.completeSec,
+      emptyRouteNodeCount: trace.emptyRouteNodeIds.length,
+      loadedRouteNodeCount: trace.loadedRouteNodeIds.length,
+      routeNodeCount: allRouteNodeIds.length,
+      movementSec: trace.emptyTravelSec + trace.loadedTravelSec,
+      handlingSec: trace.handlingSec,
+      trafficWaitSec: trace.trafficWaitSec,
+      liftWaitSec: trace.liftWaitSec,
+      totalWaitSec,
+      primaryWaitResource,
+      routeStatus,
+      routeEvidence,
+      dispatchEvidence: `released at ${formatClock(trace.dispatchSec)} under cap ${result.controlPolicy.maxActiveTasks}`,
+      avoidanceEvidence: `${formatNumber(trace.trafficWaitSec, 1)}s traffic, ${formatNumber(trace.liftWaitSec, 1)}s lift`
+    };
+  });
+}
+
+function adjacentPairs(nodeIds: string[]): Array<[string, string]> {
+  const pairs: Array<[string, string]> = [];
+  for (let index = 1; index < nodeIds.length; index += 1) {
+    pairs.push([nodeIds[index - 1]!, nodeIds[index]!]);
+  }
+  return pairs;
+}
+
+function issueSeverityRank(severity: HeadlessDesResult['issues'][number]['severity']): number {
+  if (severity === 'critical') return 0;
+  if (severity === 'warning') return 1;
+  return 2;
+}
+
+function resourceShortName(resourceId: string): string {
+  return resourceId
+    .replace(/^node:/, 'node ')
+    .replace(/^edge:/, 'edge ')
+    .replace(/^(.{38}).+$/, '$1...');
+}
+
+function bottleneckMarkerLabel(marker: DesReplayBottleneckMarker): string {
+  return marker.rank <= 3
+    ? `#${marker.rank} ${formatNumber(marker.waitSec, 0)}s`
+    : `#${marker.rank}`;
+}
+
+function bottleneckLabelDx(rank: number): number {
+  return rank === 2 || rank === 6 ? -0.5 : 0.55;
+}
+
+function bottleneckLabelOffset(rank: number): number {
+  return (rank - 1) % 3 * 0.56;
+}
+
+function bottleneckLabelAnchor(rank: number): 'start' | 'end' {
+  return rank === 2 || rank === 6 ? 'end' : 'start';
+}
+
+function DesReservationReplayPanel({ scenario, result }: { scenario: ShuttleScenario | null; result: HeadlessDesResult | null }) {
+  const replay = result?.reservationReplay;
+  const tasks = replay?.tasks ?? [];
+  const [playheadSec, setPlayheadSec] = useState(0);
+  const tracesByShuttle = new Map<string, typeof tasks>();
+  for (const trace of tasks) {
+    const rows = tracesByShuttle.get(trace.shuttleId) ?? [];
+    rows.push(trace);
+    tracesByShuttle.set(trace.shuttleId, rows);
+  }
+  const maxTraceSec = Math.max(1, ...tasks.map((trace) => trace.completeSec));
+  const map = useMemo(
+    () => createDesReplayStaticMapModel(scenario, tasks, result?.trafficBottlenecks ?? []),
+    [result?.trafficBottlenecks, scenario, tasks]
+  );
+  const vehicles = useMemo(
+    () => createDesReplayVehicles(tasks, playheadSec, map.nodeMap, map.edgeMap),
+    [map, playheadSec, tasks]
+  );
+  useEffect(() => {
+    if (!replay || tasks.length === 0) {
+      setPlayheadSec(0);
+      return undefined;
+    }
+    const startedAtMs = performance.now();
+    const loopMs = 12000;
+    const intervalId = window.setInterval(() => {
+      const nowMs = performance.now();
+      const ratio = ((nowMs - startedAtMs) % loopMs) / loopMs;
+      setPlayheadSec(ratio * maxTraceSec);
+    }, 125);
+    return () => window.clearInterval(intervalId);
+  }, [maxTraceSec, replay, tasks.length]);
+  const visibleWaits = replay?.topWaitIntervals.slice(0, 8) ?? [];
+  const waitSummary = useMemo(() => {
+    const summary = tasks.reduce(
+      (next, trace) => ({
+        trafficWaitSec: next.trafficWaitSec + trace.trafficWaitSec,
+        liftWaitSec: next.liftWaitSec + trace.liftWaitSec,
+        travelSec: next.travelSec + trace.emptyTravelSec + trace.loadedTravelSec,
+        handlingSec: next.handlingSec + trace.handlingSec,
+        taskCount: next.taskCount + 1
+      }),
+      { trafficWaitSec: 0, liftWaitSec: 0, travelSec: 0, handlingSec: 0, taskCount: 0 }
+    );
+    const totalObservedSec = summary.trafficWaitSec + summary.liftWaitSec + summary.travelSec + summary.handlingSec;
+    const totalWaitSec = summary.trafficWaitSec + summary.liftWaitSec;
+    return {
+      ...summary,
+      totalWaitSec,
+      totalObservedSec,
+      waitSharePct: totalObservedSec > 0 ? totalWaitSec / totalObservedSec * 100 : 0,
+      trafficWaitSharePct: totalWaitSec > 0 ? summary.trafficWaitSec / totalWaitSec * 100 : 0,
+      liftWaitSharePct: totalWaitSec > 0 ? summary.liftWaitSec / totalWaitSec * 100 : 0,
+      avgWaitPerTaskSec: summary.taskCount > 0 ? totalWaitSec / summary.taskCount : 0,
+      dominantWait: summary.trafficWaitSec >= summary.liftWaitSec ? 'traffic reservation' : 'lift resource'
+    };
+  }, [tasks]);
+  const phaseClass = (kind: HeadlessDesResult['reservationReplay']['tasks'][number]['phases'][number]['kind']): string => {
+    if (kind === 'traffic-wait') return 'wait';
+    if (kind === 'lift-wait') return 'lift-wait';
+    if (kind === 'lift-handle' || kind === 'lower-handle') return 'handle';
+    if (kind === 'loaded-travel') return 'loaded';
+    return 'empty';
+  };
+  const phaseLabel = (kind: HeadlessDesResult['reservationReplay']['tasks'][number]['phases'][number]['kind']): string => {
+    if (kind === 'traffic-wait') return 'traffic wait';
+    if (kind === 'lift-wait') return 'lift wait';
+    if (kind === 'lift-handle') return 'lift';
+    if (kind === 'lower-handle') return 'lower';
+    if (kind === 'loaded-travel') return 'loaded';
+    return 'empty';
+  };
+
+  return (
+    <section className="des-replay-panel" aria-label="DES reservation replay">
+      <div className="panel-head compact">
+        <div>
+          <h2>DES Reservation Replay</h2>
+          <p>Trace sample of yellow-grid node/edge reservation behavior. Orange bars are reservation waits; blue/green bars are travel and handling windows.</p>
+        </div>
+        <span>{replay ? `${replay.tracedTaskCount} traced / ${replay.omittedTaskCount} omitted` : 'run DES first'}</span>
+      </div>
+      {!replay || tasks.length === 0 ? (
+        <p className="empty-panel-note">Run DES 6h or DES 7d to generate replay evidence.</p>
+      ) : (
+        <div className="des-replay-stack">
+          <div className="des-route-playback">
+            <div className="des-route-map">
+              <svg viewBox={`${map.minX} ${-map.maxZ} ${map.width} ${map.depth}`} role="img" aria-label="Animated DES route playback">
+                {map.edges.map((edge) => (
+                  <line
+                    className="des-route-grid-edge"
+                    key={edge.id}
+                    x1={edge.from.x}
+                    y1={-edge.from.z}
+                    x2={edge.to.x}
+                    y2={-edge.to.z}
+                  />
+                ))}
+                {map.routePolylines.map((route) => (
+                  <polyline
+                    className={`des-route-path ${route.kind}`}
+                    key={route.id}
+                    points={route.points.map((point) => `${point.x},${-point.z}`).join(' ')}
+                  />
+                ))}
+                {map.bottleneckMarkers.map((marker) => (
+                  marker.kind === 'edge' ? (
+                    <g className="des-route-bottleneck edge" key={marker.id}>
+                      <line
+                        x1={marker.from.x}
+                        y1={-marker.from.z}
+                        x2={marker.to.x}
+                        y2={-marker.to.z}
+                      />
+                      <text
+                        x={(marker.from.x + marker.to.x) / 2 + bottleneckLabelDx(marker.rank)}
+                        y={-(marker.from.z + marker.to.z) / 2 - 0.35 - bottleneckLabelOffset(marker.rank)}
+                        textAnchor={bottleneckLabelAnchor(marker.rank)}
+                      >
+                        {bottleneckMarkerLabel(marker)}
+                      </text>
+                    </g>
+                  ) : (
+                    <g className="des-route-bottleneck node" key={marker.id}>
+                      <circle cx={marker.point.x} cy={-marker.point.z} r={0.62} />
+                      <text
+                        x={marker.point.x + bottleneckLabelDx(marker.rank)}
+                        y={-marker.point.z - 0.55 - bottleneckLabelOffset(marker.rank)}
+                        textAnchor={bottleneckLabelAnchor(marker.rank)}
+                      >
+                        {bottleneckMarkerLabel(marker)}
+                      </text>
+                    </g>
+                  )
+                ))}
+                {vehicles.map((vehicle) => (
+                  <g className={`des-route-vehicle ${vehicle.kind} ${vehicle.phaseKind}`} key={vehicle.shuttleId}>
+                    <circle cx={vehicle.point.x} cy={-vehicle.point.z} r={0.42} />
+                    <text x={vehicle.point.x + 0.55} y={-vehicle.point.z - 0.42}>{vehicle.shuttleId.replace('SH-', '')}</text>
+                  </g>
+                ))}
+              </svg>
+            </div>
+            <div className="des-route-readout">
+              <span>Replay time</span>
+              <strong>{formatClock(playheadSec)}</strong>
+              <small>{vehicles.length} active DES vehicle traces</small>
+              <div className="des-wait-mini">
+                <b>{formatNumber(waitSummary.waitSharePct, 1)}%</b>
+                <span>wait inside traced DES sample</span>
+              </div>
+            </div>
+          </div>
+          <div className="des-replay-layout">
+          <div className="des-replay-timeline">
+            <div className="des-replay-axis">
+              <span>00:00</span>
+              <span>{formatClock(maxTraceSec)}</span>
+            </div>
+            {[...tracesByShuttle.entries()].map(([shuttleId, traces]) => (
+              <div className="des-replay-row" key={shuttleId}>
+                <div className="des-replay-label">
+                  <strong>{shuttleId}</strong>
+                  <small>{traces.length} task traces</small>
+                </div>
+                <div className="des-replay-lane">
+                  <span className="des-replay-cursor" aria-hidden="true" />
+                  {traces.flatMap((trace) => trace.phases.map((phase, index) => {
+                    const left = Math.max(0, Math.min(100, phase.startSec / maxTraceSec * 100));
+                    const right = Math.max(left + 0.18, Math.min(100, phase.endSec / maxTraceSec * 100));
+                    return (
+                      <span
+                        className={`des-replay-phase ${phaseClass(phase.kind)} ${trace.kind}`}
+                        key={`${trace.taskId}-${phase.kind}-${index}`}
+                        style={{ left: `${left}%`, width: `${Math.max(0.18, right - left)}%` }}
+                        title={`${trace.shuttleId} ${trace.kind} ${phaseLabel(phase.kind)} ${formatClock(phase.startSec)}-${formatClock(phase.endSec)}${phase.resourceId ? ` / ${phase.resourceId}` : ''}`}
+                      />
+                    );
+                  }))}
+                </div>
+              </div>
+            ))}
+            <div className="des-replay-legend">
+              <span className="empty">Empty travel</span>
+              <span className="loaded">Loaded travel</span>
+              <span className="handle">Lift/lower</span>
+              <span className="wait">Traffic wait</span>
+              <span className="lift-wait">Lift wait</span>
+              <span className="bottleneck">Top bottleneck</span>
+            </div>
+          </div>
+          <div className="des-replay-waits">
+            <div className="des-wait-summary">
+              <h3>Wait Reason Summary</h3>
+              <div className="des-wait-summary-grid">
+                <div>
+                  <span>Dominant</span>
+                  <strong>{waitSummary.totalWaitSec > 0 ? waitSummary.dominantWait : 'none'}</strong>
+                </div>
+                <div>
+                  <span>Traffic</span>
+                  <strong>{formatNumber(waitSummary.trafficWaitSec, 1)}s</strong>
+                  <small>{formatNumber(waitSummary.trafficWaitSharePct, 1)}% of wait</small>
+                </div>
+                <div>
+                  <span>Lift</span>
+                  <strong>{formatNumber(waitSummary.liftWaitSec, 1)}s</strong>
+                  <small>{formatNumber(waitSummary.liftWaitSharePct, 1)}% of wait</small>
+                </div>
+                <div>
+                  <span>Avg wait/task</span>
+                  <strong>{formatNumber(waitSummary.avgWaitPerTaskSec, 1)}s</strong>
+                </div>
+              </div>
+            </div>
+            <h3>Top Wait Intervals</h3>
+            {visibleWaits.length === 0 ? (
+              <p>No reservation waits in traced horizon.</p>
+            ) : (
+              <table>
+                <thead><tr><th>Time</th><th>Unit</th><th>Wait</th><th>Resource</th></tr></thead>
+                <tbody>
+                  {visibleWaits.map((wait) => (
+                    <tr key={`${wait.taskId}-${wait.startSec}-${wait.endSec}`}>
+                      <td>{formatClock(wait.startSec)}</td>
+                      <td>{wait.shuttleId}</td>
+                      <td>{formatNumber(wait.waitSec, 1)}s</td>
+                      <td>{wait.resourceId ?? wait.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+type DesReplayTaskTrace = HeadlessDesResult['reservationReplay']['tasks'][number];
+type DesReplayPoint = { x: number; z: number };
+type DesReplayLayoutNode = ShuttleScenario['layout']['nodes'][number];
+type DesReplayLayoutEdge = ShuttleScenario['layout']['edges'][number];
+type DesReplayTrafficBottleneck = HeadlessDesResult['trafficBottlenecks'][number];
+type DesReplayBottleneckMarker =
+  | {
+    kind: 'node';
+    id: string;
+    resourceId: string;
+    rank: number;
+    waitSec: number;
+    waitCount: number;
+    point: DesReplayPoint;
+  }
+  | {
+    kind: 'edge';
+    id: string;
+    resourceId: string;
+    rank: number;
+    waitSec: number;
+    waitCount: number;
+    from: DesReplayPoint;
+    to: DesReplayPoint;
+  };
+
+function createDesReplayStaticMapModel(
+  scenario: ShuttleScenario | null,
+  traces: DesReplayTaskTrace[],
+  trafficBottlenecks: DesReplayTrafficBottleneck[]
+) {
+  const nodes = scenario?.layout.nodes ?? [];
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  const edgeMap = new Map((scenario?.layout.edges ?? []).map((edge) => [edge.id, edge]));
+  const replayNodeIds = new Set(traces.flatMap((trace) => [...trace.emptyRouteNodeIds, ...trace.loadedRouteNodeIds]));
+  const replayNodes = nodes.filter((node) => replayNodeIds.has(node.id));
+  const boundsNodes = replayNodes.length > 1 ? replayNodes : nodes;
+  const xValues = boundsNodes.map((node) => node.x);
+  const zValues = boundsNodes.map((node) => node.z);
+  const minX = Math.min(...xValues, 0) - 2;
+  const maxX = Math.max(...xValues, 1) + 2;
+  const minZ = Math.min(...zValues, -1) - 2;
+  const maxZ = Math.max(...zValues, 1) + 2;
+  const edgeLimit = 600;
+  const edges = (scenario?.layout.edges ?? [])
+    .filter((edge) => replayNodeIds.has(edge.from) || replayNodeIds.has(edge.to))
+    .slice(0, edgeLimit)
+    .flatMap((edge) => {
+      const from = nodeMap.get(edge.from);
+      const to = nodeMap.get(edge.to);
+      return from && to ? [{ id: edge.id, from, to }] : [];
+    });
+  const routePolylines = traces.slice(0, 28).flatMap((trace) => [
+    {
+      id: `${trace.taskId}-empty`,
+      kind: 'empty',
+      points: routePoints(trace.emptyRouteNodeIds, nodeMap)
+    },
+    {
+      id: `${trace.taskId}-loaded`,
+      kind: trace.kind,
+      points: routePoints(trace.loadedRouteNodeIds, nodeMap)
+    }
+  ]).filter((route) => route.points.length > 1);
+  const bottleneckMarkers = trafficBottlenecks
+    .slice(0, 6)
+    .flatMap((resource, index) => createDesReplayBottleneckMarker(resource, index + 1, nodeMap, edgeMap));
+  return {
+    minX,
+    maxZ,
+    width: Math.max(1, maxX - minX),
+    depth: Math.max(1, maxZ - minZ),
+    edges,
+    routePolylines,
+    bottleneckMarkers,
+    nodeMap,
+    edgeMap
+  };
+}
+
+function createDesReplayBottleneckMarker(
+  resource: DesReplayTrafficBottleneck,
+  rank: number,
+  nodeMap: Map<string, DesReplayLayoutNode>,
+  edgeMap: Map<string, DesReplayLayoutEdge>
+): DesReplayBottleneckMarker[] {
+  if (resource.resourceId.startsWith('node:')) {
+    const nodeId = resource.resourceId.slice('node:'.length);
+    const node = nodeMap.get(nodeId);
+    return node
+      ? [{
+        kind: 'node',
+        id: `${resource.resourceId}-${rank}`,
+        resourceId: resource.resourceId,
+        rank,
+        waitSec: resource.waitSec,
+        waitCount: resource.waitCount,
+        point: { x: node.x, z: node.z }
+      }]
+      : [];
+  }
+  if (resource.resourceId.startsWith('edge:')) {
+    const edgeId = resource.resourceId.slice('edge:'.length);
+    const edge = edgeMap.get(edgeId);
+    const from = edge ? nodeMap.get(edge.from) : null;
+    const to = edge ? nodeMap.get(edge.to) : null;
+    return from && to
+      ? [{
+        kind: 'edge',
+        id: `${resource.resourceId}-${rank}`,
+        resourceId: resource.resourceId,
+        rank,
+        waitSec: resource.waitSec,
+        waitCount: resource.waitCount,
+        from: { x: from.x, z: from.z },
+        to: { x: to.x, z: to.z }
+      }]
+      : [];
+  }
+  return [];
+}
+
+function createDesReplayVehicles(
+  traces: DesReplayTaskTrace[],
+  playheadSec: number,
+  nodeMap: Map<string, DesReplayLayoutNode>,
+  edgeMap: Map<string, DesReplayLayoutEdge>
+) {
+  return [...new Set(traces.map((trace) => trace.shuttleId))]
+    .flatMap((shuttleId) => {
+      const trace = traces.find((candidate) => candidate.shuttleId === shuttleId && candidate.dispatchSec <= playheadSec && playheadSec <= candidate.completeSec);
+      if (!trace) return [];
+      const phase = trace.phases.find((candidate) => candidate.startSec <= playheadSec && playheadSec <= candidate.endSec) ?? trace.phases.at(-1);
+      if (!phase) return [];
+      return [{
+        shuttleId,
+        kind: trace.kind,
+        phaseKind: phase.kind,
+        point: pointForReplayPhase(trace, phase, playheadSec, nodeMap, edgeMap)
+      }];
+    });
+}
+
+function routePoints(
+  nodeIds: string[],
+  nodeMap: Map<string, DesReplayLayoutNode>
+): DesReplayPoint[] {
+  return nodeIds.flatMap((nodeId) => {
+    const node = nodeMap.get(nodeId);
+    return node ? [{ x: node.x, z: node.z }] : [];
+  });
+}
+
+function pointForReplayPhase(
+  trace: DesReplayTaskTrace,
+  phase: DesReplayTaskTrace['phases'][number],
+  timeSec: number,
+  nodeMap: Map<string, DesReplayLayoutNode>,
+  edgeMap: Map<string, DesReplayLayoutEdge>
+): DesReplayPoint {
+  if (phase.kind === 'empty-travel') {
+    return interpolateRoutePoint(trace.emptyRouteNodeIds, phase, timeSec, nodeMap);
+  }
+  if (phase.kind === 'loaded-travel') {
+    return interpolateRoutePoint(trace.loadedRouteNodeIds, phase, timeSec, nodeMap);
+  }
+  const resourcePoint = pointForResourceId(phase.resourceId, nodeMap, edgeMap);
+  if (resourcePoint) {
+    return resourcePoint;
+  }
+  const fallbackNode = nodeMap.get(trace.dropoffNodeId) ?? nodeMap.get(trace.pickupNodeId) ?? nodeMap.get(trace.storageNodeId);
+  return fallbackNode ? { x: fallbackNode.x, z: fallbackNode.z } : { x: 0, z: 0 };
+}
+
+function interpolateRoutePoint(
+  nodeIds: string[],
+  phase: DesReplayTaskTrace['phases'][number],
+  timeSec: number,
+  nodeMap: Map<string, DesReplayLayoutNode>
+): DesReplayPoint {
+  const points = routePoints(nodeIds, nodeMap);
+  if (points.length === 0) return { x: 0, z: 0 };
+  if (points.length === 1) return points[0]!;
+  const ratio = Math.max(0, Math.min(1, (timeSec - phase.startSec) / Math.max(0.001, phase.endSec - phase.startSec)));
+  const segmentLengths = points.slice(1).map((point, index) => distance2d(points[index]!, point));
+  const totalLength = Math.max(0.001, segmentLengths.reduce((sum, length) => sum + length, 0));
+  let remaining = ratio * totalLength;
+  for (let index = 0; index < segmentLengths.length; index += 1) {
+    const length = segmentLengths[index]!;
+    if (remaining <= length || index === segmentLengths.length - 1) {
+      const from = points[index]!;
+      const to = points[index + 1]!;
+      const localRatio = Math.max(0, Math.min(1, remaining / Math.max(0.001, length)));
+      return {
+        x: from.x + (to.x - from.x) * localRatio,
+        z: from.z + (to.z - from.z) * localRatio
+      };
+    }
+    remaining -= length;
+  }
+  return points.at(-1)!;
+}
+
+function pointForResourceId(
+  resourceId: string | undefined,
+  nodeMap: Map<string, DesReplayLayoutNode>,
+  edgeMap: Map<string, DesReplayLayoutEdge>
+): DesReplayPoint | null {
+  if (!resourceId) return null;
+  if (resourceId.startsWith('node:')) {
+    const node = nodeMap.get(resourceId.slice('node:'.length));
+    return node ? { x: node.x, z: node.z } : null;
+  }
+  if (resourceId.startsWith('edge:')) {
+    const edge = edgeMap.get(resourceId.slice('edge:'.length));
+    const from = edge ? nodeMap.get(edge.from) : null;
+    const to = edge ? nodeMap.get(edge.to) : null;
+    if (from && to) {
+      return { x: (from.x + to.x) / 2, z: (from.z + to.z) / 2 };
+    }
+  }
+  const node = nodeMap.get(resourceId);
+  return node ? { x: node.x, z: node.z } : null;
+}
+
+function distance2d(left: DesReplayPoint, right: DesReplayPoint): number {
+  return Math.hypot(left.x - right.x, left.z - right.z);
 }
 
 function CapacityTheoryPanel({ kpis }: { kpis: KpiSnapshot | null }) {
@@ -1369,6 +2954,12 @@ function pphSeriesPoints(history: PphHistorySample[], valueForSample: (sample: P
   if (history.length === 0) {
     return '';
   }
+  if (history.length === 1) {
+    const value = valueForSample(history[0]!);
+    const maxValue = Math.max(1, value);
+    const y = 32 - (value / maxValue) * 28;
+    return `0,${formatNumber(y, 2)} 100,${formatNumber(y, 2)}`;
+  }
   const minTime = history[0]!.simTimeSec;
   const maxTime = Math.max(minTime + 1, history.at(-1)!.simTimeSec);
   const maxValue = Math.max(1, ...history.map(valueForSample));
@@ -1396,8 +2987,18 @@ function pphTrendPoints(
   valueForSample: (sample: PphHistorySample) => number,
   maxValue: number
 ): string {
+  return pphTrendPointCoordinates(history, valueForSample, maxValue)
+    .map((point) => `${formatNumber(point.x, 2)},${formatNumber(point.y, 2)}`)
+    .join(' ');
+}
+
+function pphTrendPointCoordinates(
+  history: PphHistorySample[],
+  valueForSample: (sample: PphHistorySample) => number,
+  maxValue: number
+): Array<{ x: number; y: number; value: number; simTimeSec: number }> {
   if (history.length === 0) {
-    return '';
+    return [];
   }
   const minTime = history[0]!.simTimeSec;
   const maxTime = Math.max(minTime + 1, history.at(-1)!.simTimeSec);
@@ -1405,13 +3006,159 @@ function pphTrendPoints(
   const plotRight = 114;
   const plotTop = 6;
   const plotBottom = 50;
+  if (history.length === 1) {
+    const value = Math.max(0, valueForSample(history[0]!));
+    const y = plotBottom - (value / maxValue) * (plotBottom - plotTop);
+    return [
+      { x: plotLeft, y, value, simTimeSec: history[0]!.simTimeSec },
+      { x: plotRight, y, value, simTimeSec: history[0]!.simTimeSec }
+    ];
+  }
   return history
     .map((sample) => {
       const x = plotLeft + ((sample.simTimeSec - minTime) / (maxTime - minTime)) * (plotRight - plotLeft);
-      const y = plotBottom - (Math.max(0, valueForSample(sample)) / maxValue) * (plotBottom - plotTop);
-      return `${formatNumber(x, 2)},${formatNumber(y, 2)}`;
-    })
-    .join(' ');
+      const value = Math.max(0, valueForSample(sample));
+      const y = plotBottom - (value / maxValue) * (plotBottom - plotTop);
+      return { x, y, value, simTimeSec: sample.simTimeSec };
+    });
+}
+
+export function trendStats(history: PphHistorySample[], valueForSample: (sample: PphHistorySample) => number): {
+  current: number;
+  min: number;
+  max: number;
+  average: number;
+  minSimTimeSec: number;
+  maxSimTimeSec: number;
+} | null {
+  if (history.length === 0) return null;
+  const values = history.map((sample) => valueForSample(sample));
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const minIndex = Math.max(0, values.findIndex((value) => value === min));
+  const maxIndex = Math.max(0, values.findIndex((value) => value === max));
+  return {
+    current: values.at(-1) ?? 0,
+    min,
+    max,
+    average: values.reduce((sum, value) => sum + value, 0) / values.length,
+    minSimTimeSec: history[minIndex]?.simTimeSec ?? history[0]!.simTimeSec,
+    maxSimTimeSec: history[maxIndex]?.simTimeSec ?? history[0]!.simTimeSec
+  };
+}
+
+function productiveTrendHistory(history: PphHistorySample[]): PphHistorySample[] {
+  const productive = history.filter((sample) => sample.totalPph > 0 || sample.inboundPph > 0 || sample.outboundPph > 0);
+  return productive.length > 0 ? productive : history;
+}
+
+export function liveTrendMarkers(history: PphHistorySample[]): {
+  total: ReturnType<typeof trendStats>;
+  inbound: ReturnType<typeof trendStats>;
+  outbound: ReturnType<typeof trendStats>;
+  waiting: ReturnType<typeof trendStats>;
+  reposition: ReturnType<typeof trendStats>;
+} {
+  const productiveHistory = productiveTrendHistory(history);
+  return {
+    total: trendStats(productiveHistory, (sample) => sample.totalPph),
+    inbound: trendStats(productiveHistory, (sample) => sample.inboundPph),
+    outbound: trendStats(productiveHistory, (sample) => sample.outboundPph),
+    waiting: trendStats(productiveHistory, (sample) => sample.waitingPct),
+    reposition: trendStats(productiveHistory, (sample) => sample.repositionPct)
+  };
+}
+
+export function buildLiveTrendDiagnosis(history: PphHistorySample[]): LiveTrendDiagnosis[] {
+  const latest = history.at(-1);
+  if (!latest) {
+    return [{
+      id: 'collecting-samples',
+      label: 'Live Evidence',
+      status: 'watch',
+      value: '--',
+      detail: 'Start or reset the simulation to collect KPI samples.',
+      evidence: 'No live trend samples are available yet.'
+    }];
+  }
+
+  const productiveHistory = productiveTrendHistory(history);
+  const productiveLatest = productiveHistory.at(-1) ?? latest;
+  const productiveTotalStats = trendStats(productiveHistory, (sample) => sample.totalPph);
+  const waitingStats = trendStats(productiveHistory, (sample) => sample.waitingPct);
+  const repositionStats = trendStats(productiveHistory, (sample) => sample.repositionPct);
+  const imbalancePct = Math.abs(latest.inboundPph - latest.outboundPph) / Math.max(1, latest.totalPph) * 100;
+  const totalRangePct = productiveTotalStats && productiveTotalStats.average > 0
+    ? (productiveTotalStats.max - productiveTotalStats.min) / productiveTotalStats.average * 100
+    : 0;
+  const currentVsAveragePct = productiveTotalStats && productiveTotalStats.average > 0
+    ? (latest.totalPph - productiveTotalStats.average) / productiveTotalStats.average * 100
+    : 0;
+  const statusForShare = (value: number): LiveTrendDiagnosis['status'] => (
+    value >= 15 ? 'critical' : value >= 10 ? 'watch' : 'pass'
+  );
+  const throughputStatus: LiveTrendDiagnosis['status'] = history.length < 4
+    ? 'watch'
+    : currentVsAveragePct <= -10 || totalRangePct >= 18
+      ? 'critical'
+      : currentVsAveragePct <= -5 || totalRangePct >= 10
+        ? 'watch'
+        : 'pass';
+  const imbalanceStatus: LiveTrendDiagnosis['status'] = imbalancePct >= 25
+    ? 'critical'
+    : imbalancePct >= 15
+      ? 'watch'
+      : 'pass';
+
+  return [
+    {
+      id: 'window-throughput',
+      label: 'Window PPH Stability',
+      status: throughputStatus,
+      value: `${formatNumber(latest.totalPph, 1)} PPH`,
+      detail: `${formatNumber(currentVsAveragePct, 1)}% vs productive avg; range ${formatNumber(productiveTotalStats?.min ?? 0, 1)}-${formatNumber(productiveTotalStats?.max ?? 0, 1)}`,
+      evidence: `${productiveHistory.length}/${history.length} productive samples; low ${formatClock(productiveTotalStats?.minSimTimeSec ?? productiveLatest.simTimeSec)}, high ${formatClock(productiveTotalStats?.maxSimTimeSec ?? productiveLatest.simTimeSec)}.`
+    },
+    {
+      id: 'flow-balance',
+      label: 'Inbound / Outbound Balance',
+      status: imbalanceStatus,
+      value: `${formatNumber(latest.inboundPph, 1)} / ${formatNumber(latest.outboundPph, 1)}`,
+      detail: `${formatNumber(imbalancePct, 1)}% directional imbalance in the current live window.`,
+      evidence: 'Large imbalance can mean demand mix, lift asymmetry, dispatch priority, or starvation is driving the trend.'
+    },
+    {
+      id: 'waiting-share',
+      label: 'Waiting Share',
+      status: statusForShare(latest.waitingPct),
+      value: `${formatNumber(latest.waitingPct, 1)}%`,
+      detail: `Peak ${formatNumber(waitingStats?.max ?? latest.waitingPct, 1)}%; watch >=10%, critical >=15%.`,
+      evidence: 'Waiting Share is fleet time spent blocked by lift or yellow-grid reservation resources, not a one-frame vehicle count.'
+    },
+    {
+      id: 'reposition-share',
+      label: 'Reposition Share',
+      status: statusForShare(latest.repositionPct),
+      value: `${formatNumber(latest.repositionPct, 1)}%`,
+      detail: `Peak ${formatNumber(repositionStats?.max ?? latest.repositionPct, 1)}%; watch >=10%, critical >=15%.`,
+      evidence: 'Reposition is empty travel to the next pickup; high share usually points to assignment, lift balance, or storage placement policy.'
+    }
+  ];
+}
+
+function latestTrendLabel(
+  points: Array<{ x: number; y: number; value: number }>,
+  className: string,
+  unit: string,
+  yOffset = 0
+) {
+  const latest = points.at(-1);
+  if (!latest) return null;
+  return (
+    <text className={`chart-value-label ${className}`} x={Math.min(112, latest.x)} y={Math.max(8, Math.min(48, latest.y + yOffset))}>
+      {formatNumber(latest.value, latest.value >= 100 ? 0 : 1)}{unit}
+    </text>
+  );
 }
 
 function PphSparkline({ history, liftId, kind }: { history: PphHistorySample[]; liftId: string; kind: 'inbound' | 'outbound' }) {
@@ -1431,7 +3178,14 @@ function PphTrendChart({ history }: { history: PphHistorySample[] }) {
   const totalPoints = pphTrendPoints(history, (sample) => sample.totalPph, maxPph);
   const inboundPoints = pphTrendPoints(history, (sample) => sample.inboundPph, maxPph);
   const outboundPoints = pphTrendPoints(history, (sample) => sample.outboundPph, maxPph);
+  const totalPointCoordinates = pphTrendPointCoordinates(history, (sample) => sample.totalPph, maxPph);
+  const inboundPointCoordinates = pphTrendPointCoordinates(history, (sample) => sample.inboundPph, maxPph);
+  const outboundPointCoordinates = pphTrendPointCoordinates(history, (sample) => sample.outboundPph, maxPph);
   const latest = history.at(-1);
+  const totalStats = trendStats(history, (sample) => sample.totalPph);
+  const inboundStats = trendStats(history, (sample) => sample.inboundPph);
+  const outboundStats = trendStats(history, (sample) => sample.outboundPph);
+  const markers = liveTrendMarkers(history);
   const yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => ({
     value: maxPph * ratio,
     y: 50 - ratio * 44
@@ -1441,7 +3195,7 @@ function PphTrendChart({ history }: { history: PphHistorySample[] }) {
     <section className="pph-trend-panel" aria-label="PPH trend">
       <div className="panel-head compact">
         <h2>PPH Trend</h2>
-        <span>{latest ? formatClock(latest.simTimeSec) : '--'}</span>
+        <span>{latest ? `${formatClock(latest.simTimeSec)} · ${history.length} samples since reset` : '--'}</span>
       </div>
       <svg className="pph-trend-chart" viewBox="0 0 120 64" role="img" aria-label="Total inbound outbound PPH time curve">
         {yTicks.map((tick) => (
@@ -1457,6 +3211,9 @@ function PphTrendChart({ history }: { history: PphHistorySample[] }) {
         <polyline className="pph-line total" points={totalPoints} />
         <polyline className="pph-line inbound" points={inboundPoints} />
         <polyline className="pph-line outbound" points={outboundPoints} />
+        {latestTrendLabel(totalPointCoordinates, 'total', '', -2)}
+        {latestTrendLabel(inboundPointCoordinates, 'inbound', '', 4)}
+        {latestTrendLabel(outboundPointCoordinates, 'outbound', '', 9)}
         <text className="chart-axis-label x-axis" x="14" y="60">
           {history[0] ? formatClock(history[0].simTimeSec) : '--'}
         </text>
@@ -1469,6 +3226,361 @@ function PphTrendChart({ history }: { history: PphHistorySample[] }) {
         <span className="inbound">Inbound {latest ? formatNumber(latest.inboundPph, 1) : '--'}</span>
         <span className="outbound">Outbound {latest ? formatNumber(latest.outboundPph, 1) : '--'}</span>
       </div>
+      <div className="live-trend-marker-grid" aria-label="Live PPH numeric markers">
+        <LiveTrendMarker label="Lowest total" unit="PPH" stats={markers.total} pick="min" />
+        <LiveTrendMarker label="Highest total" unit="PPH" stats={markers.total} pick="max" />
+        <LiveTrendMarker label="Inbound high" unit="PPH" stats={markers.inbound} pick="max" />
+        <LiveTrendMarker label="Outbound high" unit="PPH" stats={markers.outbound} pick="max" />
+      </div>
+      <div className="trend-readout-grid">
+        <TrendReadout label="Window total" unit="PPH" stats={totalStats} focus="min" />
+        <TrendReadout label="Window inbound" unit="PPH" stats={inboundStats} focus="min" />
+        <TrendReadout label="Window outbound" unit="PPH" stats={outboundStats} focus="min" />
+      </div>
+      <p className="trend-definition">Window PPH = completed loads inside the current KPI window, not cumulative average. Use min/max to spot local dips before the long-run average hides them.</p>
+    </section>
+  );
+}
+
+function WaitingTrendChart({ history }: { history: PphHistorySample[] }) {
+  const maxPct = niceAxisCeil(Math.max(
+    20,
+    ...history.flatMap((sample) => [sample.waitingPct, sample.repositionPct])
+  ));
+  const waitingPoints = pphTrendPoints(history, (sample) => sample.waitingPct, maxPct);
+  const repositionPoints = pphTrendPoints(history, (sample) => sample.repositionPct, maxPct);
+  const waitingPointCoordinates = pphTrendPointCoordinates(history, (sample) => sample.waitingPct, maxPct);
+  const repositionPointCoordinates = pphTrendPointCoordinates(history, (sample) => sample.repositionPct, maxPct);
+  const latest = history.at(-1);
+  const waitingStats = trendStats(history, (sample) => sample.waitingPct);
+  const repositionStats = trendStats(history, (sample) => sample.repositionPct);
+  const markers = liveTrendMarkers(history);
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => ({
+    value: maxPct * ratio,
+    y: 50 - ratio * 44
+  }));
+  const thresholdY = (value: number) => 50 - Math.min(1, value / maxPct) * 44;
+
+  return (
+    <section className="pph-trend-panel" aria-label="Waiting share trend">
+      <div className="panel-head compact">
+        <h2>Waiting Share Trend</h2>
+        <span>{latest ? `${formatClock(latest.simTimeSec)} · ${history.length} samples since reset` : '--'}</span>
+      </div>
+      <svg className="pph-trend-chart" viewBox="0 0 120 64" role="img" aria-label="Waiting and reposition share time curve">
+        {yTicks.map((tick) => (
+          <g key={tick.value}>
+            <line className="chart-grid-line" x1="14" x2="114" y1={tick.y} y2={tick.y} />
+            <text className="chart-axis-label y-axis" x="11" y={tick.y + 1.8}>
+              {formatNumber(tick.value, tick.value >= 10 ? 0 : 1)}%
+            </text>
+          </g>
+        ))}
+        <line className="chart-threshold watch" x1="14" x2="114" y1={thresholdY(10)} y2={thresholdY(10)} />
+        <line className="chart-threshold critical" x1="14" x2="114" y1={thresholdY(15)} y2={thresholdY(15)} />
+        <text className="chart-threshold-label watch" x="114" y={thresholdY(10) - 1.5}>10%</text>
+        <text className="chart-threshold-label critical" x="114" y={thresholdY(15) - 1.5}>15%</text>
+        <line className="chart-axis-line" x1="14" x2="114" y1="50" y2="50" />
+        <line className="chart-axis-line" x1="14" x2="14" y1="6" y2="50" />
+        <polyline className="pph-line waiting" points={waitingPoints} />
+        <polyline className="pph-line reposition" points={repositionPoints} />
+        {latestTrendLabel(waitingPointCoordinates, 'waiting', '%', -3)}
+        {latestTrendLabel(repositionPointCoordinates, 'reposition', '%', 6)}
+        <text className="chart-axis-label x-axis" x="14" y="60">
+          {history[0] ? formatClock(history[0].simTimeSec) : '--'}
+        </text>
+        <text className="chart-axis-label x-axis end" x="114" y="60">
+          {latest ? formatClock(latest.simTimeSec) : '--'}
+        </text>
+      </svg>
+      <div className="pph-legend">
+        <span className="waiting">Waiting {latest ? `${formatNumber(latest.waitingPct, 1)}%` : '--'}</span>
+        <span className="reposition">Reposition {latest ? `${formatNumber(latest.repositionPct, 1)}%` : '--'}</span>
+      </div>
+      <div className="live-trend-marker-grid" aria-label="Live waiting numeric markers">
+        <LiveTrendMarker label="Peak waiting" unit="%" stats={markers.waiting} pick="max" />
+        <LiveTrendMarker label="Lowest waiting" unit="%" stats={markers.waiting} pick="min" />
+        <LiveTrendMarker label="Peak reposition" unit="%" stats={markers.reposition} pick="max" />
+        <LiveTrendMarker label="Lowest reposition" unit="%" stats={markers.reposition} pick="min" />
+      </div>
+      <div className="trend-readout-grid">
+        <TrendReadout label="Traffic wait" unit="%" stats={waitingStats} focus="max" />
+        <TrendReadout label="Reposition" unit="%" stats={repositionStats} focus="max" />
+      </div>
+      <p className="trend-definition">Waiting Share = blocked/waiting shuttle time divided by available fleet time in the live KPI stream. Reposition = empty travel to the next pickup.</p>
+    </section>
+  );
+}
+
+function LiveTrendMarker({
+  label,
+  unit,
+  stats,
+  pick
+}: {
+  label: string;
+  unit: string;
+  stats: ReturnType<typeof trendStats>;
+  pick: 'min' | 'max';
+}) {
+  const value = stats ? (pick === 'min' ? stats.min : stats.max) : null;
+  const simTimeSec = stats ? (pick === 'min' ? stats.minSimTimeSec : stats.maxSimTimeSec) : null;
+  return (
+    <div className="live-trend-marker">
+      <span>{label}</span>
+      <strong>{value === null ? '--' : `${formatNumber(value, unit === 'PPH' ? 1 : 2)} ${unit}`}</strong>
+      <small>{simTimeSec === null ? 'waiting for samples' : formatClock(simTimeSec)}</small>
+    </div>
+  );
+}
+
+function TrendReadout({
+  label,
+  unit,
+  stats,
+  focus
+}: {
+  label: string;
+  unit: string;
+  stats: {
+    current: number;
+    min: number;
+    max: number;
+    average: number;
+    minSimTimeSec: number;
+    maxSimTimeSec: number;
+  } | null;
+  focus: 'min' | 'max';
+}) {
+  const focusValue = stats ? (focus === 'min' ? stats.min : stats.max) : null;
+  const focusTimeSec = stats ? (focus === 'min' ? stats.minSimTimeSec : stats.maxSimTimeSec) : null;
+  const focusLabel = focus === 'min' ? 'low' : 'peak';
+  return (
+    <div className="trend-readout">
+      <span>{label}</span>
+      <strong>{stats ? `${formatNumber(stats.current, 1)} ${unit}` : '--'}</strong>
+      <small>{stats ? `avg ${formatNumber(stats.average, 1)} · min ${formatNumber(stats.min, 1)} / max ${formatNumber(stats.max, 1)}` : 'waiting for samples'}</small>
+      <em>{stats && focusValue !== null && focusTimeSec !== null ? `${focusLabel} ${formatNumber(focusValue, 1)} at ${formatClock(focusTimeSec)}` : 'collecting window evidence'}</em>
+    </div>
+  );
+}
+
+function LiveTrendDiagnosisPanel({ history }: { history: PphHistorySample[] }) {
+  const diagnoses = buildLiveTrendDiagnosis(history);
+  const latest = history.at(-1);
+  return (
+    <section className="live-diagnosis-panel" aria-label="Live trend industrial engineering diagnosis">
+      <div className="panel-head compact">
+        <div>
+          <h2>IE Trend Diagnosis</h2>
+          <p>Live operating readout for PPH stability, directional balance, waiting, and repositioning. Use this before trusting the animation by eye.</p>
+        </div>
+        <span>{latest ? `${formatClock(latest.simTimeSec)} · live KPI window` : 'collecting'}</span>
+      </div>
+      <div className="live-diagnosis-grid">
+        {diagnoses.map((item) => (
+          <article className={`live-diagnosis-card ${item.status}`} key={item.id}>
+            <span>{item.label}</span>
+            <strong>{item.value}</strong>
+            <small>{item.detail}</small>
+            <em>{item.evidence}</em>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+export function buildReviewTrafficReadouts(state: ShuttleSimState | null): ReviewTrafficReadout[] {
+  if (!state) {
+    return [{
+      id: 'traffic-state',
+      label: 'Traffic Evidence',
+      status: 'watch',
+      value: '--',
+      detail: 'Waiting for live simulation state.',
+      evidence: 'No state snapshot has arrived from the API stream.'
+    }];
+  }
+
+  const traffic = state.traffic;
+  const waitingVehicles = traffic.waitingVehicles ?? [];
+  const liftPorts = traffic.liftPorts ?? [];
+  const queuedLiftTasks = liftPorts.reduce((sum, port) => sum + port.queueLength, 0);
+  const activeLiftPorts = liftPorts.filter((port) => port.activeTaskId).length;
+  const maxBlocked = waitingVehicles.reduce((max, vehicle) => Math.max(max, vehicle.blockedTimeSec), 0);
+  const approachOccupied = liftPorts.reduce((sum, port) => sum + (port.approachOccupancy ?? 0), 0);
+  const approachCapacity = liftPorts.reduce((sum, port) => sum + (port.approachCapacity ?? 1), 0);
+  const approachPct = approachCapacity > 0 ? approachOccupied / approachCapacity * 100 : 0;
+  const separation = traffic.minVehicleSeparationM;
+  const reservationStatus: ReviewTrafficReadout['status'] = traffic.collisionAvoidanceEnabled === false
+    ? 'critical'
+    : traffic.activeReservationCount > 0 || traffic.activeFutureGrantCount > 0
+      ? 'pass'
+      : 'watch';
+  const holdStatus: ReviewTrafficReadout['status'] = maxBlocked >= 60
+    ? 'critical'
+    : waitingVehicles.length > 0
+      ? 'watch'
+      : 'pass';
+  const liftStatus: ReviewTrafficReadout['status'] = queuedLiftTasks > 0 || approachPct >= 90
+    ? 'watch'
+    : 'pass';
+
+  return [
+    {
+      id: 'reservation-control',
+      label: 'Reservation Control',
+      status: reservationStatus,
+      value: traffic.collisionAvoidanceEnabled === false ? 'Off' : String(traffic.activeReservationCount),
+      detail: `${traffic.trafficMode}; ${traffic.activeFutureGrantCount} future grants.`,
+      evidence: traffic.collisionAvoidanceEnabled === false
+        ? 'Collision avoidance is disabled; this is not review-safe.'
+        : 'Active node/edge reservations are the DES-style mechanism that prevents path crossing.'
+    },
+    {
+      id: 'traffic-holds',
+      label: 'Traffic Holds',
+      status: holdStatus,
+      value: String(waitingVehicles.length),
+      detail: `Max blocked ${formatNumber(maxBlocked, 1)}s.`,
+      evidence: waitingVehicles.length > 0
+        ? 'A hold means a shuttle is waiting for a reservation, lift, or resource instead of crossing an unsafe path.'
+        : 'No shuttle is currently held by traffic control in this snapshot.'
+    },
+    {
+      id: 'physical-safety',
+      label: 'Physical Safety',
+      status: traffic.physicalViolationCount > 0 ? 'critical' : 'pass',
+      value: String(traffic.physicalViolationCount),
+      detail: `Min separation ${separation === null || separation === undefined ? '--' : `${formatNumber(separation, 2)}m`}.`,
+      evidence: 'Physical violations must stay at zero; this is the live safety gate for animation credibility.'
+    },
+    {
+      id: 'lift-port-pressure',
+      label: 'Lift Port Pressure',
+      status: liftStatus,
+      value: `${activeLiftPorts}/${liftPorts.length}`,
+      detail: `${queuedLiftTasks} queued; approach ${approachOccupied}/${approachCapacity}.`,
+      evidence: 'Lift queues and approach occupancy explain whether PPH dips are material-flow constraints or dispatch symptoms.'
+    }
+  ];
+}
+
+function ReviewTrafficReadoutPanel({ state }: { state: ShuttleSimState | null }) {
+  const readouts = buildReviewTrafficReadouts(state);
+  return (
+    <section className="review-traffic-panel" aria-label="Live DES avoidance and traffic readout">
+      <div className="panel-head compact">
+        <div>
+          <h2>DES Avoidance Live</h2>
+          <p>Reservation, traffic hold, safety, and lift-port evidence synchronized with the animated state.</p>
+        </div>
+        <span>{state ? `${formatClock(state.simTimeSec)} · ${state.traffic.trafficMode}` : 'waiting'}</span>
+      </div>
+      <div className="review-traffic-grid">
+        {readouts.map((item) => (
+          <article className={`review-traffic-card ${item.status}`} key={item.id}>
+            <span>{item.label}</span>
+            <strong>{item.value}</strong>
+            <small>{item.detail}</small>
+            <em>{item.evidence}</em>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+export function buildReviewDesEvidence(
+  scenario: ShuttleScenario | null,
+  result: HeadlessDesResult | null
+): ReviewDesEvidence | null {
+  if (!result) return null;
+  const auditRows = buildDesDispatchAuditRows(scenario, result, Math.max(24, result.reservationReplay.tasks.length));
+  const routePass = auditRows.filter((row) => row.routeStatus === 'pass').length;
+  const routeWatch = auditRows.filter((row) => row.routeStatus === 'watch').length;
+  const routeFail = auditRows.filter((row) => row.routeStatus === 'fail').length;
+  const topBottleneck = result.trafficBottlenecks[0] ?? null;
+  const topWait = result.reservationReplay.topWaitIntervals[0] ?? null;
+  const routeStatus: ReviewDesEvidence['routeStatus'] = result.routeModel.routeUnavailableCount > 0 || routeFail > 0
+    ? 'critical'
+    : routeWatch > 0 || result.issues.some((issue) => issue.severity === 'warning')
+      ? 'watch'
+      : 'pass';
+
+  return {
+    routeStatus,
+    routeMisses: result.routeModel.routeUnavailableCount,
+    reservationWindows: result.routeModel.reservationWindowCount,
+    tracedTasks: result.reservationReplay.tracedTaskCount,
+    routePass,
+    routeWatch,
+    routeFail,
+    trafficWaitHours: result.routeModel.trafficWaitSec / 3600,
+    topBottleneck: topBottleneck ? `${resourceShortName(topBottleneck.resourceId)} · ${formatNumber(topBottleneck.waitSec / 3600, 2)}h / ${topBottleneck.waitCount}` : 'none',
+    topWaitTask: topWait ? `${topWait.shuttleId} ${topWait.taskId} · ${formatNumber(topWait.waitSec, 1)}s · ${resourceShortName(topWait.resourceId ?? topWait.reason)}` : 'none',
+    evidence: `${result.routeModel.kind}; ${result.reservationReplay.tracedTaskCount} traced tasks; ${result.routeModel.routeUnavailableCount} route misses.`
+  };
+}
+
+function ReviewDesEvidencePanel({
+  scenario,
+  result,
+  onOpenStatistics
+}: {
+  scenario: ShuttleScenario | null;
+  result: HeadlessDesResult | null;
+  onOpenStatistics: () => void;
+}) {
+  const evidence = buildReviewDesEvidence(scenario, result);
+  return (
+    <section className="review-des-panel" aria-label="DES task-level avoidance evidence">
+      <div className="panel-head compact">
+        <div>
+          <h2>DES Task Evidence</h2>
+          <p>Task-level reservation replay summary for route validity, waits, and bottleneck resources.</p>
+        </div>
+        <span>{evidence ? evidence.routeStatus : 'run DES first'}</span>
+      </div>
+      {!evidence ? (
+        <div className="review-des-empty">
+          <strong>No DES replay loaded</strong>
+          <small>Use DES 6h or DES 7d, then this panel will show route pass/watch/fail and top wait evidence.</small>
+          <button type="button" onClick={onOpenStatistics}>Open Statistics</button>
+        </div>
+      ) : (
+        <>
+          <div className="review-des-grid">
+            <article className={`review-des-card ${evidence.routeStatus}`}>
+              <span>Route Audit</span>
+              <strong>{evidence.routePass}/{evidence.routeWatch}/{evidence.routeFail}</strong>
+              <small>pass / watch / fail across traced tasks</small>
+            </article>
+            <article className={evidence.routeMisses > 0 ? 'review-des-card critical' : 'review-des-card pass'}>
+              <span>Route Misses</span>
+              <strong>{evidence.routeMisses}</strong>
+              <small>{evidence.reservationWindows} reservation windows</small>
+            </article>
+            <article className={evidence.trafficWaitHours >= 2 ? 'review-des-card watch' : 'review-des-card pass'}>
+              <span>Traffic Wait</span>
+              <strong>{formatNumber(evidence.trafficWaitHours, 2)}h</strong>
+              <small>{evidence.tracedTasks} traced task sample</small>
+            </article>
+          </div>
+          <div className="review-des-evidence">
+            <div>
+              <span>Top Bottleneck</span>
+              <strong>{evidence.topBottleneck}</strong>
+            </div>
+            <div>
+              <span>Top Wait Task</span>
+              <strong>{evidence.topWaitTask}</strong>
+            </div>
+            <p>{evidence.evidence}</p>
+          </div>
+        </>
+      )}
     </section>
   );
 }
@@ -1544,6 +3656,88 @@ function VehicleTimeStackedBarChart({
   );
 }
 
+function RouteEfficiencyPanel({
+  scenario,
+  state
+}: {
+  scenario: ShuttleScenario | null;
+  state: ShuttleSimState | null;
+}) {
+  const rows = useMemo(() => {
+    if (!scenario || !state) {
+      return [];
+    }
+    const nodeMap = new Map(scenario.layout.nodes.map((node) => [node.id, node]));
+    const taskByVehicleId = new Map(
+      state.tasks
+        .filter((task) => task.vehicleId && task.state !== 'completed' && task.state !== 'failed')
+        .map((task) => [task.vehicleId!, task])
+    );
+    return state.vehicles
+      .map((vehicle) => {
+        const route = remainingRouteNodeIds(vehicle, vehicle.plannedRouteNodeIds);
+        const goalNodeId = vehicle.plannedGoalNodeId ?? route.at(-1) ?? null;
+        if (!goalNodeId || route.length < 2) {
+          return null;
+        }
+        const routeDistanceM = routeDistanceFromVehicleM(vehicle, route, nodeMap);
+        const lowerBoundM = routeLowerBoundM(vehicle, goalNodeId, nodeMap);
+        const ratio = lowerBoundM > 0.05 ? routeDistanceM / lowerBoundM : 1;
+        const task = taskByVehicleId.get(vehicle.id);
+        return {
+          vehicle,
+          task,
+          goalNodeId,
+          routeDistanceM,
+          lowerBoundM,
+          ratio,
+          nodeCount: route.length,
+          localRouteReason: vehicle.localRouteReason
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null)
+      .sort((left, right) =>
+        right.ratio - left.ratio ||
+        right.routeDistanceM - left.routeDistanceM ||
+        left.vehicle.id.localeCompare(right.vehicle.id)
+      )
+      .slice(0, 8);
+  }, [scenario, state]);
+
+  return (
+    <section className="route-efficiency-panel" aria-label="Route efficiency">
+      <div className="panel-head compact">
+        <h2>Route Efficiency</h2>
+        <span>{rows.length} active routes</span>
+      </div>
+      {rows.length === 0 ? (
+        <p className="muted">No active route diagnostics yet.</p>
+      ) : (
+        <div className="route-efficiency-table">
+          <div className="route-efficiency-header">
+            <span>Unit</span>
+            <span>Task</span>
+            <span>Goal</span>
+            <span>Route</span>
+            <span>Ratio</span>
+            <span>Reason</span>
+          </div>
+          {rows.map((row) => (
+            <div className={row.ratio >= 2 ? 'route-efficiency-row warn' : 'route-efficiency-row'} key={row.vehicle.id}>
+              <strong>{row.vehicle.id}</strong>
+              <span>{row.task ? `${row.task.kind} ${row.task.id}` : 'standby'}</span>
+              <span>{row.goalNodeId}</span>
+              <span>{formatNumber(row.routeDistanceM, 1)}m / {row.nodeCount} nodes</span>
+              <span>{formatNumber(row.ratio, 2)}x</span>
+              <span>{row.localRouteReason ?? row.vehicle.waitReason ?? '-'}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function LiftPphPanel({
   state,
   kpis,
@@ -1565,7 +3759,8 @@ function LiftPphPanel({
     approachCapacity: port.approachCapacity ?? 1,
     queueLength: port.queueLength,
     sourceBufferOccupancy: port.sourceBufferOccupancy ?? 0,
-    sourceBufferCapacity: port.sourceBufferCapacity ?? 1
+    sourceBufferCapacity: port.sourceBufferCapacity ?? 1,
+    utilization: port.utilization ?? 0
   }));
 
   return (
@@ -1586,7 +3781,7 @@ function LiftPphPanel({
               </div>
               <PphSparkline history={history} liftId={entry.nodeId} kind={entry.kind} />
               <small>
-                {entry.completed} done, approach {entry.approachOccupancy}/{entry.approachCapacity}, q{entry.queueLength}
+                {entry.completed} done, util {formatNumber(entry.utilization * 100, 1)}%, approach {entry.approachOccupancy}/{entry.approachCapacity}, q{entry.queueLength}
                 {entry.kind === 'inbound' ? `, buffer ${entry.sourceBufferOccupancy}/${entry.sourceBufferCapacity}` : ''}
                 {entry.activeTaskId ? `, active ${entry.activeTaskId}` : ''}
               </small>
@@ -1761,15 +3956,18 @@ function liftGridDockNodeId(
   liftNodeId: string,
   role: 'inbound' | 'outbound'
 ): string | null {
-  const serviceDockNodeId = `${liftNodeId}-queue-01-service-exit`;
-  if (nodeMap.has(serviceDockNodeId)) {
-    return serviceDockNodeId;
+  const liftMatch = /^lift-(\d{2})-(?:inbound|outbound)$/.exec(liftNodeId);
+  const moduleDockNodeId = liftMatch
+    ? `module-${liftMatch[1]}-spine-${role === 'inbound' ? 'top-a' : 'bottom-b'}`
+    : null;
+  if (moduleDockNodeId && nodeMap.has(moduleDockNodeId)) {
+    return moduleDockNodeId;
   }
   const entryNode = nodeMap.get(`${liftNodeId}-queue-01-entry-access`) ?? nodeMap.get(`${liftNodeId}-queue-access`);
   if (!entryNode) {
     return null;
   }
-  const targetLevel = role === 'inbound' ? 'top-b' : 'bottom-a';
+  const targetLevel = role === 'inbound' ? 'top-b' : 'bottom-b';
   let nearest: ShuttleScenario['layout']['nodes'][number] | null = null;
   let nearestDistance = Number.POSITIVE_INFINITY;
   for (const node of nodeMap.values()) {
@@ -2085,7 +4283,7 @@ function AuthoritativeMap({
           return null;
         }
         const liftDockTarget = isLiftWorkcellDisplayNode(pickupNode);
-        const pickupPoint = liftDockTarget ? pickupNode : routeDisplayPointForNode(pickupNode.id, pickupNode, geometry.nodeMap);
+        const pickupPoint = routeDisplayPointForNode(pickupNode.id, pickupNode, geometry.nodeMap);
         return (
           <span
             className={`map-task-badge pickup flow-${task.kind} ${liftDockTarget ? 'lift-dock-target' : ''}`}
@@ -2731,7 +4929,7 @@ function CanvasLiteMap({
         const pickupNode = geometry.nodeMap.get(task.pickupNodeId);
         if (!vehicle || !pickupNode || vehicle.loaded) continue;
         const liftDockTarget = isLiftWorkcellDisplayNode(pickupNode);
-        const displayPoint = liftDockTarget ? pickupNode : routeDisplayPointForNode(pickupNode.id, pickupNode, geometry.nodeMap);
+        const displayPoint = routeDisplayPointForNode(pickupNode.id, pickupNode, geometry.nodeMap);
         const point = project(displayPoint);
         drawPickupTargetBadge(point, task.kind, vehicle.id, liftDockTarget);
       }
@@ -3793,10 +5991,10 @@ function TimelineScrubber({
           {fastRun?.active ? 'Pause Fast Run' : 'Run 6h Fast'}
         </button>
         <button type="button" onClick={() => onRunDesClick(SIX_HOURS_SEC)} disabled={setupDirty || Boolean(fastRun?.active)}>
-          Capacity 6h
+          DES 6h
         </button>
         <button type="button" onClick={() => onRunDesClick(7 * 24 * 3600)} disabled={setupDirty || Boolean(fastRun?.active)}>
-          Capacity 7d
+          DES 7d
         </button>
         <span className={`timeline-status ${status ?? ''}`}>
           {status ?? '--'}
@@ -3850,10 +6048,10 @@ function RecordingReplayPanel({
         </div>
         <div className="recording-action-row">
           <button type="button" onClick={onRecordThreeHours} disabled={setupDirty || jobActive}>
-            {jobActive ? 'Recording...' : 'Record 3h Fast'}
+            {jobActive ? 'Recording...' : 'Record 3h Replay'}
           </button>
           <button type="button" onClick={onRecordTwelveHours} disabled={setupDirty || jobActive}>
-            Record 12h Fast
+            Record 12h Hourly
           </button>
         </div>
       </div>
@@ -3901,7 +6099,7 @@ function RecordingReplayPanel({
           {jobActive
             ? `${formatNumber(progressPct, 0)}% · ${job.framesRecorded} frames`
             : recording
-              ? `${recording.frameCount} frames · ${formatNumber(recording.elapsedMs / 1000, 1)}s compute`
+              ? `${recording.frameCount} frames @ ${formatClock(recording.sampleIntervalSec)} · ${formatNumber(recording.elapsedMs / 1000, 1)}s compute`
               : 'ready'}
         </span>
       </div>
@@ -3944,8 +6142,8 @@ export function App() {
     loads: true,
     routes: true
   });
-  const [mapViewMode, setMapViewMode] = useState<MapViewMode>('lite');
-  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>('view');
+  const [mapViewMode, setMapViewMode] = useState<MapViewMode>('3d');
+  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>('review');
   const [regionDraftCount, setRegionDraftCount] = useState(2);
   const [shuttleDraftCount, setShuttleDraftCount] = useState(8);
   const [initialOutboundDraftColumns, setInitialOutboundDraftColumns] = useState(4);
@@ -3970,6 +6168,17 @@ export function App() {
     pendingLiveStreamRef.current = snapshot;
     setLiveStream(snapshot);
     setPphHistory((previous) => appendPphHistorySample(previous, createPphHistorySample(nextState.simTimeSec, nextState.kpis)));
+  }
+
+  function replaceLiveStreamFromState(nextState: ShuttleSimState): void {
+    const snapshot = {
+      simTimeSec: nextState.simTimeSec,
+      vehicles: nextState.vehicles,
+      kpis: nextState.kpis
+    };
+    pendingLiveStreamRef.current = snapshot;
+    setLiveStream(snapshot);
+    setPphHistory([createPphHistorySample(nextState.simTimeSec, nextState.kpis)]);
   }
 
   function scheduleLiveStreamPatch(patch: Partial<LiveStreamSnapshot> & { simTimeSec: number }): void {
@@ -4003,6 +6212,12 @@ export function App() {
       ? physicalRecordingStateAt(physicalRecording, replay.cursorSec, replay.playing)
       : null
   ), [physicalRecording, replay.active, replay.cursorSec, replay.playing]);
+  const physicalRecordingHistory = useMemo(() => (
+    physicalRecording
+      ? physicalRecording.frames.map((frame) => createPphHistorySample(frame.simTimeSec, frame.kpis))
+      : null
+  ), [physicalRecording]);
+  const statisticsHistory = physicalRecordingHistory ?? pphHistory;
   const activeScenario = replaySceneState && physicalRecording ? physicalRecording.scenario : scenario;
   const liveClockSec = replaySceneState?.simTimeSec ?? liveStream?.simTimeSec ?? state?.simTimeSec ?? 0;
   const kpis = replaySceneState?.kpis ?? liveStream?.kpis ?? state?.kpis ?? null;
@@ -4029,6 +6244,29 @@ export function App() {
       setSelectedVehicleId(vehicles[0]!.id);
     }
   }, [selectedVehicleId, vehicles]);
+
+  useEffect(() => {
+    if (!kpis) {
+      return;
+    }
+    const sample = createPphHistorySample(liveClockSec, kpis);
+    setPphHistory((previous) => {
+      const last = previous.at(-1);
+      if (!last) {
+        return [sample];
+      }
+      if (sample.simTimeSec < last.simTimeSec) {
+        return [sample];
+      }
+      if (Math.abs(sample.simTimeSec - last.simTimeSec) < 0.25) {
+        return previous;
+      }
+      if (sample.simTimeSec - last.simTimeSec < 2) {
+        return previous;
+      }
+      return appendPphHistorySample(previous, sample);
+    });
+  }, [kpis, liveClockSec]);
 
   useEffect(() => {
     if (scenario) {
@@ -4224,7 +6462,7 @@ export function App() {
       } else if (event.key === 'r' || event.key === 'R') {
         if (event.metaKey || event.ctrlKey) return;
         event.preventDefault();
-        void postCommand('/api/shuttle/reset', { seed: state?.seed });
+        void resetSimulation();
       } else if (event.key === '[') {
         const idx = PLAYBACK_SPEEDS.indexOf(playbackSpeed as typeof PLAYBACK_SPEEDS[number]);
         const next = PLAYBACK_SPEEDS[Math.max(0, idx - 1)] ?? PLAYBACK_SPEEDS[0];
@@ -4283,6 +6521,39 @@ export function App() {
     }
   }
 
+  async function resetSimulation(): Promise<boolean> {
+    const startedAt = performance.now();
+    const seed = state?.seed;
+    cancelFastRun();
+    recordingPollTokenRef.current += 1;
+    if (replayFrameRef.current !== null) {
+      window.cancelAnimationFrame(replayFrameRef.current);
+      replayFrameRef.current = null;
+    }
+    setPhysicalRecordingJob(null);
+    setPhysicalRecording(null);
+    setReplay({ active: false, playing: false, cursorSec: 0, speed: 4 });
+    setDesResult(null);
+    setFastRun(null);
+    setCommandStatus({ label: 'resetting clean sim...', tone: 'idle' });
+    try {
+      const response = await requestJson<{ state: ShuttleSimState }>('/api/shuttle/reset', {
+        method: 'POST',
+        body: JSON.stringify({ seed })
+      });
+      setState(response.state);
+      replaceLiveStreamFromState(response.state);
+      setEvents(response.state.recentEvents);
+      setSelectedVehicleId(response.state.vehicles[0]?.id ?? null);
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      setCommandStatus({ label: `clean reset ${elapsedMs} ms`, tone: 'ok' });
+      return true;
+    } catch (error) {
+      setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' });
+      return false;
+    }
+  }
+
   async function applyScenarioSetup(): Promise<void> {
     const minRegionCount = setupSummary?.minRegionCount ?? 1;
     const maxRegionCount = setupSummary?.maxRegionCount ?? 8;
@@ -4297,7 +6568,13 @@ export function App() {
     try {
       const response = await requestJson<ScenarioSetupResponse>('/api/shuttle/setup', {
         method: 'POST',
-        body: JSON.stringify({ regionCount, shuttleCount, initialOutboundFullColumns })
+        body: JSON.stringify({
+          regionCount,
+          shuttleCount,
+          initialOutboundFullColumns,
+          initialStorageFillPolicy: 'zone-balanced-50',
+          storageSelectionPolicy: 'traffic-aware'
+        })
       });
       setScenario(response.scenario);
       setState(response.state);
@@ -4308,7 +6585,7 @@ export function App() {
       setShuttleDraftCount(response.setup.shuttleCount);
       setInitialOutboundDraftColumns(response.setup.initialOutboundFullColumns);
       const elapsedMs = Math.round(performance.now() - startedAt);
-      setCommandStatus({ label: `${response.setup.regionCount} regions / ${response.setup.shuttleCount} shuttles loaded in ${elapsedMs} ms`, tone: 'ok' });
+      setCommandStatus({ label: `${response.setup.regionCount} regions / ${response.setup.shuttleCount} shuttles loaded (${response.setup.initialStorageFillPolicy}, ${response.setup.storageSelectionPolicy}) in ${elapsedMs} ms`, tone: 'ok' });
     } catch (error) {
       setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' });
     }
@@ -4420,20 +6697,24 @@ export function App() {
 
   async function runHeadlessDes(durationSec: number): Promise<void> {
     const startedAt = performance.now();
-    const sampleIntervalSec = durationSec >= 24 * 3600 ? 24 * 3600 : Math.max(60, Math.round(durationSec / 24));
-      setCommandStatus({ label: `running capacity DES to ${formatClock(durationSec)}...`, tone: 'idle' });
+    const sampleIntervalSec = durationSec >= 24 * 3600 ? 3600 : Math.max(60, Math.round(durationSec / 24));
+    const maxActiveTasks = Math.min(activeScenario?.vehicles.count ?? setupSummary?.shuttleCount ?? 8, 6);
+    setCommandStatus({ label: `running reservation-window DES to ${formatClock(durationSec)}...`, tone: 'idle' });
     try {
       const response = await requestJson<HeadlessDesResponse>('/api/shuttle/runHeadlessDes', {
         method: 'POST',
         body: JSON.stringify({
           durationSec,
-          sampleIntervalSec
+          sampleIntervalSec,
+          maxActiveTasks,
+          initialStorageFillPolicy: 'zone-balanced-50',
+          storageSelectionPolicy: 'traffic-aware'
         })
       });
       setDesResult(response.result);
       const elapsedMs = Math.round(performance.now() - startedAt);
       setCommandStatus({
-        label: `capacity ${formatClock(durationSec)}: ${formatNumber(response.result.totalPph, 1)} PPH in ${elapsedMs} ms`,
+        label: `DES ${formatClock(durationSec)} traffic-aware: ${formatNumber(response.result.totalPph, 1)} PPH, wait ${formatNumber(response.result.averageWaitingPct, 1)}%, cap ${response.result.controlPolicy.maxActiveTasks}, ${elapsedMs} ms`,
         tone: response.result.anomalyMarkers.length === 0 ? 'ok' : 'warn'
       });
       setWorkspaceTab('statistics');
@@ -4442,7 +6723,7 @@ export function App() {
     }
   }
 
-  async function recordPhysicalRun(durationSec: number): Promise<void> {
+  async function recordPhysicalRun(durationSec: number, sampleIntervalSec = RECORDING_SAMPLE_INTERVAL_SEC): Promise<void> {
     const token = recordingPollTokenRef.current + 1;
     recordingPollTokenRef.current = token;
     const startedAt = performance.now();
@@ -4454,7 +6735,7 @@ export function App() {
         method: 'POST',
         body: JSON.stringify({
           durationSec,
-          sampleIntervalSec: RECORDING_SAMPLE_INTERVAL_SEC,
+          sampleIntervalSec,
           resetFirst: true
         })
       });
@@ -4485,9 +6766,10 @@ export function App() {
       setReplay({ active: true, playing: false, cursorSec: 0, speed: 4 });
       const elapsedMs = Math.round(performance.now() - startedAt);
       setCommandStatus({
-        label: `recorded ${formatClock(recordingResponse.recording.durationSec)} in ${elapsedMs} ms · ${formatNumber(recordingResponse.recording.summary.totalPph, 1)} PPH`,
+        label: `recorded ${formatClock(recordingResponse.recording.durationSec)} @ ${formatClock(recordingResponse.recording.sampleIntervalSec)} samples in ${elapsedMs} ms · ${formatNumber(recordingResponse.recording.summary.totalPph, 1)} PPH`,
         tone: recordingResponse.recording.anomalyMarkers.length === 0 ? 'ok' : 'warn'
       });
+      setWorkspaceTab('statistics');
     } catch (error) {
       setCommandStatus({ label: error instanceof Error ? error.message : String(error), tone: 'error' });
       setPhysicalRecordingJob((current) => current ? { ...current, status: 'failed', error: error instanceof Error ? error.message : String(error) } : current);
@@ -4495,11 +6777,11 @@ export function App() {
   }
 
   async function recordPhysicalThreeHours(): Promise<void> {
-    await recordPhysicalRun(THREE_HOURS_SEC);
+    await recordPhysicalRun(THREE_HOURS_SEC, RECORDING_SAMPLE_INTERVAL_SEC);
   }
 
   async function recordPhysicalTwelveHours(): Promise<void> {
-    await recordPhysicalRun(TWELVE_HOURS_SEC);
+    await recordPhysicalRun(TWELVE_HOURS_SEC, LONG_RECORDING_SAMPLE_INTERVAL_SEC);
   }
 
   function toggleReplay(): void {
@@ -4702,7 +6984,7 @@ export function App() {
       stopReplay();
       return;
     }
-    void postCommand('/api/shuttle/reset', { seed: state?.seed });
+    void resetSimulation();
   };
   const handleScrubCommit = (targetSec: number) => {
     if (replay.active && physicalRecording) {
@@ -4784,6 +7066,8 @@ export function App() {
                 <span><strong>{setupSummary?.shuttleCount ?? '--'}</strong> shuttles</span>
                 <span><strong>{setupSummary?.inboundLiftCount ?? '--'}/{setupSummary?.outboundLiftCount ?? '--'}</strong> in/out</span>
                 <span><strong>{setupSummary?.initialOutboundFullColumns ?? '--'}</strong> out cols</span>
+                <span><strong>{setupSummary?.initialStorageFillPolicy ?? '--'}</strong> fill</span>
+                <span><strong>{setupSummary?.storageSelectionPolicy ?? '--'}</strong> select</span>
               </div>
             </div>
 
@@ -4843,6 +7127,37 @@ export function App() {
           </nav>
 
           <div className="workspace-body">
+            {workspaceTab === 'review' && (
+              <section className="tab-panel review-cockpit-panel" aria-label="Customer review live cockpit">
+                <div className="review-cockpit-stage">
+                  <StreamingPane
+                    scenario={activeScenario}
+                    state={sceneState}
+                    layers={sceneLayers}
+                    selectedVehicleId={selectedVehicleId}
+                    viewMode={mapViewMode}
+                    cameraView={sceneCameraView}
+                    playbackSpeed={playbackSpeed}
+                    rendererInfo={rendererInfo}
+                    onCameraViewChange={(view) => setSceneCameraView(clampSceneCameraView(view))}
+                    onToggleLayer={toggleSceneLayer}
+                    onSelectVehicle={setSelectedVehicleId}
+                    onViewModeChange={setMapViewMode}
+                    onRendererInfo={setRendererInfo}
+                  />
+                </div>
+                <aside className="review-cockpit-side" aria-label="Live review metrics and avoidance evidence">
+                  <KpiStrip scenario={activeScenario} kpis={kpis} />
+                  <LiveTrendDiagnosisPanel history={statisticsHistory} />
+                  <ReviewTrafficReadoutPanel state={sceneState} />
+                  <ReviewDesEvidencePanel scenario={activeScenario} result={desResult} onOpenStatistics={() => setWorkspaceTab('statistics')} />
+                  <LiveHourlyPphPanel history={statisticsHistory} />
+                  <PphTrendChart history={statisticsHistory} />
+                  <WaitingTrendChart history={statisticsHistory} />
+                </aside>
+              </section>
+            )}
+
             {workspaceTab === 'view' && (
               <section className="tab-panel view-panel" aria-label="2D and 3D simulation view">
                 <StreamingPane
@@ -4866,11 +7181,22 @@ export function App() {
             {workspaceTab === 'statistics' && (
               <section className="tab-panel statistics-panel" aria-label="Simulation statistics">
                 <KpiStrip scenario={activeScenario} kpis={kpis} />
+                <LiveTrendDiagnosisPanel history={statisticsHistory} />
+                <DesAnswerFirstPanel result={desResult} />
                 <DesSummaryPanel result={desResult} />
-                <PphTrendChart history={pphHistory} />
-                <LiftPphPanel state={sceneState} kpis={kpis} history={pphHistory} />
+                <DesPeriodPphPanel result={desResult} />
+                <LiveHourlyPphPanel history={statisticsHistory} />
+                <DesDataIntegrityPanel result={desResult} />
+                <DesReviewReadinessPanel result={desResult} />
+                <DesIeFindingsPanel result={desResult} />
+                <DesDispatchAvoidanceAuditPanel scenario={activeScenario} result={desResult} />
+                <DesReservationReplayPanel scenario={activeScenario} result={desResult} />
+                <PphTrendChart history={statisticsHistory} />
+                <WaitingTrendChart history={statisticsHistory} />
+                <LiftPphPanel state={sceneState} kpis={kpis} history={statisticsHistory} />
                 <CapacityTheoryPanel kpis={kpis} />
                 <ResourceUtilizationPanel scenario={activeScenario} state={sceneState} />
+                <RouteEfficiencyPanel scenario={activeScenario} state={sceneState} />
                 <VehicleTimeStackedBarChart vehicles={vehicles} kpis={kpis} />
               </section>
             )}

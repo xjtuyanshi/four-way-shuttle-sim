@@ -1,0 +1,155 @@
+{
+  "schemaVersion": "shuttle.customerSiteCalibration.v1",
+  "status": "template",
+  "site": {
+    "customerName": null,
+    "facilityName": null,
+    "timezone": null,
+    "coordinateSystem": "top-down CAD or site survey coordinates; specify origin and units",
+    "preparedBy": null,
+    "preparedAtIso": null
+  },
+  "demandProfile": {
+    "grain": "hour",
+    "source": "WCS/MES task export",
+    "units": "loads/hour",
+    "rows": [
+      {
+        "startIso": null,
+        "endIso": null,
+        "inboundArrivals": null,
+        "inboundCompleted": null,
+        "outboundRequested": null,
+        "outboundCompleted": null,
+        "notes": null
+      }
+    ]
+  },
+  "liftCycle": {
+    "source": "PLC timestamps or synchronized site video",
+    "units": "seconds",
+    "ports": [
+      {
+        "portId": null,
+        "direction": "inbound or outbound",
+        "sampleCount": null,
+        "pickupLiftP50Sec": null,
+        "pickupLiftP95Sec": null,
+        "dropLowerP50Sec": null,
+        "dropLowerP95Sec": null,
+        "bufferReleaseP50Sec": null,
+        "bufferReleaseP95Sec": null,
+        "notes": null
+      }
+    ]
+  },
+  "shuttleMotion": {
+    "source": "vendor motion spec plus commissioning logs",
+    "units": {
+      "speed": "m/s",
+      "acceleration": "m/s^2",
+      "dwell": "seconds",
+      "tolerance": "mm"
+    },
+    "loadedSpeedMps": null,
+    "emptySpeedMps": null,
+    "accelerationMps2": null,
+    "decelerationMps2": null,
+    "turnDwellSec": null,
+    "reverseDwellSec": null,
+    "positionToleranceMm": null,
+    "notes": null
+  },
+  "layoutDimensions": {
+    "source": "CAD export or dimensioned top-down drawing",
+    "units": "mm unless specified otherwise",
+    "storagePitchX": null,
+    "storagePitchZ": null,
+    "aisleCenterSpacing": null,
+    "liftPorts": [
+      {
+        "portId": null,
+        "x": null,
+        "z": null,
+        "direction": "inbound or outbound",
+        "notes": null
+      }
+    ],
+    "parkingNodes": [
+      {
+        "nodeId": null,
+        "x": null,
+        "z": null,
+        "notes": null
+      }
+    ]
+  },
+  "loadAndClearanceEnvelope": {
+    "source": "vendor drawings and site standard",
+    "units": "mm",
+    "loadFootprintX": null,
+    "loadFootprintZ": null,
+    "loadOverhangX": null,
+    "loadOverhangZ": null,
+    "shuttleFootprintX": null,
+    "shuttleFootprintZ": null,
+    "rollerTransferFootprintX": null,
+    "rollerTransferFootprintZ": null,
+    "requiredClearance": null,
+    "notes": null
+  },
+  "blockedCellsAndNoDriveZones": {
+    "source": "CAD/site survey",
+    "blockedCells": [
+      {
+        "cellId": null,
+        "reason": "structural, maintenance, safety, or customer excluded",
+        "notes": null
+      }
+    ],
+    "noDriveRectangles": [
+      {
+        "zoneId": null,
+        "minX": null,
+        "maxX": null,
+        "minZ": null,
+        "maxZ": null,
+        "reason": null
+      }
+    ]
+  },
+  "controlPolicy": {
+    "source": "WCS/WES rules export or controls interview",
+    "dispatchPriority": null,
+    "storageAssignmentRule": null,
+    "retrievalRule": null,
+    "liftQueueCapacity": null,
+    "sourceBufferCapacity": null,
+    "maxConcurrentReleasedTasks": null,
+    "repositionPolicy": null,
+    "notes": null
+  },
+  "visualValidationSamples": [
+    {
+      "sampleId": null,
+      "videoFileOrUrl": null,
+      "taskId": null,
+      "eventTimestampIso": null,
+      "expectedObservation": "vehicle arrival, lift action, load attach/detach, and departure",
+      "notes": null
+    }
+  ],
+  "acceptanceThresholds": {
+    "source": "customer review requirement or signed performance assumption",
+    "inboundPphTarget": null,
+    "outboundPphTarget": null,
+    "totalPphTarget": null,
+    "maxWaitingSharePct": null,
+    "maxRepositionSharePct": null,
+    "acceptableLiftUtilizationRangePct": {
+      "min": null,
+      "max": null
+    },
+    "notes": null
+  }
+}

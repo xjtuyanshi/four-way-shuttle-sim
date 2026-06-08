@@ -80,7 +80,9 @@ export const TaskGenerationSchema = z.object({
   inboundOutboundMix: z.number().min(0).max(1).default(0.5),
   arrivalDistribution: z.enum(['deterministic', 'seeded-exponential']).default('deterministic'),
   maxTasks: z.number().int().positive().default(200),
-  initialOutboundFullColumns: z.number().int().nonnegative().default(0)
+  initialOutboundFullColumns: z.number().int().nonnegative().default(0),
+  initialStorageFillPolicy: z.enum(['full-columns', 'zone-balanced-50']).default('full-columns'),
+  storageSelectionPolicy: z.enum(['sequential', 'traffic-aware']).default('sequential')
 });
 
 export const PhysicsParamsSchema = z.object({
@@ -419,6 +421,7 @@ export const TaskStateRecordSchema = z.object({
   completedAtSec: z.number().nonnegative().nullable(),
   pickupNodeId: z.string(),
   dropoffNodeId: z.string(),
+  liftPortNodeId: z.string().nullable().optional(),
   loadId: z.string(),
   vehicleId: z.string().nullable(),
   replanCount: z.number().int().nonnegative(),

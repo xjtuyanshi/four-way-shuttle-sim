@@ -8,7 +8,10 @@ const shuttleCount = integerArg('--shuttles', 8);
 const inboundRatePerHour = numberArg('--inbound-pph', 3600);
 const outboundRatePerHour = numberArg('--outbound-pph', 3600);
 const initialOutboundFullColumns = integerArg('--outbound-full-columns', 4);
+const initialStorageFillPolicy = enumArg('--initial-fill-policy', ['full-columns', 'zone-balanced-50'] as const, 'full-columns');
+const storageSelectionPolicy = enumArg('--storage-selection-policy', ['sequential', 'traffic-aware'] as const, 'sequential');
 const sampleIntervalSec = numberArg('--sample-sec', 3600);
+const maxActiveTasks = integerArg('--max-active-tasks', 0);
 const outputPath = stringArg('--out');
 
 const scenario = createInboundOutboundDemoScenario({
@@ -20,7 +23,9 @@ const scenario = createInboundOutboundDemoScenario({
     inboundOutboundMix: inboundRatePerHour + outboundRatePerHour > 0
       ? inboundRatePerHour / (inboundRatePerHour + outboundRatePerHour)
       : 0.5,
-    initialOutboundFullColumns
+    initialOutboundFullColumns,
+    initialStorageFillPolicy,
+    storageSelectionPolicy
   },
   layoutProfile: {
     layoutKind: 'top-lift-column',
@@ -28,7 +33,12 @@ const scenario = createInboundOutboundDemoScenario({
   }
 });
 
-const result = runHeadlessDes({ scenario, durationSec, sampleIntervalSec });
+const result = runHeadlessDes({
+  scenario,
+  durationSec,
+  sampleIntervalSec,
+  maxActiveTasks: maxActiveTasks > 0 ? maxActiveTasks : undefined
+});
 const json = JSON.stringify(result, null, 2);
 if (outputPath) {
   writeFileSync(outputPath, `${json}\n`);
@@ -73,4 +83,9 @@ function integerArg(name: string, fallback: number): number {
 function stringArg(name: string): string | null {
   const value = valueAfter(name);
   return value && value.trim() !== '' ? value : null;
+}
+
+function enumArg<T extends readonly string[]>(name: string, values: T, fallback: T[number]): T[number] {
+  const value = valueAfter(name);
+  return values.includes(value ?? '') ? value as T[number] : fallback;
 }

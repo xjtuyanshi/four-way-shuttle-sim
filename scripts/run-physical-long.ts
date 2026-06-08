@@ -58,6 +58,9 @@ const shuttleCount = integerArg('--shuttles', 8);
 const inboundRatePerHour = numberArg('--inbound-pph', 3600);
 const outboundRatePerHour = numberArg('--outbound-pph', 3600);
 const initialOutboundFullColumns = integerArg('--outbound-full-columns', 4);
+const initialStorageFillPolicy = enumArg('--initial-fill-policy', ['full-columns', 'zone-balanced-50'] as const, 'full-columns');
+const storageSelectionPolicy = enumArg('--storage-selection-policy', ['sequential', 'traffic-aware'] as const, 'sequential');
+const collisionAvoidance = enumArg('--collision-avoidance', ['on', 'off'] as const, 'on');
 const outputPath = resolve(stringArg('--out') ?? `output/shuttle/physical-long-${Date.now()}.json`);
 const tracePath = resolve(stringArg('--trace-out') ?? outputPath.replace(/\.json$/i, '.trace.json'));
 const checkpointDir = resolve(stringArg('--checkpoint-dir') ?? outputPath.replace(/\.json$/i, '-checkpoints'));
@@ -80,11 +83,16 @@ const scenario = createInboundOutboundDemoScenario({
     inboundOutboundMix: inboundRatePerHour + outboundRatePerHour > 0
       ? inboundRatePerHour / (inboundRatePerHour + outboundRatePerHour)
       : 0.5,
-    initialOutboundFullColumns
+    initialOutboundFullColumns,
+    initialStorageFillPolicy,
+    storageSelectionPolicy
   },
   layoutProfile: {
     layoutKind: 'top-lift-column',
     liftPairCount: regionCount
+  },
+  trafficPolicy: {
+    collisionAvoidanceEnabled: collisionAvoidance === 'on'
   }
 });
 
@@ -121,6 +129,9 @@ console.log(JSON.stringify({
   shuttleCount,
   inboundRatePerHour,
   outboundRatePerHour,
+  initialStorageFillPolicy,
+  storageSelectionPolicy,
+  collisionAvoidance,
   outputPath,
   tracePath
 }));
@@ -170,6 +181,11 @@ const result = {
   avoidanceEnabled: finalState.traffic.collisionAvoidanceEnabled,
   controllerMode: scenario.trafficPolicy.controllerMode,
   layoutCalibrationProfile: scenario.layout.calibrationProfile?.id ?? null,
+  assumptions: {
+    initialStorageFillPolicy,
+    storageSelectionPolicy,
+    collisionAvoidance
+  },
   pph: {
     inbound: finalState.kpis.inboundPph,
     outbound: finalState.kpis.outboundPph,
@@ -541,4 +557,9 @@ function integerArg(name: string, fallback: number): number {
 function stringArg(name: string): string | null {
   const value = valueAfter(name);
   return value && value.trim() !== '' ? value : null;
+}
+
+function enumArg<T extends readonly string[]>(name: string, values: T, fallback: T[number]): T[number] {
+  const value = valueAfter(name);
+  return values.includes(value ?? '') ? value as T[number] : fallback;
 }

@@ -1,9 +1,17 @@
 import type { KpiSnapshot, ShuttleSimState, VehicleState } from '@four-way-shuttle/schemas';
+import type { HeadlessDesResult } from '@four-way-shuttle/sim-core';
 import { createDefaultShuttleScenario, createInboundMvpBaselineScenario, summarizeScenarioStaticSceneContract } from '@four-way-shuttle/sim-core';
 import { describe, expect, it } from 'vitest';
 
 import goldenStaticSceneContract from '../../../config/shuttle/static-scene-contract.golden.json';
 import {
+  appendPphHistorySample,
+  buildLiveHourlyRows,
+  buildLiveTrendDiagnosis,
+  buildDesDispatchAuditRows,
+  buildReviewDesEvidence,
+  buildReviewTrafficReadouts,
+  liveTrendMarkers,
   mergeKpiUpdate,
   mergeVehicleStateUpdate,
   inferTopLiftRegionCount,
@@ -133,6 +141,105 @@ function state(overrides: Partial<ShuttleSimState> = {}): ShuttleSimState {
   };
 }
 
+function headlessDesForAudit(options: {
+  routeNodeIds: string[];
+  trafficWaitSec: number;
+  trafficResourceId?: string;
+}): HeadlessDesResult {
+  const trafficPhase = options.trafficWaitSec > 0
+    ? [{
+      kind: 'traffic-wait' as const,
+      startSec: 1,
+      endSec: 1 + options.trafficWaitSec,
+      resourceId: options.trafficResourceId
+    }]
+    : [];
+
+  return {
+    schemaVersion: 'shuttle.headlessDes.v1',
+    scenarioId: 'audit-test',
+    durationSec: 3600,
+    finalSimTimeSec: 3600,
+    wallClockMs: 1,
+    processedEvents: 1,
+    generatedInbound: 1,
+    generatedOutbound: 0,
+    acceptedInbound: 1,
+    acceptedOutbound: 0,
+    skippedInbound: 0,
+    skippedOutbound: 0,
+    completedInbound: 1,
+    completedOutbound: 0,
+    inboundPph: 1,
+    outboundPph: 0,
+    totalPph: 1,
+    queuedTasks: 0,
+    activeTasks: 0,
+    pendingInboundDemand: 0,
+    pendingOutboundDemand: 0,
+    storedLoads: 1,
+    storageCapacity: 1,
+    storageUtilization: 1,
+    averageShuttleUtilization: 0,
+    averageWaitingPct: 0,
+    averageRepositionPct: 0,
+    maxContinuousWaitingSec: options.trafficWaitSec,
+    maxQueuedTaskAgeSec: 0,
+    sustainedCongestionWindows: 0,
+    controlPolicy: { maxActiveTasks: 6, backpressureHoldCount: 0 },
+    repositionBreakdown: {},
+    waitReasonBreakdown: {},
+    trafficBottlenecks: [],
+    routeModel: {
+      kind: 'yellow-graph-reservation-window',
+      drivableNodeCount: 2,
+      drivableEdgeCount: 1,
+      mappedServiceNodeCount: 2,
+      routeUnavailableCount: 0,
+      reservationResourceCount: 1,
+      reservationWindowCount: 1,
+      trafficWaitSec: options.trafficWaitSec
+    },
+    shuttleUtilization: {},
+    liftPph: {},
+    bottlenecks: {},
+    issues: [],
+    anomalyMarkers: [],
+    reservationReplay: {
+      taskTraceLimit: 1,
+      tracedTaskCount: 1,
+      omittedTaskCount: 0,
+      tasks: [{
+        taskId: 'T-1',
+        shuttleId: 'SH-01',
+        kind: 'inbound',
+        regionIndex: 0,
+        createdAtSec: 0,
+        dispatchSec: 0,
+        completeSec: 30,
+        pickupNodeId: options.routeNodeIds[0] ?? 'a',
+        dropoffNodeId: options.routeNodeIds.at(-1) ?? 'b',
+        storageNodeId: options.routeNodeIds.at(-1) ?? 'b',
+        liftNodeId: options.routeNodeIds[0] ?? 'a',
+        emptyRouteNodeIds: options.routeNodeIds,
+        loadedRouteNodeIds: options.routeNodeIds,
+        emptyTravelSec: 5,
+        loadedTravelSec: 6,
+        liftWaitSec: 0,
+        trafficWaitSec: options.trafficWaitSec,
+        handlingSec: 10,
+        phases: [
+          { kind: 'empty-travel', startSec: 0, endSec: 1 },
+          ...trafficPhase,
+          { kind: 'loaded-travel', startSec: 10, endSec: 20 }
+        ]
+      }],
+      topWaitIntervals: []
+    },
+    samples: []
+  };
+}
+
 describe('dashboard stream reducers', () => {
   it('merges incremental vehicleState messages into the current state snapshot', () => {
     const previous = state();
@@ -154,6 +261,370 @@ describe('dashboard stream reducers', () => {
     expect(next?.simTimeSec).toBe(22);
     expect(next?.kpis.totalPph).toBe(120);
     expect(next?.kpis.reservationConflictCount).toBe(4);
+  });
+});
+
+describe('dashboard live trend markers', () => {
+  it('builds hourly live PPH buckets from cumulative completed counts', () => {
+    const rows = buildLiveHourlyRows([
+      {
+        simTimeSec: 0,
+        completedInbound: 0,
+        completedOutbound: 0,
+        inboundPph: 0,
+        outboundPph: 0,
+        totalPph: 0,
+        waitingPct: 0,
+        repositionPct: 0,
+        liftPph: {}
+      },
+      {
+        simTimeSec: 3600,
+        completedInbound: 110,
+        completedOutbound: 140,
+        inboundPph: 110,
+        outboundPph: 140,
+        totalPph: 250,
+        waitingPct: 0,
+        repositionPct: 0,
+        liftPph: {}
+      },
+      {
+        simTimeSec: 7200,
+        completedInbound: 250,
+        completedOutbound: 245,
+        inboundPph: 140,
+        outboundPph: 105,
+        totalPph: 245,
+        waitingPct: 0,
+        repositionPct: 0,
+        liftPph: {}
+      }
+    ]);
+
+    expect(rows.map((row) => row.label)).toEqual(['H01', 'H02']);
+    expect(rows[0]).toMatchObject({ inboundDelta: 110, outboundDelta: 140, inboundPph: 110, outboundPph: 140, totalPph: 250 });
+    expect(rows[1]).toMatchObject({ inboundDelta: 140, outboundDelta: 105, inboundPph: 140, outboundPph: 105, totalPph: 245 });
+  });
+
+  it('drops stale trend history when the live clock moves backward after reset', () => {
+    const next = appendPphHistorySample([
+      {
+        simTimeSec: 120,
+        inboundPph: 90,
+        outboundPph: 70,
+        totalPph: 160,
+        waitingPct: 11,
+        repositionPct: 5,
+        liftPph: {}
+      },
+      {
+        simTimeSec: 180,
+        inboundPph: 115,
+        outboundPph: 100,
+        totalPph: 215,
+        waitingPct: 8,
+        repositionPct: 9,
+        liftPph: {}
+      }
+    ], {
+      simTimeSec: 0,
+      inboundPph: 0,
+      outboundPph: 0,
+      totalPph: 0,
+      waitingPct: 0,
+      repositionPct: 0,
+      liftPph: {}
+    });
+
+    expect(next).toEqual([{
+      simTimeSec: 0,
+      inboundPph: 0,
+      outboundPph: 0,
+      totalPph: 0,
+      waitingPct: 0,
+      repositionPct: 0,
+      liftPph: {}
+    }]);
+  });
+
+  it('computes low, high, and peak markers from the live KPI history', () => {
+    const markers = liveTrendMarkers([
+      {
+        simTimeSec: 60,
+        inboundPph: 100,
+        outboundPph: 80,
+        totalPph: 180,
+        waitingPct: 4,
+        repositionPct: 7,
+        liftPph: {}
+      },
+      {
+        simTimeSec: 120,
+        inboundPph: 90,
+        outboundPph: 70,
+        totalPph: 160,
+        waitingPct: 11,
+        repositionPct: 5,
+        liftPph: {}
+      },
+      {
+        simTimeSec: 180,
+        inboundPph: 115,
+        outboundPph: 100,
+        totalPph: 215,
+        waitingPct: 8,
+        repositionPct: 9,
+        liftPph: {}
+      }
+    ]);
+
+    expect(markers.total?.min).toBe(160);
+    expect(markers.total?.minSimTimeSec).toBe(120);
+    expect(markers.total?.max).toBe(215);
+    expect(markers.total?.maxSimTimeSec).toBe(180);
+    expect(markers.waiting?.max).toBe(11);
+    expect(markers.waiting?.maxSimTimeSec).toBe(120);
+    expect(markers.reposition?.min).toBe(5);
+    expect(markers.reposition?.minSimTimeSec).toBe(120);
+  });
+
+  it('ignores startup zero samples once productive live trend samples exist', () => {
+    const markers = liveTrendMarkers([
+      {
+        simTimeSec: 0,
+        inboundPph: 0,
+        outboundPph: 0,
+        totalPph: 0,
+        waitingPct: 0,
+        repositionPct: 0,
+        liftPph: {}
+      },
+      {
+        simTimeSec: 60,
+        inboundPph: 70,
+        outboundPph: 50,
+        totalPph: 120,
+        waitingPct: 5,
+        repositionPct: 6,
+        liftPph: {}
+      },
+      {
+        simTimeSec: 120,
+        inboundPph: 100,
+        outboundPph: 90,
+        totalPph: 190,
+        waitingPct: 7,
+        repositionPct: 8,
+        liftPph: {}
+      }
+    ]);
+
+    const diagnosis = buildLiveTrendDiagnosis([
+      {
+        simTimeSec: 0,
+        inboundPph: 0,
+        outboundPph: 0,
+        totalPph: 0,
+        waitingPct: 0,
+        repositionPct: 0,
+        liftPph: {}
+      },
+      {
+        simTimeSec: 60,
+        inboundPph: 70,
+        outboundPph: 50,
+        totalPph: 120,
+        waitingPct: 5,
+        repositionPct: 6,
+        liftPph: {}
+      }
+    ]);
+
+    expect(markers.total?.min).toBe(120);
+    expect(markers.total?.minSimTimeSec).toBe(60);
+    expect(diagnosis.find((item) => item.id === 'window-throughput')?.evidence).toContain('1/2 productive samples');
+  });
+
+  it('turns live trend history into engineering diagnosis cards', () => {
+    const diagnosis = buildLiveTrendDiagnosis([
+      {
+        simTimeSec: 60,
+        inboundPph: 120,
+        outboundPph: 115,
+        totalPph: 235,
+        waitingPct: 7,
+        repositionPct: 8,
+        liftPph: {}
+      },
+      {
+        simTimeSec: 120,
+        inboundPph: 130,
+        outboundPph: 90,
+        totalPph: 220,
+        waitingPct: 12,
+        repositionPct: 16,
+        liftPph: {}
+      },
+      {
+        simTimeSec: 180,
+        inboundPph: 110,
+        outboundPph: 85,
+        totalPph: 195,
+        waitingPct: 11,
+        repositionPct: 14,
+        liftPph: {}
+      },
+      {
+        simTimeSec: 240,
+        inboundPph: 105,
+        outboundPph: 70,
+        totalPph: 175,
+        waitingPct: 16,
+        repositionPct: 18,
+        liftPph: {}
+      }
+    ]);
+
+    expect(diagnosis.map((item) => item.id)).toEqual([
+      'window-throughput',
+      'flow-balance',
+      'waiting-share',
+      'reposition-share'
+    ]);
+    expect(diagnosis.find((item) => item.id === 'window-throughput')?.status).toBe('critical');
+    expect(diagnosis.find((item) => item.id === 'waiting-share')?.status).toBe('critical');
+    expect(diagnosis.find((item) => item.id === 'reposition-share')?.detail).toContain('critical >=15%');
+  });
+});
+
+describe('dashboard review cockpit traffic readouts', () => {
+  it('summarizes live reservation holds, safety, and lift pressure', () => {
+    const readouts = buildReviewTrafficReadouts(state({
+      simTimeSec: 120,
+      traffic: {
+        trafficMode: 'agent-refresh',
+        safetyValidated: true,
+        collisionAvoidanceEnabled: true,
+        longHorizonReservationEnabled: true,
+        clearThroughLookaheadEnabled: true,
+        clearThroughMaxLookaheadLegs: 8,
+        activeFutureGrantCount: 3,
+        legacyZoneHoldEnabled: false,
+        activeReservationCount: 12,
+        waitingVehicles: [{
+          vehicleId: 'SH-01',
+          currentNodeId: 'a',
+          targetNodeId: 'b',
+          waitReason: 'edge-reservation',
+          blockedTimeSec: 22,
+          waitingSinceSec: 98,
+          blockingReservationId: 'R-1',
+          blockingVehicleId: 'SH-02'
+        }],
+        conflictSessions: [],
+        liftPorts: [{
+          nodeId: 'out-lift-1',
+          kind: 'outbound',
+          queueLength: 2,
+          waitingTaskIds: ['T-1', 'T-2'],
+          activeTaskId: 'T-0',
+          approachOccupancy: 2,
+          approachCapacity: 2,
+          sourceBufferOccupancy: 0,
+          sourceBufferCapacity: 1,
+          completedTasks: 3,
+          pph: 100,
+          utilization: 0.9
+        }],
+        deadlockCandidateVehicleIds: [],
+        minVehicleSeparationM: 0.72,
+        maxObservedSpeedMps: 1.2,
+        physicalViolationCount: 0
+      }
+    }));
+
+    expect(readouts.map((item) => item.id)).toEqual([
+      'reservation-control',
+      'traffic-holds',
+      'physical-safety',
+      'lift-port-pressure'
+    ]);
+    expect(readouts.find((item) => item.id === 'reservation-control')?.status).toBe('pass');
+    expect(readouts.find((item) => item.id === 'traffic-holds')?.status).toBe('watch');
+    expect(readouts.find((item) => item.id === 'lift-port-pressure')?.status).toBe('watch');
+    expect(readouts.find((item) => item.id === 'physical-safety')?.value).toBe('0');
+  });
+});
+
+describe('dashboard review cockpit DES evidence', () => {
+  it('summarizes task-level DES route and wait evidence', () => {
+    const scenario = createDefaultShuttleScenario();
+    const edge = scenario.layout.edges[0]!;
+    const result = headlessDesForAudit({
+      routeNodeIds: [edge.from, edge.to],
+      trafficWaitSec: 45,
+      trafficResourceId: `edge:${edge.id}`
+    });
+    result.trafficBottlenecks = [{
+      resourceId: `edge:${edge.id}`,
+      waitSec: 120,
+      waitCount: 4
+    }];
+    result.routeModel.reservationWindowCount = 12;
+    result.routeModel.trafficWaitSec = 45;
+    result.reservationReplay.tracedTaskCount = 1;
+    result.reservationReplay.topWaitIntervals = [{
+      taskId: 'T-1',
+      shuttleId: 'SH-01',
+      startSec: 1,
+      endSec: 46,
+      waitSec: 45,
+      reason: 'traffic-reservation-wait',
+      resourceId: `edge:${edge.id}`
+    }];
+
+    const evidence = buildReviewDesEvidence(scenario, result);
+
+    expect(evidence?.routeStatus).toBe('watch');
+    expect(evidence?.routeMisses).toBe(0);
+    expect(evidence?.reservationWindows).toBe(12);
+    expect(evidence?.routeWatch).toBe(1);
+    expect(evidence?.topBottleneck).toContain('0.03h / 4');
+    expect(evidence?.topWaitTask).toContain('45s');
+  });
+});
+
+describe('dashboard DES dispatch audit', () => {
+  it('marks traced DES routes as yellow-grid pass when nodes and adjacent edges are present', () => {
+    const scenario = createDefaultShuttleScenario();
+    const edge = scenario.layout.edges[0]!;
+    const result = headlessDesForAudit({
+      routeNodeIds: [edge.from, edge.to],
+      trafficWaitSec: 8,
+      trafficResourceId: `edge:${edge.id}`
+    });
+
+    const rows = buildDesDispatchAuditRows(scenario, result);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.routeStatus).toBe('pass');
+    expect(rows[0]?.primaryWaitResource).toContain('edge ');
+    expect(rows[0]?.avoidanceEvidence).toContain('8s traffic');
+  });
+
+  it('fails traced DES routes that leave the known yellow-grid graph', () => {
+    const scenario = createDefaultShuttleScenario();
+    const edge = scenario.layout.edges[0]!;
+    const result = headlessDesForAudit({
+      routeNodeIds: [edge.from, 'not-a-yellow-node', edge.to],
+      trafficWaitSec: 0
+    });
+
+    const rows = buildDesDispatchAuditRows(scenario, result);
+
+    expect(rows[0]?.routeStatus).toBe('fail');
+    expect(rows[0]?.routeEvidence).toContain('off-grid nodes');
   });
 });
 

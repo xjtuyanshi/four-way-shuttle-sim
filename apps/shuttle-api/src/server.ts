@@ -88,6 +88,8 @@ type ScenarioSetup = {
   inboundLiftCount: number;
   outboundLiftCount: number;
   initialOutboundFullColumns: number;
+  initialStorageFillPolicy: ReturnType<ShuttleSimCore['getScenario']>['taskGeneration']['initialStorageFillPolicy'];
+  storageSelectionPolicy: ReturnType<ShuttleSimCore['getScenario']>['taskGeneration']['storageSelectionPolicy'];
   maxInitialOutboundFullColumns: number;
 };
 
@@ -284,11 +286,19 @@ function setupFromScenario(scenario: ReturnType<ShuttleSimCore['getScenario']>):
     inboundLiftCount,
     outboundLiftCount,
     initialOutboundFullColumns: scenario.taskGeneration.initialOutboundFullColumns,
+    initialStorageFillPolicy: scenario.taskGeneration.initialStorageFillPolicy,
+    storageSelectionPolicy: scenario.taskGeneration.storageSelectionPolicy,
     maxInitialOutboundFullColumns: storageColumns
   };
 }
 
-function createInboundSetupScenario(regionCount: number, shuttleCount: number, initialOutboundFullColumns: number): ReturnType<ShuttleSimCore['getScenario']> {
+function createInboundSetupScenario(
+  regionCount: number,
+  shuttleCount: number,
+  initialOutboundFullColumns: number,
+  initialStorageFillPolicy: ReturnType<ShuttleSimCore['getScenario']>['taskGeneration']['initialStorageFillPolicy'],
+  storageSelectionPolicy: ReturnType<ShuttleSimCore['getScenario']>['taskGeneration']['storageSelectionPolicy']
+): ReturnType<ShuttleSimCore['getScenario']> {
   const current = sim.getScenario();
   return createInboundOutboundDemoScenario({
     seed: current.seed,
@@ -300,7 +310,9 @@ function createInboundSetupScenario(regionCount: number, shuttleCount: number, i
     },
     taskGeneration: {
       ...current.taskGeneration,
-      initialOutboundFullColumns
+      initialOutboundFullColumns,
+      initialStorageFillPolicy,
+      storageSelectionPolicy
     },
     physicsParams: current.physicsParams,
     routingPolicy: current.routingPolicy,
@@ -839,17 +851,34 @@ app.post('/api/shuttle/runHeadlessDes', (request: Request, response: Response, n
     const sampleIntervalSec = parseFiniteNonNegativeNumber(request.body?.sampleIntervalSec);
     const maxQueuedTasks = parseFiniteNonNegativeNumber(request.body?.maxQueuedTasks);
     const liftBufferCapacity = parseFiniteNonNegativeNumber(request.body?.liftBufferCapacity);
+    const maxActiveTasks = parseFiniteNonNegativeNumber(request.body?.maxActiveTasks);
+    const initialStorageFillPolicy = request.body?.initialStorageFillPolicy === 'zone-balanced-50'
+      ? 'zone-balanced-50'
+      : request.body?.initialStorageFillPolicy === 'full-columns'
+        ? 'full-columns'
+        : sim.getScenario().taskGeneration.initialStorageFillPolicy;
+    const storageSelectionPolicy = request.body?.storageSelectionPolicy === 'traffic-aware'
+      ? 'traffic-aware'
+      : request.body?.storageSelectionPolicy === 'sequential'
+        ? 'sequential'
+        : sim.getScenario().taskGeneration.storageSelectionPolicy;
     const durationSec = requestedDurationSec ?? sim.getScenario().durationSec;
     const scenario = {
       ...sim.getScenario(),
-      durationSec
+      durationSec,
+      taskGeneration: {
+        ...sim.getScenario().taskGeneration,
+        initialStorageFillPolicy,
+        storageSelectionPolicy
+      }
     };
     const result = runHeadlessDes({
       scenario,
       durationSec,
       sampleIntervalSec: sampleIntervalSec ?? undefined,
       maxQueuedTasks: maxQueuedTasks === null ? undefined : Math.max(1, Math.round(maxQueuedTasks)),
-      liftBufferCapacity: liftBufferCapacity === null ? undefined : Math.max(1, Math.round(liftBufferCapacity))
+      liftBufferCapacity: liftBufferCapacity === null ? undefined : Math.max(1, Math.round(liftBufferCapacity)),
+      maxActiveTasks: maxActiveTasks === null ? undefined : Math.max(1, Math.round(maxActiveTasks))
     });
     response.json({ ok: true, result });
   } catch (error) {
@@ -986,14 +1015,24 @@ app.post('/api/shuttle/setup', (request: Request, response: Response, next: Next
       response.status(422).json({ ok: false, error: 'initialOutboundFullColumns must be an integer from 0 to 256.' });
       return;
     }
+    const initialStorageFillPolicy = request.body?.initialStorageFillPolicy === 'zone-balanced-50'
+      ? 'zone-balanced-50'
+      : request.body?.initialStorageFillPolicy === 'full-columns'
+        ? 'full-columns'
+        : currentScenario.taskGeneration.initialStorageFillPolicy;
+    const storageSelectionPolicy = request.body?.storageSelectionPolicy === 'traffic-aware'
+      ? 'traffic-aware'
+      : request.body?.storageSelectionPolicy === 'sequential'
+        ? 'sequential'
+        : currentScenario.taskGeneration.storageSelectionPolicy;
 
     const maxInitialOutboundFullColumns = regionCount * 14;
     const initialOutboundFullColumns = Math.min(maxInitialOutboundFullColumns, requestedInitialOutboundFullColumns);
-    const scenario = createInboundSetupScenario(regionCount, shuttleCount, initialOutboundFullColumns);
+    const scenario = createInboundSetupScenario(regionCount, shuttleCount, initialOutboundFullColumns, initialStorageFillPolicy, storageSelectionPolicy);
     sim.loadScenario(scenario);
     liveTickCreditSec = 0;
     resetTrace('command');
-    recordTraceCommand('loadScenario', scenario, { ok: true, setup: { regionCount, shuttleCount, initialOutboundFullColumns } }, receivedAtSimTimeSec);
+    recordTraceCommand('loadScenario', scenario, { ok: true, setup: { regionCount, shuttleCount, initialOutboundFullColumns, initialStorageFillPolicy, storageSelectionPolicy } }, receivedAtSimTimeSec);
     lastEventSequence = -1;
     const state = sim.getState();
     broadcastState({ full: true });
@@ -1008,10 +1047,11 @@ app.post('/api/shuttle/reset', (request: Request, response: Response, next: Next
     const receivedAtSimTimeSec = sim.getClock().simTimeSec;
     const command = ShuttleCommandSchema.parse({ type: 'reset', seed: request.body?.seed });
     if (command.type !== 'reset') throw new Error('Invalid reset command');
-    sim.reset(command.seed);
+    const currentScenario = sim.getScenario();
+    sim = new ShuttleSimCore(command.seed === undefined ? currentScenario : { ...currentScenario, seed: command.seed });
     liveTickCreditSec = 0;
     resetTrace('command');
-    recordTraceCommand('reset', { seed: command.seed }, { ok: true }, receivedAtSimTimeSec);
+    recordTraceCommand('reset', { seed: command.seed, newInstance: true }, { ok: true }, receivedAtSimTimeSec);
     lastEventSequence = -1;
     commandResponse(response);
   } catch (error) {

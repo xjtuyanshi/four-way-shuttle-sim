@@ -71,6 +71,10 @@ type VehicleObjectUserData = {
   targetPosition: THREE.Vector3;
   targetYaw: number;
   loadedMesh: THREE.Group;
+  actionRing: THREE.Mesh;
+  actionMaterial: THREE.MeshBasicMaterial;
+  actionLabelSprite: THREE.Sprite | null;
+  actionLabelText: string;
   bodyMaterial: THREE.MeshStandardMaterial;
   accentMaterial: THREE.MeshStandardMaterial;
   beaconMaterial: THREE.MeshBasicMaterial;
@@ -91,8 +95,10 @@ const VEHICLE_BASE_Y = 0.08;
 const CAD_CANVAS_WIDTH = 2048;
 const CAD_CANVAS_HEIGHT = 1536;
 const TARGET_RENDER_FPS = 60;
+const MOBILE_RENDER_WIDTH_PX = 640;
+const MOBILE_TARGET_RENDER_FPS = 30;
 const MAX_VISUAL_SNAPSHOTS = 48;
-const VISUAL_INTERPOLATION_DELAY_WALL_SEC = 0.45;
+const VISUAL_INTERPOLATION_DELAY_WALL_SEC = 0.18;
 const CAD_STORAGE_FILL = 'rgba(115, 98, 208, 0.16)';
 const CAD_STORAGE_STROKE = 'rgba(177, 138, 255, 0.66)';
 const CAD_AISLE_FILL = 'rgba(220, 178, 58, 0.14)';
@@ -255,6 +261,19 @@ function detectRendererInfo(renderer: THREE.WebGLRenderer): ShuttleSceneRenderer
   };
 }
 
+function isMobileRenderViewport(): boolean {
+  return window.matchMedia(`(max-width: ${MOBILE_RENDER_WIDTH_PX}px)`).matches;
+}
+
+function targetRenderFps(): number {
+  return isMobileRenderViewport() ? MOBILE_TARGET_RENDER_FPS : TARGET_RENDER_FPS;
+}
+
+function targetPixelRatio(): number {
+  const cap = isMobileRenderViewport() ? 1 : 1.5;
+  return Math.min(window.devicePixelRatio || 1, cap);
+}
+
 function disposeObject(object: THREE.Object3D): void {
   object.traverse((child) => {
     if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
@@ -335,6 +354,14 @@ function texturedMaterial(
 function vehicleDisplayNumber(vehicleId: string): string {
   const ordinal = Number(vehicleId.replace(/\D+/g, ''));
   return Number.isFinite(ordinal) && ordinal > 0 ? String(ordinal) : vehicleId.replace(/^SH-?/i, '');
+}
+
+function vehicleActionLabel(vehicle: VehicleState): string | null {
+  if (vehicle.state !== 'lifting' && vehicle.state !== 'lowering') {
+    return null;
+  }
+  const prefix = vehicle.state === 'lifting' ? 'PICK' : 'DROP';
+  return `${prefix} ${Math.ceil(vehicle.phaseRemainingSec)}s`;
 }
 
 type LayoutBounds = ReturnType<typeof computeBounds>;
@@ -1361,10 +1388,28 @@ function createVehicleObject(scenario: ShuttleScenario): THREE.Group {
   loadedMesh.visible = false;
   group.add(loadedMesh);
 
+  const actionMaterial = new THREE.MeshBasicMaterial({
+    color: FLOW_VISUAL_COLORS.inbound.three,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    side: THREE.DoubleSide
+  });
+  const actionRing = new THREE.Mesh(new THREE.RingGeometry(visualFootprintM * 0.5, visualFootprintM * 0.62, 48), actionMaterial);
+  actionRing.rotation.x = -Math.PI / 2;
+  actionRing.position.y = FLOOR_Y + 0.05;
+  actionRing.visible = false;
+  actionRing.renderOrder = 175;
+  group.add(actionRing);
+
   group.userData = {
     targetPosition: new THREE.Vector3(),
     targetYaw: 0,
     loadedMesh,
+    actionRing,
+    actionMaterial,
+    actionLabelSprite: null,
+    actionLabelText: '',
     bodyMaterial,
     accentMaterial,
     beaconMaterial,
@@ -1430,6 +1475,32 @@ function applyVehicleState(runtime: SceneRuntime, group: THREE.Group, state: Shu
   data.targetYaw = bodyPose.yaw;
   data.loadedMesh.visible = vehicle.loaded;
   setPalletLoadColor(data.loadedMesh, FLOW_VISUAL_COLORS[resolveVehicleLoadFlowRole(state, vehicle)].three);
+  const actionLabel = vehicleActionLabel(vehicle);
+  data.actionRing.visible = Boolean(actionLabel);
+  data.actionMaterial.opacity = actionLabel ? (selected ? 0.64 : 0.38) : 0;
+  data.actionMaterial.color.setHex(vehicle.state === 'lowering' ? FLOW_VISUAL_COLORS.outbound.three : FLOW_VISUAL_COLORS.inbound.three);
+  if (data.actionLabelText !== (actionLabel ?? '')) {
+    if (data.actionLabelSprite) {
+      group.remove(data.actionLabelSprite);
+      disposeObject(data.actionLabelSprite);
+      data.actionLabelSprite = null;
+    }
+    if (actionLabel) {
+      data.actionLabelSprite = createTextBillboard(actionLabel, {
+        background: vehicle.state === 'lowering' ? flowRgba('outbound', 0.94) : flowRgba('inbound', 0.94),
+        foreground: vehicle.state === 'lowering' ? '#15120b' : '#f8fbff',
+        border: vehicle.state === 'lowering' ? 'rgba(255, 238, 180, 0.96)' : 'rgba(192, 226, 255, 0.96)',
+        scale: { x: selected ? 1.05 : 0.92, y: selected ? 0.48 : 0.42 },
+        y: selected ? 1.34 : 1.18
+      });
+      group.add(data.actionLabelSprite);
+    }
+    data.actionLabelText = actionLabel ?? '';
+  }
+  if (data.actionLabelSprite) {
+    data.actionLabelSprite.position.y = selected ? 1.34 : 1.18;
+    data.actionLabelSprite.scale.set(selected ? 1.05 : 0.92, selected ? 0.48 : 0.42, 1);
+  }
   data.safetyRing.visible = layers.physics;
   data.ringMaterial.opacity = selected ? 0.46 : 0.22;
 
@@ -1593,15 +1664,18 @@ function liftGridDockNodeId(
   liftNodeId: string,
   role: LoadFlowRole
 ): string | null {
-  const serviceDockNodeId = `${liftNodeId}-queue-01-service-exit`;
-  if (nodeById.has(serviceDockNodeId)) {
-    return serviceDockNodeId;
+  const liftMatch = /^lift-(\d{2})-(?:inbound|outbound)$/.exec(liftNodeId);
+  const moduleDockNodeId = liftMatch
+    ? `module-${liftMatch[1]}-spine-${role === 'inbound' ? 'top-a' : 'bottom-b'}`
+    : null;
+  if (moduleDockNodeId && nodeById.has(moduleDockNodeId)) {
+    return moduleDockNodeId;
   }
   const entryNode = nodeById.get(`${liftNodeId}-queue-01-entry-access`) ?? nodeById.get(`${liftNodeId}-queue-access`);
   if (!entryNode) {
     return null;
   }
-  const targetLevel = role === 'inbound' ? 'top-b' : 'bottom-a';
+  const targetLevel = role === 'inbound' ? 'top-b' : 'bottom-b';
   let nearest: ShuttleNode | null = null;
   let nearestDistance = Number.POSITIVE_INFINITY;
   for (const node of nodeById.values()) {
@@ -1662,8 +1736,7 @@ function createLiftNoDriveRects(nodes: ShuttleNode[]): LiftNoDriveRect[] {
 }
 
 function isLiftRouteDisplaySnapNode(nodeId: string): boolean {
-  return /^lift-\d{2}-(?:inbound|outbound)-(?:buffer-access|queue-access|queue-\d{2}-(?:access|entry-access))$/.test(nodeId) ||
-    /^parking-lift-\d{2}-(?:inbound|outbound)-queue(?:-\d{2})?$/.test(nodeId);
+  return /^(?:lift|parking-lift)-\d{2}-(?:inbound|outbound)(?:$|-throat|-buffer-access|-buffer-\d{2}|-queue-access|-queue-\d{2}-(?:access|entry-access|service-exit)|-queue(?:-\d{2})?)$/.test(nodeId);
 }
 
 type LiftDisplayRailLevel = 'top-a' | 'top-b' | 'bottom-a' | 'bottom-b';
@@ -2048,7 +2121,7 @@ function updateDynamicScene(
         continue;
       }
       runtime.routeGroup.add(createTaskAssignmentMarker(
-        isLiftWorkcellNode(pickupNode) ? pickupNode : routeDisplayPointForNode(runtime, pickupNode.id, pickupNode),
+        routeDisplayPointForNode(runtime, pickupNode.id, pickupNode),
         vehicleDisplayNumber(vehicle.id),
         task.kind
       ));
@@ -2394,12 +2467,13 @@ export function ShuttleScene3D({
     scene.background = new THREE.Color(0x101922);
     scene.fog = new THREE.Fog(0x101922, 42, 112);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    const mobileRenderMode = isMobileRenderViewport();
+    const renderer = new THREE.WebGLRenderer({ antialias: !mobileRenderMode, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(targetPixelRatio());
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.12;
-    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.enabled = !mobileRenderMode;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     host.appendChild(renderer.domElement);
     onRendererInfoRef.current?.(detectRendererInfo(renderer));
@@ -2420,8 +2494,8 @@ export function ShuttleScene3D({
 
     const key = new THREE.DirectionalLight(0xffffff, 1.85);
     key.position.set(-8, 18, 12);
-    key.castShadow = true;
-    key.shadow.mapSize.set(1024, 1024);
+    key.castShadow = !mobileRenderMode;
+    key.shadow.mapSize.set(mobileRenderMode ? 512 : 1024, mobileRenderMode ? 512 : 1024);
     key.shadow.camera.left = -28;
     key.shadow.camera.right = 28;
     key.shadow.camera.top = 28;
@@ -2437,6 +2511,7 @@ export function ShuttleScene3D({
       const height = Math.max(1, host.clientHeight);
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
+      renderer.setPixelRatio(targetPixelRatio());
       renderer.setSize(width, height, false);
     };
 
@@ -2512,7 +2587,7 @@ export function ShuttleScene3D({
 
     const render = (nowMs: number) => {
       runtime.frameId = window.requestAnimationFrame(render);
-      if (nowMs - runtime.lastFrameMs < 1000 / TARGET_RENDER_FPS) {
+      if (nowMs - runtime.lastFrameMs < 1000 / targetRenderFps()) {
         return;
       }
       const dtSec = Math.min(0.05, Math.max(0.001, (nowMs - runtime.lastFrameMs) / 1000));
@@ -2535,6 +2610,7 @@ export function ShuttleScene3D({
         if (sampledPose) {
           object.position.set(sampledPose.x, 0, sampledPose.z);
           object.rotation.y = sampledPose.yaw;
+          data.loadedMesh.visible = sampledPose.loaded;
         } else {
           object.position.lerp(data.targetPosition, fallbackPositionAlpha);
           object.rotation.y += normalizeAngle(data.targetYaw - object.rotation.y) * fallbackYawAlpha;
