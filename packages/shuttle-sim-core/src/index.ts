@@ -3309,20 +3309,22 @@ export class ShuttleSimCore {
 
     const assignedLoadIds = this.activeInboundSourceLoadIds();
     const sourceCandidates = this.inboundLiftNodes()
+      .filter((liftNode) => this.liftPortPlannedLoad('inbound', liftNode.id) < this.topLiftInboundStagedTaskLimit(liftNode.id))
       .flatMap((liftNode) => {
         return this.inboundLiftWaitingSourceLoads(liftNode.id)
-          .filter((sourceLoad) => sourceLoad.nodeId === this.inboundSourceFrontBufferNodeId(liftNode.id))
           .filter((sourceLoad) => !assignedLoadIds.has(sourceLoad.id))
           .sort((left, right) => this.inboundSourceSlotRank(liftNode.id, right.nodeId) - this.inboundSourceSlotRank(liftNode.id, left.nodeId))
           .map((sourceLoad, sourceIndex) => ({
             liftNodeId: liftNode.id,
             loadId: sourceLoad.id,
             plannedLoad: this.liftPortPlannedLoad('inbound', liftNode.id),
-            sourceIndex
+            sourceIndex,
+            sourceSlotRank: this.inboundSourceSlotRank(liftNode.id, sourceLoad.nodeId)
           }));
       })
       .sort((left, right) =>
         left.plannedLoad - right.plannedLoad ||
+        right.sourceSlotRank - left.sourceSlotRank ||
         left.sourceIndex - right.sourceIndex ||
         left.liftNodeId.localeCompare(right.liftNodeId)
       );
@@ -4699,7 +4701,15 @@ export class ShuttleSimCore {
     if (!this.topLiftColumnLayoutEnabled()) {
       return this.effectiveLiftPortApproachCapacity(kind);
     }
+    if (kind === 'inbound') {
+      return this.topLiftInboundStagedTaskLimit(liftNodeId);
+    }
     return Math.max(1, this.topLiftPortQueueCapacity(liftNodeId) + 1);
+  }
+
+  private topLiftInboundStagedTaskLimit(liftNodeId: string): number {
+    const sourceCapacity = this.inboundSourceBufferCapacity(liftNodeId);
+    return sourceCapacity;
   }
 
   private effectiveLiftPortApproachCapacity(kind: 'inbound' | 'outbound'): number {
@@ -5153,7 +5163,7 @@ export class ShuttleSimCore {
     const occupancy = this.storageNodeLoadOccupancy(true);
     const outboundLockedColumns = this.topLiftOutboundLockedColumns();
     const activeColumn = this.activeTopLiftTaskColumn('inbound');
-    if (activeColumn !== null) {
+    if (activeColumn !== null && !this.physicalTrafficAwareStorageSelectionEnabled()) {
       if (outboundLockedColumns.has(activeColumn)) {
         return null;
       }
@@ -5186,7 +5196,7 @@ export class ShuttleSimCore {
     const occupancy = this.storageNodeLoadOccupancy(true);
     const outboundLockedColumns = this.topLiftOutboundLockedColumns();
     const activeColumn = this.activeTopLiftTaskColumnForLift('inbound', liftNodeId);
-    if (activeColumn !== null) {
+    if (activeColumn !== null && !this.physicalTrafficAwareStorageSelectionEnabled()) {
       if (outboundLockedColumns.has(activeColumn)) {
         return null;
       }
@@ -5236,7 +5246,7 @@ export class ShuttleSimCore {
     } catch {
       routeCost = Infinity;
     }
-    const activeColumnTaskPenalty = this.activeTopLiftTaskCountInColumn(kind, column) * 40;
+    const activeColumnTaskPenalty = this.activeTopLiftTaskCountInColumn(kind, column) * (kind === 'inbound' ? 180 : 40);
     const plannedLiftPenalty = this.liftPortPlannedLoad(kind, liftNodeId) * 12;
     const tasklessVehiclePenalty = this.topLiftTasklessStorageVehicleInColumn(column) ? 80 : 0;
     const currentOccupancyPenalty = this.currentNodeOccupancy.has(storageNodeId) ? 120 : 0;
@@ -5514,7 +5524,12 @@ export class ShuttleSimCore {
         .map((vehicle) => vehicle.id)
     );
 
-    for (const task of this.queuedTasks()) {
+    for (const task of this.queuedTasksForAssignment()) {
+      const assignmentPriority = this.queuedTaskAssignmentPriority(task);
+      if (assignmentPriority > 0) {
+        this.recordQueuedTaskWait(task, assignmentPriority === 1 ? 'inbound-column-predecessor-wait' : 'inbound-lift-fifo-wait', dtSec);
+        continue;
+      }
       if (availableVehicleIds.size === 0) {
         this.recordQueuedTaskWait(task, 'vehicle-unavailable', dtSec);
         continue;
@@ -5540,6 +5555,32 @@ export class ShuttleSimCore {
   private recordQueuedTaskWait(task: TaskStateRecord, reason: string, dtSec: number): void {
     task.waitReason = reason;
     this.blockedTimeByReasonSec.set(reason, round((this.blockedTimeByReasonSec.get(reason) ?? 0) + dtSec));
+  }
+
+  private queuedTasksForAssignment(): TaskStateRecord[] {
+    return this.queuedTasks().sort((left, right) =>
+      this.queuedTaskAssignmentPriority(left) - this.queuedTaskAssignmentPriority(right) ||
+      left.createdAtSec - right.createdAtSec ||
+      left.id.localeCompare(right.id)
+    );
+  }
+
+  private queuedTaskAssignmentPriority(task: TaskStateRecord): number {
+    if (
+      task.kind === 'inbound' &&
+      this.topLiftColumnLayoutEnabled() &&
+      this.inboundTaskHasEarlierPickupTask(task)
+    ) {
+      return 2;
+    }
+    if (
+      task.kind === 'inbound' &&
+      this.topLiftColumnLayoutEnabled() &&
+      this.topLiftInboundColumnPredecessorPending(task)
+    ) {
+      return 1;
+    }
+    return 0;
   }
 
   private canAcceptQueuedTask(vehicle: MutableVehicle): boolean {
@@ -6274,7 +6315,7 @@ export class ShuttleSimCore {
       (candidate.state === 'assigned' || candidate.state === 'in-progress') &&
       this.topLiftStationPairIdForTask(candidate) === pairId
     ).length;
-    return activeCount >= this.topLiftStationPairActiveTaskLimit()
+    return activeCount >= this.topLiftStationPairActiveTaskLimit(task)
       ? `top-lift-station-pair-wip-full:${pairId}`
       : null;
   }
@@ -6284,8 +6325,17 @@ export class ShuttleSimCore {
     return liftNodeId ? /^(lift-\d{2})-(?:inbound|outbound)$/.exec(liftNodeId)?.[1] ?? null : null;
   }
 
-  private topLiftStationPairActiveTaskLimit(): number {
-    return 2;
+  private topLiftStationPairActiveTaskLimit(task: TaskStateRecord): number {
+    if (!this.topLiftColumnLayoutEnabled()) {
+      return 2;
+    }
+    const liftNodeId = this.taskLiftPortNodeId(task);
+    if (liftNodeId) {
+      return Math.max(2, this.topLiftPortStagedTaskCapacity(task.kind, liftNodeId));
+    }
+    return task.kind === 'inbound'
+      ? Math.max(2, this.scenario.trafficPolicy.sourceBufferCapacity)
+      : 2;
   }
 
   private yieldPocketRank(vehicle: MutableVehicle, nodeId: string): number {
@@ -6937,8 +6987,10 @@ export class ShuttleSimCore {
   }
 
   private topLiftSkuColumnActiveTaskLimit(kind: 'inbound' | 'outbound'): number {
-    void kind;
-    return 2;
+    if (kind === 'outbound') {
+      return 2;
+    }
+    return Math.max(2, this.scenario.trafficPolicy.sourceBufferCapacity);
   }
 
   private refreshTopLiftColumnFlowModes(): void {
@@ -7619,6 +7671,9 @@ export class ShuttleSimCore {
       }
       const claimantId = this.nodeClaimedByOtherVehicle(nodeId, vehicle.id);
       if (claimantId) {
+        return false;
+      }
+      if (this.isStorageNode(nodeId) && nodeId !== vehicle.currentNodeId && this.storedLoadIdAtNode(nodeId)) {
         return false;
       }
     }
@@ -10595,9 +10650,42 @@ export class ShuttleSimCore {
       ) {
         return true;
       }
+      if (this.topLiftTasklessNoStopMiddleClearanceMove(vehicle, toNodeId, other)) {
+        return false;
+      }
       return this.agentRefreshHasHigherPriority(other, vehicle);
     });
     return blocker?.id ?? null;
+  }
+
+  private topLiftTasklessNoStopMiddleClearanceMove(
+    vehicle: MutableVehicle,
+    toNodeId: string,
+    opposingVehicle: MutableVehicle
+  ): boolean {
+    if (
+      !this.topLiftColumnLayoutEnabled() ||
+      vehicle.loaded ||
+      vehicle.taskId !== null ||
+      !isTopLiftAisleLevelNodeId(vehicle.currentNodeId, 'middle') ||
+      !isTopLiftAisleLevelNodeId(toNodeId, 'middle') ||
+      this.layoutNode(vehicle.currentNodeId)?.noStop !== true
+    ) {
+      return false;
+    }
+    if (
+      opposingVehicle.currentEdgeId !== null &&
+      opposingVehicle.targetNodeId !== null &&
+      isTopLiftAisleLevelNodeId(opposingVehicle.targetNodeId, 'middle')
+    ) {
+      return false;
+    }
+    if (isTopLiftAisleLevelNodeId(opposingVehicle.currentNodeId, 'middle')) {
+      return false;
+    }
+    return vehicle.waitReason === 'no-stop-continuation-blocked' ||
+      vehicle.localRouteReason === 'temporary-yield' ||
+      vehicle.yieldHoldNodeId !== null;
   }
 
   private topLiftMiddleAisleRequestedClaim(

@@ -67,6 +67,7 @@ const checkpointDir = resolve(stringArg('--checkpoint-dir') ?? outputPath.replac
 const checkpointMode = stringArg('--checkpoint-mode') ?? 'compact';
 const inlineTrace = process.argv.includes('--inline-trace') || checkpointMode === 'full';
 const eventLogRetain = integerArg('--event-log-retain', 5000);
+const eventLogRetainSec = numberArg('--event-log-retain-sec', 300);
 const stopOnCritical = process.argv.includes('--stop-on-critical');
 const maxPhysicalAnomalyEvents = integerArg('--max-physical-anomaly-events', 25);
 
@@ -105,6 +106,7 @@ const traceSnapshots: Array<{ sequence: number; simTimeSec: number; tickIndex: n
 const checkpointRecords: Array<{ sequence: number; reason: string; simTimeSec: number; path: string; mode: string }> = [];
 let nextSampleSec = 0;
 let nextCheckpointSec = 0;
+let nextEventLogRetainSec = eventLogRetainSec;
 let checkpointSequence = 0;
 let lastDeadlocks = 0;
 let lastLivelocks = 0;
@@ -157,6 +159,11 @@ while (sim.getClock().simTimeSec < durationSec - 1e-9 && sim.getClock().status =
     recordCheckpoint('periodic');
     sim.retainRecentEventLog(eventLogRetain);
     nextCheckpointSec += checkpointSec;
+  }
+
+  if (eventLogRetainSec > 0 && state.simTimeSec + 1e-9 >= nextEventLogRetainSec) {
+    sim.retainRecentEventLog(eventLogRetain);
+    nextEventLogRetainSec += eventLogRetainSec;
   }
 
   if (stopOnCritical && anomalies.some((anomaly) => anomaly.severity === 'critical')) {
