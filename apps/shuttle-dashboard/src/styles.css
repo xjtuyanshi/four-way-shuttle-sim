@@ -2037,6 +2037,7 @@ input[type="range"] {
 }
 
 .map-lift-equipment.lift-main.flow-inbound {
+  transform: translate(-105%, 18%);
   border-color: rgba(var(--flow-inbound-rgb), 0.84);
   color: rgb(var(--flow-inbound-rgb));
 }
@@ -2238,11 +2239,14 @@ input[type="range"] {
 
 .map-task-badge.lift-dock-target {
   z-index: 10;
-  transform: translate(8px, -30px);
-  min-width: 28px;
-  height: 18px;
+  transform: translate(-50%, -50%);
+  min-width: 22px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
   border-width: 2px;
-  box-shadow: 0 0 0 2px rgba(6, 10, 14, 0.68), 0 0 18px rgba(130, 199, 255, 0.46);
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px rgba(6, 10, 14, 0.72), 0 0 18px rgba(130, 199, 255, 0.5);
 }
 
 .map-vehicle {

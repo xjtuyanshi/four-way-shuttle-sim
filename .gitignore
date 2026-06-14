@@ -1,5 +1,8 @@
 node_modules
+.pnpm-store
+.codex-screenshots
 apps/shuttle-dashboard/dist
+apps/shuttle-dashboard/dist-static-*
 coverage
 output
 test-results

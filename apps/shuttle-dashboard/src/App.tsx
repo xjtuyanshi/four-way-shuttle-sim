@@ -720,6 +720,7 @@ function physicalRecordingFramePair(
 }
 
 const MAX_VISUAL_INTERPOLATION_STEP_M = 3;
+const MAX_INTERPOLATED_LIVE_PLAYBACK_SPEED = 10;
 const VEHICLE_VISUAL_BODY_SCALE = 0.78;
 
 function vehicleSquareFootprintSideM(scenario: ShuttleScenario | null | undefined): number {
@@ -768,6 +769,10 @@ export function vehicleCanInterpolateVisual(left: VehicleState, right: VehicleSt
     return false;
   }
   return true;
+}
+
+export function shouldInterpolateLiveVehicles(playbackSpeed: number, running: boolean): boolean {
+  return running && playbackSpeed <= MAX_INTERPOLATED_LIVE_PLAYBACK_SPEED;
 }
 
 function physicalRecordingStateAt(
@@ -942,8 +947,15 @@ function routeRenderStartPoint(
 }
 
 function isLiftRouteDisplaySnapNode(nodeId: string): boolean {
-  return /^lift-\d{2}-(?:inbound|outbound)-(?:buffer-access|queue-access|queue-\d{2}-(?:access|entry-access))$/.test(nodeId) ||
-    /^parking-lift-\d{2}-(?:inbound|outbound)-queue(?:-\d{2})?$/.test(nodeId);
+  return false;
+}
+
+function isLiftNoDriveDisplaySnapNode(nodeId: string): boolean {
+  return /^(?:lift|parking-lift)-\d{2}-(?:inbound|outbound)(?:$|-throat|-buffer-access|-buffer-\d{2}|-queue(?:-\d{2})?|-queue-access|-queue-\d{2}-(?:access|entry-access|service-exit))$/.test(nodeId);
+}
+
+function isLiftDisplayProjectedNode(nodeId: string): boolean {
+  return isLiftRouteDisplaySnapNode(nodeId) || isLiftNoDriveDisplaySnapNode(nodeId);
 }
 
 type LiftDisplayRailLevel = 'top-a' | 'top-b' | 'bottom-a' | 'bottom-b';
@@ -968,7 +980,7 @@ function isLiftDisplayRailLevelNode(nodeId: string, level: LiftDisplayRailLevel)
 
 function liftDisplayLevelForRouteNode(nodeIds: string[], index: number): LiftDisplayRailLevel | null {
   const nodeId = nodeIds[index];
-  if (!nodeId || !isLiftRouteDisplaySnapNode(nodeId)) {
+  if (!nodeId || !isLiftDisplayProjectedNode(nodeId)) {
     return null;
   }
 
@@ -978,7 +990,7 @@ function liftDisplayLevelForRouteNode(nodeIds: string[], index: number): LiftDis
     if (railLevel) {
       return railLevel;
     }
-    if (!isLiftRouteDisplaySnapNode(previousNodeId)) {
+    if (!isLiftDisplayProjectedNode(previousNodeId)) {
       break;
     }
   }
@@ -989,7 +1001,7 @@ function liftDisplayLevelForRouteNode(nodeIds: string[], index: number): LiftDis
     if (railLevel) {
       return railLevel;
     }
-    if (!isLiftRouteDisplaySnapNode(nextNodeId)) {
+    if (!isLiftDisplayProjectedNode(nextNodeId)) {
       break;
     }
   }
@@ -1007,6 +1019,10 @@ function routeDisplayPointForNode(
   nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>,
   preferredLevel: LiftDisplayRailLevel | null = null
 ): { x: number; z: number } {
+  const dockPoint = liftNoDriveDisplayDockPoint(nodeId, nodeMap, preferredLevel);
+  if (dockPoint) {
+    return dockPoint;
+  }
   if (!isLiftRouteDisplaySnapNode(nodeId)) {
     return fallback;
   }
@@ -1026,6 +1042,62 @@ function routeDisplayPointForNode(
   return nearest ? { x: nearest.x, z: nearest.z } : fallback;
 }
 
+function preferredOrthogonalAxis(
+  from: { x: number; z: number },
+  to: { x: number; z: number }
+): 'x' | 'z' {
+  return Math.abs(to.x - from.x) >= Math.abs(to.z - from.z) ? 'x' : 'z';
+}
+
+function orthogonalDisplayMidpoint(
+  from: { x: number; z: number },
+  to: { x: number; z: number },
+  preferredAxis: 'x' | 'z'
+): { x: number; z: number } {
+  return preferredAxis === 'x' ? { x: to.x, z: from.z } : { x: from.x, z: to.z };
+}
+
+function orthogonalDisplaySegments(
+  from: { x: number; z: number },
+  to: { x: number; z: number },
+  preferredAxis: 'x' | 'z'
+): Array<{ from: { x: number; z: number }; to: { x: number; z: number } }> {
+  if (isAxisAlignedSegment(from, to)) {
+    return Math.hypot(to.x - from.x, to.z - from.z) > 1e-6 ? [{ from, to }] : [];
+  }
+  const mid = orthogonalDisplayMidpoint(from, to, preferredAxis);
+  return [
+    { from, to: mid },
+    { from: mid, to }
+  ].filter((segment) => Math.hypot(segment.to.x - segment.from.x, segment.to.z - segment.from.z) > 1e-6);
+}
+
+function pointOnOrthogonalDisplayPath(
+  from: { x: number; z: number },
+  to: { x: number; z: number },
+  progress: number,
+  preferredAxis: 'x' | 'z'
+): { x: number; z: number } {
+  const segments = orthogonalDisplaySegments(from, to, preferredAxis);
+  if (segments.length === 0) {
+    return from;
+  }
+  const totalLength = segments.reduce((sum, segment) => sum + Math.hypot(segment.to.x - segment.from.x, segment.to.z - segment.from.z), 0);
+  let remaining = clampNumber(progress, 0, 1) * totalLength;
+  for (const segment of segments) {
+    const length = Math.hypot(segment.to.x - segment.from.x, segment.to.z - segment.from.z);
+    if (remaining <= length || segment === segments[segments.length - 1]) {
+      const ratio = length <= 1e-9 ? 0 : clampNumber(remaining / length, 0, 1);
+      return {
+        x: segment.from.x + (segment.to.x - segment.from.x) * ratio,
+        z: segment.from.z + (segment.to.z - segment.from.z) * ratio
+      };
+    }
+    remaining -= length;
+  }
+  return to;
+}
+
 function routeDisplayPointForVehicle(
   vehicle: VehicleState,
   nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>,
@@ -1039,7 +1111,7 @@ function routeDisplayPointForVehicle(
     vehicle.currentEdgeId &&
     currentNode &&
     targetNode &&
-    (isLiftRouteDisplaySnapNode(currentNode.id) || isLiftRouteDisplaySnapNode(targetNode.id))
+    (isLiftDisplayProjectedNode(currentNode.id) || isLiftDisplayProjectedNode(targetNode.id))
   ) {
     const dx = targetNode.x - currentNode.x;
     const dz = targetNode.z - currentNode.z;
@@ -1047,12 +1119,10 @@ function routeDisplayPointForVehicle(
     const progress = lengthSq <= 1e-9
       ? 0
       : clampNumber(((rawPoint.x - currentNode.x) * dx + (rawPoint.z - currentNode.z) * dz) / lengthSq, 0, 1);
-    const displayFrom = routeDisplayPointForNode(currentNode.id, { x: currentNode.x, z: currentNode.z }, nodeMap, currentPreferredLevel);
-    const displayTo = routeDisplayPointForNode(targetNode.id, { x: targetNode.x, z: targetNode.z }, nodeMap, targetPreferredLevel);
-    return {
-      x: displayFrom.x + (displayTo.x - displayFrom.x) * progress,
-      z: displayFrom.z + (displayTo.z - displayFrom.z) * progress
-    };
+    const edgePreferredLevel = nearestDisplayRailLevelToPoint(nodeMap, rawPoint);
+    const displayFrom = routeDisplayPointForNode(currentNode.id, { x: currentNode.x, z: currentNode.z }, nodeMap, currentPreferredLevel ?? edgePreferredLevel);
+    const displayTo = routeDisplayPointForNode(targetNode.id, { x: targetNode.x, z: targetNode.z }, nodeMap, targetPreferredLevel ?? edgePreferredLevel);
+    return pointOnOrthogonalDisplayPath(displayFrom, displayTo, progress, preferredOrthogonalAxis(currentNode, targetNode));
   }
   return routeDisplayPointForNode(vehicle.currentNodeId, rawPoint, nodeMap, currentPreferredLevel);
 }
@@ -1071,7 +1141,7 @@ function vehicleBodyDisplayPointForVehicleState(
   vehicle: VehicleState,
   nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>
 ): { x: number; z: number } {
-  return routeRenderStartPoint(vehicle, nodeMap);
+  return routeDisplayPointForVehicleState(vehicle, nodeMap);
 }
 
 function routeRenderSegments(
@@ -1087,6 +1157,7 @@ function routeRenderSegments(
   const segments: Array<{ from: { x: number; z: number }; to: { x: number; z: number }; fromNodeId: string; toNodeId: string }> = [];
   let fromNodeId = nodeIds[0]!;
   let graphFromPoint = routeRenderStartPoint(vehicle, nodeMap);
+  let activeDisplayLevel = displayLevels[0] ?? displayLevels[1] ?? nearestDisplayRailLevelToPoint(nodeMap, graphFromPoint);
   let displayFromPoint = routeDisplayPointForVehicle(vehicle, nodeMap, displayLevels[0] ?? null, displayLevels[1] ?? null);
   for (let index = 1; index < nodeIds.length; index += 1) {
     const toNodeId = nodeIds[index]!;
@@ -1096,18 +1167,17 @@ function routeRenderSegments(
       continue;
     }
     const graphToPoint = { x: toNode.x, z: toNode.z };
-    const displayToPoint = routeDisplayPointForNode(toNodeId, graphToPoint, nodeMap, displayLevels[index] ?? null);
-    if (
-      edgeTraversalKeys.has(edgeTraversalKey(fromNodeId, toNodeId)) &&
-      isAxisAlignedSegment(graphFromPoint, graphToPoint) &&
-      isAxisAlignedSegment(displayFromPoint, displayToPoint) &&
-      Math.hypot(displayToPoint.x - displayFromPoint.x, displayToPoint.z - displayFromPoint.z) > 1e-6
-    ) {
-      segments.push({ from: displayFromPoint, to: displayToPoint, fromNodeId, toNodeId });
+    const targetDisplayLevel = displayLevels[index] ?? activeDisplayLevel ?? nearestDisplayRailLevelToPoint(nodeMap, graphFromPoint);
+    const displayToPoint = routeDisplayPointForNode(toNodeId, graphToPoint, nodeMap, targetDisplayLevel);
+    if (edgeTraversalKeys.has(edgeTraversalKey(fromNodeId, toNodeId)) && isAxisAlignedSegment(graphFromPoint, graphToPoint)) {
+      for (const segment of orthogonalDisplaySegments(displayFromPoint, displayToPoint, preferredOrthogonalAxis(graphFromPoint, graphToPoint))) {
+        segments.push({ ...segment, fromNodeId, toNodeId });
+      }
     }
     fromNodeId = toNodeId;
     graphFromPoint = graphToPoint;
     displayFromPoint = displayToPoint;
+    activeDisplayLevel = targetDisplayLevel;
   }
   return segments;
 }
@@ -1761,28 +1831,255 @@ function liftGridDockNodeId(
   liftNodeId: string,
   role: 'inbound' | 'outbound'
 ): string | null {
-  const serviceDockNodeId = `${liftNodeId}-queue-01-service-exit`;
-  if (nodeMap.has(serviceDockNodeId)) {
-    return serviceDockNodeId;
-  }
-  const entryNode = nodeMap.get(`${liftNodeId}-queue-01-entry-access`) ?? nodeMap.get(`${liftNodeId}-queue-access`);
-  if (!entryNode) {
+  const dockAnchor = liftGridDockAnchorNode(nodeMap, liftNodeId, role);
+  if (!dockAnchor) {
     return null;
   }
-  const targetLevel = role === 'inbound' ? 'top-b' : 'bottom-a';
+  const targetLevel = liftDockDisplayRailLevel(role);
   let nearest: ShuttleScenario['layout']['nodes'][number] | null = null;
   let nearestDistance = Number.POSITIVE_INFINITY;
   for (const node of nodeMap.values()) {
     if (!new RegExp(`^column-${targetLevel}-c\\d+$`).test(node.id)) {
       continue;
     }
-    const distance = Math.hypot(node.x - entryNode.x, node.z - entryNode.z);
+    const distance = Math.hypot(node.x - dockAnchor.x, node.z - dockAnchor.z);
     if (distance < nearestDistance) {
       nearest = node;
       nearestDistance = distance;
     }
   }
   return nearest?.id ?? null;
+}
+
+function liftDockMarkerNodeId(
+  nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>,
+  liftNodeId: string,
+  role: 'inbound' | 'outbound'
+): string | null {
+  return liftGridDockNodeId(nodeMap, liftNodeId, role);
+}
+
+function liftGridDockAnchorNode(
+  nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>,
+  liftNodeId: string,
+  role: 'inbound' | 'outbound'
+): ShuttleScenario['layout']['nodes'][number] | null {
+  const candidateIds = role === 'inbound'
+    ? [
+        `${liftNodeId}-queue-access`,
+        `${liftNodeId}-queue-01-service-exit`,
+        `${liftNodeId}-buffer-access`,
+        `${liftNodeId}-queue-01-access`,
+        liftNodeId,
+      ]
+    : [
+        liftNodeId,
+        `${liftNodeId}-queue-01-service-exit`,
+        `${liftNodeId}-buffer-access`,
+        `${liftNodeId}-queue-01-entry-access`,
+        `${liftNodeId}-queue-access`
+      ];
+  for (const candidateId of candidateIds) {
+    const node = nodeMap.get(candidateId);
+    if (node) {
+      return node;
+    }
+  }
+  return null;
+}
+
+function liftDockDisplayRailLevel(role: 'inbound' | 'outbound'): LiftDisplayRailLevel {
+  return role === 'inbound' ? 'top-a' : 'bottom-b';
+}
+
+function liftWorkcellQueueIndex(nodeId: string): number | null {
+  const match = /-queue-(\d{2})(?:-|$)/.exec(nodeId);
+  return match ? Number(match[1]) : null;
+}
+
+function railColumnIndex(nodeId: string): number | null {
+  const match = /^column-(?:top|bottom)-[ab]-c(\d+)$/.exec(nodeId);
+  return match ? Number(match[1]) : null;
+}
+
+function findRailNodeAtColumn(
+  nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>,
+  level: LiftDisplayRailLevel,
+  columnIndex: number
+): ShuttleScenario['layout']['nodes'][number] | null {
+  return nodeMap.get(`column-${level}-c${String(columnIndex).padStart(2, '0')}`) ?? null;
+}
+
+function findRailNodeAtOffset(
+  nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>,
+  level: LiftDisplayRailLevel,
+  anchor: { x: number; z: number },
+  direction: -1 | 1,
+  offset: number
+): ShuttleScenario['layout']['nodes'][number] | null {
+  if (offset <= 0) {
+    return null;
+  }
+  const candidates = [...nodeMap.values()]
+    .filter((node) => new RegExp(`^column-${level}-c\\d+$`).test(node.id))
+    .filter((node) => (node.x - anchor.x) * direction > 1e-6)
+    .sort((left, right) => (left.x - anchor.x) * direction - (right.x - anchor.x) * direction);
+  return candidates[offset - 1] ?? candidates.at(-1) ?? null;
+}
+
+function nearestRailNodeToPoint(
+  nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>,
+  level: LiftDisplayRailLevel,
+  point: { x: number; z: number }
+): ShuttleScenario['layout']['nodes'][number] | null {
+  let nearest: ShuttleScenario['layout']['nodes'][number] | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const node of nodeMap.values()) {
+    if (!isLiftDisplayRailLevelNode(node.id, level)) {
+      continue;
+    }
+    const distance = Math.hypot(node.x - point.x, node.z - point.z);
+    if (distance < nearestDistance) {
+      nearest = node;
+      nearestDistance = distance;
+    }
+  }
+  return nearest;
+}
+
+function nearestDisplayRailLevelToPoint(
+  nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>,
+  point: { x: number; z: number }
+): LiftDisplayRailLevel | null {
+  let nearestLevel: LiftDisplayRailLevel | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const node of nodeMap.values()) {
+    const level = liftDisplayRailLevel(node.id);
+    if (!level) {
+      continue;
+    }
+    const distance = Math.hypot(node.x - point.x, node.z - point.z);
+    if (distance < nearestDistance) {
+      nearestLevel = level;
+      nearestDistance = distance;
+    }
+  }
+  return nearestLevel;
+}
+
+function defaultLiftNoDriveDisplayRailLevelForNode(
+  nodeId: string,
+  nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>,
+  role: 'inbound' | 'outbound'
+): LiftDisplayRailLevel {
+  if (/-queue(?:-\d{2})?(?:$|-access|-entry-access)$/.test(nodeId) || /^parking-lift-\d{2}-(?:inbound|outbound)-queue/.test(nodeId)) {
+    return role === 'inbound' ? 'top-b' : 'bottom-b';
+  }
+  return liftDockDisplayRailLevel(role);
+}
+
+function liftQueueDisplayDirection(
+  nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>,
+  liftNodeId: string
+): -1 | 1 {
+  const serviceNode = nodeMap.get(`${liftNodeId}-queue-01-service-exit`);
+  const entryNode = nodeMap.get(`${liftNodeId}-queue-01-entry-access`) ?? nodeMap.get(`${liftNodeId}-queue-access`);
+  if (serviceNode && entryNode && Math.abs(entryNode.x - serviceNode.x) > 1e-6) {
+    return entryNode.x > serviceNode.x ? 1 : -1;
+  }
+  return 1;
+}
+
+function liftFeasibleGridDockPoint(
+  nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>,
+  liftNodeId: string,
+  role: 'inbound' | 'outbound'
+): { x: number; z: number } | null {
+  const markerNodeId = liftDockMarkerNodeId(nodeMap, liftNodeId, role);
+  const markerNode = markerNodeId ? nodeMap.get(markerNodeId) : null;
+  if (markerNode) {
+    return { x: markerNode.x, z: markerNode.z };
+  }
+  const anchorNode = liftGridDockAnchorNode(nodeMap, liftNodeId, role);
+  if (!anchorNode) {
+    return null;
+  }
+  const nearest = nearestRailNodeToPoint(nodeMap, liftDockDisplayRailLevel(role), anchorNode);
+  return nearest ? { x: nearest.x, z: nearest.z } : { x: anchorNode.x, z: anchorNode.z };
+}
+
+function liftNoDriveDisplayPointForNode(
+  nodeId: string,
+  nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>,
+  liftNodeId: string,
+  role: 'inbound' | 'outbound',
+  preferredLevel: LiftDisplayRailLevel | null = null
+): { x: number; z: number } | null {
+  const displaysAtDock = /^lift-\d{2}-(?:inbound|outbound)(?:$|-throat|-buffer-access|-buffer-\d{2}|-queue-\d{2}-service-exit)$/.test(nodeId);
+  if (displaysAtDock && (preferredLevel === null || preferredLevel === liftDockDisplayRailLevel(role))) {
+    return liftFeasibleGridDockPoint(nodeMap, liftNodeId, role);
+  }
+  const level = preferredLevel ?? defaultLiftNoDriveDisplayRailLevelForNode(nodeId, nodeMap, role);
+  const queuePoint = liftQueueDisplayRailPoint(nodeId, nodeMap, liftNodeId, level, role);
+  if (queuePoint) {
+    return queuePoint;
+  }
+  const node = nodeMap.get(nodeId);
+  const nearest = node ? nearestRailNodeToPoint(nodeMap, level, node) : null;
+  return nearest ? { x: nearest.x, z: nearest.z } : liftFeasibleGridDockPoint(nodeMap, liftNodeId, role);
+}
+
+function liftQueueDisplayRailPoint(
+  nodeId: string,
+  nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>,
+  liftNodeId: string,
+  level: LiftDisplayRailLevel,
+  role: 'inbound' | 'outbound'
+): { x: number; z: number } | null {
+  const dockNodeId = liftGridDockNodeId(nodeMap, liftNodeId, role);
+  const dockNode = dockNodeId ? nodeMap.get(dockNodeId) : null;
+  if (!dockNode) {
+    return null;
+  }
+  const queueAccess = new RegExp(`^${liftNodeId}-queue(?:-(\\d{2}))?-access$`).exec(nodeId);
+  const queueEntry = new RegExp(`^${liftNodeId}-queue-(\\d{2})-entry-access$`).exec(nodeId);
+  const queueParking = new RegExp(`^parking-${liftNodeId}-queue(?:-(\\d{2}))?$`).exec(nodeId);
+  let offset: number | null = null;
+  if (queueEntry) {
+    offset = Number(queueEntry[1]);
+  } else if (queueAccess) {
+    offset = Math.max(1, queueAccess[1] ? Number(queueAccess[1]) : 0);
+  } else if (queueParking) {
+    offset = (queueParking[1] ? Number(queueParking[1]) : 1) + 1;
+  }
+  if (offset === null) {
+    return null;
+  }
+  const node = findRailNodeAtOffset(nodeMap, level, dockNode, liftQueueDisplayDirection(nodeMap, liftNodeId), offset);
+  return node ? { x: node.x, z: node.z } : null;
+}
+
+function liftNoDriveDisplayDockPoint(
+  nodeId: string,
+  nodeMap: Map<string, ShuttleScenario['layout']['nodes'][number]>,
+  preferredLevel: LiftDisplayRailLevel | null = null
+): { x: number; z: number } | null {
+  if (!isLiftNoDriveDisplaySnapNode(nodeId)) {
+    return null;
+  }
+  const parts = liftWorkcellKeyParts(nodeId);
+  if (!parts) {
+    return null;
+  }
+  const gridDockPoint = liftNoDriveDisplayPointForNode(nodeId, nodeMap, parts.prefix, parts.role, preferredLevel);
+  if (gridDockPoint) {
+    return gridDockPoint;
+  }
+  const dockNode = nodeMap.get(`${parts.prefix}-queue-01-entry-access`) ??
+    nodeMap.get(`${parts.prefix}-queue-access`) ??
+    nodeMap.get(`${parts.prefix}-queue-01-access`) ??
+    nodeMap.get(`${parts.prefix}-queue-01-service-exit`);
+  return dockNode ? { x: dockNode.x, z: dockNode.z } : null;
 }
 
 function createLiftNoDriveRects(
@@ -1796,22 +2093,26 @@ function createLiftNoDriveRects(
         return false;
       }
       const parts = liftWorkcellKeyParts(node.id);
-      return parts?.key === visual.key;
+      return parts?.key === visual.key && isLiftNoDriveRectNode(node.id);
     });
     if (workcellNodes.length === 0) {
       return [];
     }
-    const padX = 0.78;
-    const padZ = 0.62;
-    return [{
-      id: `${visual.key}-no-drive`,
+    const padX = 0.34;
+    const padZ = 0.08;
+    return workcellNodes.map((node) => ({
+      id: `${visual.key}-${node.id}-no-drive`,
       role: visual.role,
-      minX: Math.min(...workcellNodes.map((node) => node.x)) - padX,
-      maxX: Math.max(...workcellNodes.map((node) => node.x)) + padX,
-      minZ: Math.min(...workcellNodes.map((node) => node.z)) - padZ,
-      maxZ: Math.max(...workcellNodes.map((node) => node.z)) + padZ
-    }];
+      minX: node.x - padX,
+      maxX: node.x + padX,
+      minZ: node.z - padZ,
+      maxZ: node.z + padZ
+    }));
   });
+}
+
+function isLiftNoDriveRectNode(nodeId: string): boolean {
+  return /^lift-\d{2}-(?:inbound|outbound)(?:$|-buffer-\d{2})$/.test(nodeId);
 }
 
 function createLiftVisualWorkcells(
@@ -1864,9 +2165,9 @@ function createLiftVisualWorkcells(
   }
 
   for (const visual of workcells.values()) {
-    const gridDockNodeId = liftGridDockNodeId(nodeMap, visual.liftNodeId, visual.role);
-    if (gridDockNodeId) {
-      visual.dockNodeIds = [gridDockNodeId];
+    const dockMarkerNodeId = liftDockMarkerNodeId(nodeMap, visual.liftNodeId, visual.role);
+    if (dockMarkerNodeId) {
+      visual.dockNodeIds = [dockMarkerNodeId];
     }
     visual.bufferNodeIds.sort((leftId, rightId) => {
       const left = nodeMap.get(leftId);
@@ -2013,27 +2314,37 @@ function AuthoritativeMap({
         ];
         return nodesToRender.map((item) => {
           const node = geometry.nodeMap.get(item.nodeId);
-          return node ? (
+          if (!node) {
+            return null;
+          }
+          const displayPoint = item.className === 'lift-dock'
+            ? routeDisplayPointForNode(node.id, node, geometry.nodeMap)
+            : node;
+          return (
             <span
               className={`map-lift-equipment ${item.className} flow-${visual.role}`}
               key={`${visual.key}-${item.className}-${item.nodeId}`}
-              style={geometry.project(node)}
+              style={geometry.project(displayPoint)}
             >
               {item.label}
             </span>
-          ) : null;
+          );
         });
       })}
       {geometry.liftVisuals.flatMap((visual) => visual.dockNodeIds.map((dockNodeId) => {
         const node = geometry.nodeMap.get(dockNodeId);
-        return node ? (
+        if (!node) {
+          return null;
+        }
+        const displayPoint = routeDisplayPointForNode(node.id, node, geometry.nodeMap);
+        return (
           <span
             aria-label={`${visual.role} lift legal grid target`}
             className={`map-lift-grid-target flow-${visual.role}`}
             key={`${visual.key}-grid-target-${dockNodeId}`}
-            style={geometry.project(node)}
+            style={geometry.project(displayPoint)}
           />
-        ) : null;
+        );
       }))}
       {geometry.edges.map((edge) => {
         const from = geometry.nodeMap.get(edge.from);
@@ -2085,7 +2396,7 @@ function AuthoritativeMap({
           return null;
         }
         const liftDockTarget = isLiftWorkcellDisplayNode(pickupNode);
-        const pickupPoint = liftDockTarget ? pickupNode : routeDisplayPointForNode(pickupNode.id, pickupNode, geometry.nodeMap);
+        const pickupPoint = routeDisplayPointForNode(pickupNode.id, pickupNode, geometry.nodeMap);
         return (
           <span
             className={`map-task-badge pickup flow-${task.kind} ${liftDockTarget ? 'lift-dock-target' : ''}`}
@@ -2198,7 +2509,7 @@ function interpolateVehiclesForFrame(
   const latest = snapshots.at(-1);
   if (!latest) return [];
   const list = Array.from(latest.vehicles.values());
-  if (!running || snapshots.length < 2) return list;
+  if (!shouldInterpolateLiveVehicles(playbackSpeed, running) || snapshots.length < 2) return list;
 
   const renderTime = visualRenderSimTime(snapshots, playbackSpeed, running, nowMs, clock);
   let afterIndex = snapshots.findIndex((snapshot) => snapshot.simTime >= renderTime - 1e-9);
@@ -2212,7 +2523,7 @@ function interpolateVehiclesForFrame(
   const vehicles = Array.from(after.vehicles.values()).map((vehicle) => {
     const previous = before.vehicles.get(vehicle.id);
     if (!previous) return vehicle;
-    if (!vehicleCanInterpolateVisual(previous, vehicle)) return alpha >= 1 ? vehicle : previous;
+    if (!vehicleCanInterpolateVisual(previous, vehicle)) return vehicle;
     return {
       ...vehicle,
       x: previous.x + (vehicle.x - previous.x) * alpha,
@@ -2317,7 +2628,7 @@ function CanvasLiteMap({
       context.clearRect(0, 0, width, height);
       context.fillStyle = '#101922';
       context.fillRect(0, 0, width, height);
-      context.strokeStyle = 'rgba(178, 205, 223, 0.055)';
+      context.strokeStyle = 'rgba(67, 185, 255, 0.05)';
       context.lineWidth = 1;
       const guideStepPx = 32;
       for (let x = padding; x <= width - padding; x += guideStepPx) {
@@ -2326,6 +2637,7 @@ function CanvasLiteMap({
         context.lineTo(x, height - padding);
         context.stroke();
       }
+
       for (let y = padding; y <= height - padding; y += guideStepPx) {
         context.beginPath();
         context.moveTo(padding, y);
@@ -2384,20 +2696,23 @@ function CanvasLiteMap({
         if (node.type === 'lift-blackbox') {
           const widthPx = 86;
           const heightPx = 28;
+          const labelPoint = role === 'inbound'
+            ? { x: point.x - 34, y: point.y + 16 }
+            : point;
           context.fillStyle = 'rgba(18, 28, 36, 0.94)';
           context.strokeStyle = flowRgba(role, 0.78);
           context.lineWidth = 2;
           context.beginPath();
-          context.roundRect(point.x - widthPx / 2, point.y - heightPx / 2, widthPx, heightPx, 4);
+          context.roundRect(labelPoint.x - widthPx / 2, labelPoint.y - heightPx / 2, widthPx, heightPx, 4);
           context.fill();
           context.stroke();
           context.fillStyle = flowRgba(role, 0.88);
-          context.fillRect(point.x - widthPx / 2 + 3, point.y - heightPx / 2 + 3, widthPx - 6, 2.4);
+          context.fillRect(labelPoint.x - widthPx / 2 + 3, labelPoint.y - heightPx / 2 + 3, widthPx - 6, 2.4);
           context.fillStyle = role === 'outbound' ? '#fff0bd' : '#dff4ff';
           context.font = '900 10px system-ui, sans-serif';
           context.textAlign = 'center';
           context.textBaseline = 'middle';
-          context.fillText(role === 'inbound' ? 'IN LIFT' : 'OUT LIFT', point.x + (role === 'inbound' ? -8 : 0), point.y + 1.8);
+          context.fillText(role === 'inbound' ? 'IN LIFT' : 'OUT LIFT', labelPoint.x + (role === 'inbound' ? -8 : 0), labelPoint.y + 1.8);
         } else if (node.type === 'inbound' || node.type === 'outbound' || isLiftServiceExitNode(node.id)) {
           const slotSize = isLiftServiceExitNode(node.id) ? 7.2 : 8.2;
           context.fillStyle = flowRgba(role, isLiftServiceExitNode(node.id) ? 0.72 : 0.52);
@@ -2426,7 +2741,7 @@ function CanvasLiteMap({
       };
 
       const drawLiftDockMarker = (node: ShuttleScenario['layout']['nodes'][number], role: 'inbound' | 'outbound') => {
-        const point = project(node);
+        const point = project(routeDisplayPointForNode(node.id, node, geometry.nodeMap, liftDockDisplayRailLevel(role)));
         context.save();
         context.fillStyle = 'rgba(255, 58, 48, 0.14)';
         context.strokeStyle = 'rgba(255, 58, 48, 0.96)';
@@ -2474,17 +2789,50 @@ function CanvasLiteMap({
         context.globalAlpha = 1;
       };
 
-      const drawPickupTargetBadge = (
+      const drawTaskTargetBadge = (
         point: { x: number; y: number },
         taskKind: 'inbound' | 'outbound',
         vehicleId: string,
+        markerKind: 'pickup' | 'dropoff',
         liftDockTarget = false
       ) => {
-        const label = `P${vehicleDisplayNumber(vehicleId)}`;
+        const label = `${markerKind === 'pickup' ? 'P' : 'D'}${vehicleDisplayNumber(vehicleId)}`;
+        if (liftDockTarget) {
+          const radius = 10;
+          const roleColor = FLOW_VISUAL_COLORS[taskKind].hex;
+          context.save();
+          context.fillStyle = flowRgba(taskKind, 0.94);
+          context.strokeStyle = 'rgba(6, 10, 14, 0.82)';
+          context.lineWidth = 4;
+          context.beginPath();
+          context.arc(point.x, point.y, radius + 2, 0, Math.PI * 2);
+          context.stroke();
+          context.fill();
+          context.strokeStyle = taskKind === 'outbound'
+            ? 'rgba(255, 238, 180, 0.96)'
+            : 'rgba(192, 226, 255, 0.96)';
+          context.lineWidth = 1.8;
+          context.beginPath();
+          context.arc(point.x, point.y, radius, 0, Math.PI * 2);
+          context.stroke();
+          context.fillStyle = taskKind === 'outbound' ? '#15120b' : '#f8fbff';
+          context.font = '900 9.5px system-ui, sans-serif';
+          context.textAlign = 'center';
+          context.textBaseline = 'middle';
+          context.fillText(label, point.x, point.y + 0.2);
+          context.fillStyle = roleColor;
+          context.beginPath();
+          context.arc(point.x, point.y, 2.4, 0, Math.PI * 2);
+          context.fill();
+          context.restore();
+          return;
+        }
         const badgeWidth = liftDockTarget ? 34 : 22;
         const badgeHeight = liftDockTarget ? 18 : 14;
-        const badgeX = point.x + (liftDockTarget ? 13 : 13);
-        const badgeY = point.y - (liftDockTarget ? 36 : 23);
+        const badgeX = point.x + (liftDockTarget ? 9 : 13);
+        const badgeY = liftDockTarget
+          ? point.y + (taskKind === 'inbound' ? 8 : -badgeHeight - 8)
+          : point.y - 23;
         const roleColor = FLOW_VISUAL_COLORS[taskKind].hex;
         context.save();
         context.strokeStyle = flowRgba(taskKind, liftDockTarget ? 0.78 : 0.46);
@@ -2559,15 +2907,6 @@ function CanvasLiteMap({
 
       for (const visual of geometry.liftVisuals) {
         context.save();
-        context.setLineDash([4, 3]);
-        for (const pair of visual.transferPairs) {
-          const from = geometry.nodeMap.get(pair.fromNodeId);
-          const to = geometry.nodeMap.get(pair.toNodeId);
-          if (from && to) {
-            drawLine(from, to, FLOW_VISUAL_COLORS[visual.role].hex, 1.4, 0.42);
-          }
-        }
-        context.setLineDash([]);
         for (const bufferNodeId of visual.bufferNodeIds) {
           const bufferNode = geometry.nodeMap.get(bufferNodeId);
           if (bufferNode) {
@@ -2728,12 +3067,13 @@ function CanvasLiteMap({
       const vehicleById = new Map(renderVehicles.map((vehicle) => [vehicle.id, vehicle]));
       for (const task of activeTasks) {
         const vehicle = task.vehicleId ? vehicleById.get(task.vehicleId) : null;
-        const pickupNode = geometry.nodeMap.get(task.pickupNodeId);
-        if (!vehicle || !pickupNode || vehicle.loaded) continue;
-        const liftDockTarget = isLiftWorkcellDisplayNode(pickupNode);
-        const displayPoint = liftDockTarget ? pickupNode : routeDisplayPointForNode(pickupNode.id, pickupNode, geometry.nodeMap);
+        const targetNodeId = vehicle?.loaded ? task.dropoffNodeId : task.pickupNodeId;
+        const targetNode = targetNodeId ? geometry.nodeMap.get(targetNodeId) : null;
+        if (!vehicle || !targetNode) continue;
+        const liftDockTarget = isLiftWorkcellDisplayNode(targetNode);
+        const displayPoint = routeDisplayPointForNode(targetNode.id, targetNode, geometry.nodeMap);
         const point = project(displayPoint);
-        drawPickupTargetBadge(point, task.kind, vehicle.id, liftDockTarget);
+        drawTaskTargetBadge(point, task.kind, vehicle.id, vehicle.loaded ? 'dropoff' : 'pickup', liftDockTarget);
       }
 
       for (const vehicle of renderVehicles) {

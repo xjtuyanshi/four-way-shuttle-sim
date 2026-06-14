@@ -1,4 +1,4 @@
-import type { KpiSnapshot, ShuttleSimState, VehicleState } from '@four-way-shuttle/schemas';
+import type { KpiSnapshot, ShuttleScenario, ShuttleSimState, VehicleState } from '@four-way-shuttle/schemas';
 import { createDefaultShuttleScenario, createInboundMvpBaselineScenario, summarizeScenarioStaticSceneContract } from '@four-way-shuttle/sim-core';
 import { describe, expect, it } from 'vitest';
 
@@ -9,6 +9,7 @@ import {
   inferTopLiftRegionCount,
   shouldResetAfterParamUpdate,
   shouldResumeAfterParamUpdate,
+  shouldInterpolateLiveVehicles,
   summarizeScenarioSetup,
   summarizeResourceUtilization,
   vehicleCanInterpolateVisual,
@@ -222,6 +223,13 @@ describe('dashboard live vehicle interpolation', () => {
     });
 
     expect(vehicleCanInterpolateVisual(previous, next)).toBe(false);
+  });
+
+  it('disables live vehicle interpolation at high review speeds', () => {
+    expect(shouldInterpolateLiveVehicles(1, true)).toBe(true);
+    expect(shouldInterpolateLiveVehicles(10, true)).toBe(true);
+    expect(shouldInterpolateLiveVehicles(100, true)).toBe(false);
+    expect(shouldInterpolateLiveVehicles(1, false)).toBe(false);
   });
 });
 
@@ -477,90 +485,180 @@ describe('dashboard resource utilization', () => {
 });
 
 describe('dashboard static scene contract', () => {
-  it('keeps the 3D shuttle body on distinct physical lift queue positions', () => {
-    const liftHelper = {
-      id: 'lift-01-inbound-queue-01-entry-access',
-      type: 'aisle' as const,
-      x: 8,
-      y: 0,
-      z: 2,
-      noStop: false,
-      noParking: true,
-      capacity: 1,
-      allowedDirections: []
-    };
+  it('keeps the 3D shuttle body out of lift no-drive service pads', () => {
     const serviceExit = {
-      id: 'lift-01-inbound-queue-01-service-exit',
+      id: 'lift-01-outbound-queue-01-service-exit',
       type: 'aisle' as const,
-      x: 8,
+      x: 11.25,
       y: 0,
-      z: 5,
+      z: 22.8,
       noStop: false,
       noParking: true,
       capacity: 1,
       allowedDirections: []
     };
-    const secondLiftHelper = {
-      id: 'lift-01-inbound-queue-03-entry-access',
+    const liftBlackbox: ShuttleScenario['layout']['nodes'][number] = {
+      id: 'lift-01-outbound',
       type: 'aisle' as const,
-      x: 8,
+      x: 11.95,
       y: 0,
-      z: 6.2,
+      z: 23.4,
       noStop: false,
       noParking: true,
       capacity: 1,
       allowedDirections: []
     };
-    const railNode = {
-      id: 'column-top-b-c08',
+    const bufferNode: ShuttleScenario['layout']['nodes'][number] = {
+      id: 'lift-01-outbound-buffer-01',
       type: 'aisle' as const,
-      x: 14,
+      x: 11.25,
       y: 0,
-      z: 5,
+      z: 23.4,
       noStop: false,
       noParking: true,
       capacity: 1,
       allowedDirections: []
     };
-    const bodyPose = resolveScene3DVehicleBodyPose(new Map([
-      [liftHelper.id, liftHelper],
-      [secondLiftHelper.id, secondLiftHelper],
+    const entryAccess = {
+      id: 'lift-01-outbound-queue-01-entry-access',
+      type: 'aisle' as const,
+      x: 8.75,
+      y: 0,
+      z: 22.8,
+      noStop: false,
+      noParking: true,
+      capacity: 1,
+      allowedDirections: []
+    };
+    const thirdServiceExit = {
+      id: 'lift-01-outbound-queue-03-service-exit',
+      type: 'aisle' as const,
+      x: 11.25,
+      y: 0,
+      z: 26,
+      noStop: false,
+      noParking: true,
+      capacity: 1,
+      allowedDirections: []
+    };
+    const thirdEntryAccess = {
+      id: 'lift-01-outbound-queue-03-entry-access',
+      type: 'aisle' as const,
+      x: 8.75,
+      y: 0,
+      z: 26,
+      noStop: false,
+      noParking: true,
+      capacity: 1,
+      allowedDirections: []
+    };
+    const parkingQueue = {
+      id: 'parking-lift-01-outbound-queue',
+      type: 'parking' as const,
+      x: 7.5,
+      y: 0,
+      z: 23.4,
+      noStop: false,
+      noParking: false,
+      capacity: 1,
+      allowedDirections: []
+    };
+    const railNode = (id: string, x: number, z = 21.6): ShuttleScenario['layout']['nodes'][number] => ({
+      id,
+      type: 'intersection',
+      x,
+      y: 0,
+      z,
+      noStop: true,
+      noParking: true,
+      capacity: 1,
+      allowedDirections: []
+    });
+    const bottomB05 = railNode('column-bottom-b-c05', 7.5);
+    const bottomB06 = railNode('column-bottom-b-c06', 8.75);
+    const bottomB07 = railNode('column-bottom-b-c07', 10);
+    const bottomB08 = railNode('column-bottom-b-c08', 11.25);
+    const nodeById: Map<string, ShuttleScenario['layout']['nodes'][number]> = new Map<string, ShuttleScenario['layout']['nodes'][number]>([
       [serviceExit.id, serviceExit],
-      [railNode.id, railNode]
-    ]), vehicle({
+      [liftBlackbox.id, liftBlackbox],
+      [bufferNode.id, bufferNode],
+      [entryAccess.id, entryAccess],
+      [thirdServiceExit.id, thirdServiceExit],
+      [thirdEntryAccess.id, thirdEntryAccess],
+      [parkingQueue.id, parkingQueue],
+      [bottomB05.id, bottomB05],
+      [bottomB06.id, bottomB06],
+      [bottomB07.id, bottomB07],
+      [bottomB08.id, bottomB08]
+    ]);
+    const bodyPose = resolveScene3DVehicleBodyPose(nodeById, vehicle({
       id: 'SH-03',
-      state: 'moving-to-pickup',
-      currentNodeId: liftHelper.id,
-      targetNodeId: serviceExit.id,
-      currentEdgeId: `${liftHelper.id}-${serviceExit.id}`,
-      x: 9.4,
-      z: 3.25,
+      state: 'loaded-moving',
+      currentNodeId: liftBlackbox.id,
+      targetNodeId: bufferNode.id,
+      currentEdgeId: `${liftBlackbox.id}-${bufferNode.id}`,
+      x: 11.6,
+      z: 23.4,
       yaw: 1.25,
-      plannedRouteNodeIds: [liftHelper.id, serviceExit.id, railNode.id]
+      plannedRouteNodeIds: [liftBlackbox.id, bufferNode.id]
     }));
-    const secondBodyPose = resolveScene3DVehicleBodyPose(new Map([
-      [liftHelper.id, liftHelper],
-      [secondLiftHelper.id, secondLiftHelper],
-      [serviceExit.id, serviceExit],
-      [railNode.id, railNode]
-    ]), vehicle({
+    const stoppedBodyPose = resolveScene3DVehicleBodyPose(nodeById, vehicle({
       id: 'SH-04',
-      state: 'moving-to-pickup',
-      currentNodeId: secondLiftHelper.id,
-      targetNodeId: railNode.id,
-      currentEdgeId: `${secondLiftHelper.id}-${railNode.id}`,
-      x: 8,
-      z: 6.2,
+      state: 'loaded-moving',
+      currentNodeId: liftBlackbox.id,
+      targetNodeId: null,
+      currentEdgeId: null,
+      x: liftBlackbox.x,
+      z: liftBlackbox.z,
       yaw: -0.5,
-      plannedRouteNodeIds: [secondLiftHelper.id, railNode.id]
+      plannedRouteNodeIds: [liftBlackbox.id, bufferNode.id]
+    }));
+    const horizontalBodyPose = resolveScene3DVehicleBodyPose(nodeById, vehicle({
+      id: 'SH-05',
+      state: 'loaded-moving',
+      currentNodeId: serviceExit.id,
+      targetNodeId: entryAccess.id,
+      currentEdgeId: `${serviceExit.id}-${entryAccess.id}`,
+      x: 10,
+      z: 22.8,
+      yaw: -0.5,
+      plannedRouteNodeIds: [serviceExit.id, entryAccess.id]
+    }));
+    const leftQueueBodyPose = resolveScene3DVehicleBodyPose(nodeById, vehicle({
+      id: 'SH-06',
+      state: 'loaded-moving',
+      currentNodeId: serviceExit.id,
+      targetNodeId: parkingQueue.id,
+      currentEdgeId: `${serviceExit.id}-${parkingQueue.id}`,
+      x: 9.4,
+      z: 23.1,
+      yaw: -0.5,
+      plannedRouteNodeIds: [serviceExit.id, parkingQueue.id]
+    }));
+    const thirdSlotBodyPose = resolveScene3DVehicleBodyPose(nodeById, vehicle({
+      id: 'SH-07',
+      state: 'loaded-moving',
+      currentNodeId: thirdServiceExit.id,
+      targetNodeId: thirdEntryAccess.id,
+      currentEdgeId: `${thirdServiceExit.id}-${thirdEntryAccess.id}`,
+      x: 10,
+      z: 26,
+      yaw: -0.5,
+      plannedRouteNodeIds: [thirdServiceExit.id, thirdEntryAccess.id]
     }));
 
-    expect(bodyPose.x).toBeCloseTo(8, 6);
-    expect(bodyPose.z).toBeCloseTo(3.25, 6);
+    expect(bodyPose.x).toBeCloseTo(bottomB08.x, 6);
+    expect(bodyPose.z).toBeCloseTo(bottomB08.z, 6);
     expect(bodyPose.yaw).toBeCloseTo(1.25, 6);
-    expect(secondBodyPose.x).toBeCloseTo(secondLiftHelper.x, 6);
-    expect(secondBodyPose.z).toBeCloseTo(secondLiftHelper.z, 6);
-    expect(Math.hypot(bodyPose.x - secondBodyPose.x, bodyPose.z - secondBodyPose.z)).toBeGreaterThan(1);
+    expect(stoppedBodyPose.x).toBeCloseTo(bottomB08.x, 6);
+    expect(stoppedBodyPose.z).toBeCloseTo(bottomB08.z, 6);
+    expect(horizontalBodyPose.x).toBeGreaterThan(bottomB06.x);
+    expect(horizontalBodyPose.x).toBeLessThanOrEqual(bottomB08.x);
+    expect(horizontalBodyPose.z).toBeCloseTo(bottomB08.z, 6);
+    expect(leftQueueBodyPose.x).toBeLessThanOrEqual(bottomB08.x);
+    expect(leftQueueBodyPose.z).toBeCloseTo(bottomB08.z, 6);
+    expect(thirdSlotBodyPose.x).toBeLessThanOrEqual(bottomB08.x);
+    expect(thirdSlotBodyPose.z).toBeCloseTo(bottomB08.z, 6);
   });
 
   it('keeps the 3D visual coordinates aligned with the authoritative 2D map', () => {
@@ -588,6 +686,188 @@ describe('dashboard static scene contract', () => {
     expect(visualState?.vehicles[0]?.x).toBeCloseTo(4.25, 6);
     expect(visualState?.vehicles[0]?.z).toBeCloseTo(-2.5, 6);
     expect(visualState?.vehicles[0]?.yaw).toBeCloseTo(0, 6);
+  });
+
+  it('snaps inbound lift pickup visuals to the lift-side yellow edge stop', () => {
+    const liftBlackbox = {
+      id: 'lift-01-inbound',
+      type: 'aisle' as const,
+      x: 10.55,
+      y: 0,
+      z: -2.6,
+      noStop: false,
+      noParking: true,
+      capacity: 1,
+      allowedDirections: []
+    };
+    const queueAccess = {
+      id: 'lift-01-inbound-queue-access',
+      type: 'aisle' as const,
+      x: 12.5,
+      y: 0,
+      z: -2,
+      noStop: false,
+      noParking: true,
+      capacity: 1,
+      allowedDirections: []
+    };
+    const serviceExit: ShuttleScenario['layout']['nodes'][number] = {
+      id: 'lift-01-inbound-queue-01-service-exit',
+      type: 'intersection' as const,
+      x: 11.25,
+      y: 0,
+      z: -2,
+      noStop: true,
+      noParking: true,
+      capacity: 1,
+      allowedDirections: []
+    };
+    const topA07: ShuttleScenario['layout']['nodes'][number] = {
+      id: 'column-top-a-c07',
+      type: 'intersection' as const,
+      x: 10,
+      y: 0,
+      z: -0.8,
+      noStop: true,
+      noParking: true,
+      capacity: 1,
+      allowedDirections: []
+    };
+    const topA08: ShuttleScenario['layout']['nodes'][number] = {
+      id: 'column-top-a-c08',
+      type: 'intersection' as const,
+      x: 12.5,
+      y: 0,
+      z: -0.8,
+      noStop: true,
+      noParking: true,
+      capacity: 1,
+      allowedDirections: []
+    };
+    const topB08: ShuttleScenario['layout']['nodes'][number] = {
+      id: 'column-top-b-c08',
+      type: 'intersection' as const,
+      x: 12.5,
+      y: 0,
+      z: 0.8,
+      noStop: true,
+      noParking: true,
+      capacity: 1,
+      allowedDirections: []
+    };
+    const nodeById: Map<string, ShuttleScenario['layout']['nodes'][number]> = new Map([
+      [liftBlackbox.id, liftBlackbox],
+      [queueAccess.id, queueAccess],
+      [serviceExit.id, serviceExit],
+      [topA07.id, topA07],
+      [topA08.id, topA08],
+      [topB08.id, topB08]
+    ]);
+
+    const bodyPose = resolveScene3DVehicleBodyPose(nodeById, vehicle({
+      id: 'SH-01',
+      state: 'moving-to-pickup',
+      currentNodeId: liftBlackbox.id,
+      x: liftBlackbox.x,
+      z: liftBlackbox.z,
+      plannedRouteNodeIds: [liftBlackbox.id, queueAccess.id, topA08.id]
+    }));
+
+    expect(bodyPose.x).toBeCloseTo(topA08.x, 6);
+    expect(bodyPose.z).toBeCloseTo(topA08.z, 6);
+    expect(bodyPose.x).not.toBeCloseTo(serviceExit.x, 6);
+    expect(bodyPose.z).not.toBeCloseTo(topB08.z, 6);
+  });
+
+  it('keeps inbound lift queue vehicles on the yellow rail they are actually traversing', () => {
+    const topA23: ShuttleScenario['layout']['nodes'][number] = {
+      id: 'column-top-a-c23',
+      type: 'intersection',
+      x: 33.75,
+      y: 0,
+      z: -0.8,
+      noStop: true,
+      noParking: true,
+      capacity: 1,
+      allowedDirections: []
+    };
+    const topB23: ShuttleScenario['layout']['nodes'][number] = {
+      id: 'column-top-b-c23',
+      type: 'intersection',
+      x: 33.75,
+      y: 0,
+      z: 0.8,
+      noStop: true,
+      noParking: true,
+      capacity: 1,
+      allowedDirections: []
+    };
+    const queueEntry: ShuttleScenario['layout']['nodes'][number] = {
+      id: 'lift-02-inbound-queue-01-entry-access',
+      type: 'intersection',
+      x: 33.75,
+      y: 0,
+      z: -2,
+      noStop: true,
+      noParking: true,
+      capacity: 1,
+      allowedDirections: []
+    };
+    const queueAccess: ShuttleScenario['layout']['nodes'][number] = {
+      id: 'lift-02-inbound-queue-01-access',
+      type: 'intersection',
+      x: 33.75,
+      y: 0,
+      z: -2.6,
+      noStop: true,
+      noParking: true,
+      capacity: 1,
+      allowedDirections: []
+    };
+    const queueParking: ShuttleScenario['layout']['nodes'][number] = {
+      id: 'parking-lift-02-inbound-queue-02',
+      type: 'parking',
+      x: 35,
+      y: 0,
+      z: -4.2,
+      noStop: true,
+      noParking: true,
+      capacity: 1,
+      allowedDirections: []
+    };
+    const nodeById: Map<string, ShuttleScenario['layout']['nodes'][number]> = new Map([
+      [topA23.id, topA23],
+      [topB23.id, topB23],
+      [queueEntry.id, queueEntry],
+      [queueAccess.id, queueAccess],
+      [queueParking.id, queueParking]
+    ]);
+
+    const bodyPose = resolveScene3DVehicleBodyPose(nodeById, vehicle({
+      id: 'SH-06',
+      state: 'moving-to-pickup',
+      currentNodeId: queueEntry.id,
+      targetNodeId: queueAccess.id,
+      currentEdgeId: `${queueEntry.id}-${queueAccess.id}`,
+      x: 32.5,
+      z: topB23.z,
+      plannedRouteNodeIds: [queueEntry.id, queueAccess.id]
+    }));
+    const parkedBodyPose = resolveScene3DVehicleBodyPose(nodeById, vehicle({
+      id: 'SH-07',
+      state: 'waiting-blocked',
+      currentNodeId: queueParking.id,
+      targetNodeId: null,
+      currentEdgeId: null,
+      x: queueParking.x,
+      z: queueParking.z,
+      plannedRouteNodeIds: [queueParking.id]
+    }));
+
+    expect(bodyPose.z).toBeCloseTo(topB23.z, 6);
+    expect(bodyPose.z).not.toBeCloseTo(topA23.z, 6);
+    expect(parkedBodyPose.z).toBeCloseTo(topB23.z, 6);
+    expect(parkedBodyPose.z).not.toBeCloseTo(topA23.z, 6);
   });
 
   it('uses the SimCore item-level layout contract for the browser visual twin', () => {

@@ -29,11 +29,48 @@ type PhysicalSample = {
   idleVehicles: number;
   blockedVehicles: number;
   averageBusyPct: number;
+  averageProductivePct: number;
+  averageTasklessTravelPct: number;
   averageWaitingPct: number;
+  averageIdlePct: number;
   deadlocks: number;
   livelocks: number;
   physicalViolations: number;
   topBlockedReasons: Array<{ reason: string; sec: number }>;
+  inboundColumnPredecessorWaitContexts: InboundColumnPredecessorWaitContexts;
+};
+
+type InboundColumnPredecessorWaitContexts = {
+  total: number;
+  emptyToPickup: number;
+  loadedNearLift: number;
+  loadedAway: number;
+  noActivePredecessor: number;
+  examples: Array<{
+    taskId: string;
+    dropoffNodeId: string;
+    column: number;
+    row: number;
+    context: 'emptyToPickup' | 'loadedNearLift' | 'loadedAway' | 'noActivePredecessor';
+    inferredQueueNodeId: string | null;
+    queueNodeStatus: 'free' | 'occupied' | 'claimed' | 'unknown';
+    queueBlockingVehicleIds: string[];
+    predecessorTaskId: string | null;
+    predecessorDropoffNodeId: string | null;
+    predecessorVehicleId: string | null;
+    predecessorVehicleLoaded: boolean | null;
+    predecessorCurrentNodeId: string | null;
+    predecessorTargetNodeId: string | null;
+    predecessorPlannedGoalNodeId: string | null;
+  }>;
+  byColumn: Array<{
+    column: number;
+    total: number;
+    emptyToPickup: number;
+    loadedNearLift: number;
+    loadedAway: number;
+    noActivePredecessor: number;
+  }>;
 };
 
 type PhysicalAnomaly = {
@@ -48,6 +85,9 @@ type VehicleTrace = {
   sinceSec: number;
   lastMovingSec: number;
   idleSinceSec: number | null;
+  edgeStallSinceSec: number | null;
+  lastX: number;
+  lastZ: number;
 };
 
 const durationSec = durationArg();
@@ -58,14 +98,19 @@ const shuttleCount = integerArg('--shuttles', 8);
 const inboundRatePerHour = numberArg('--inbound-pph', 3600);
 const outboundRatePerHour = numberArg('--outbound-pph', 3600);
 const initialOutboundFullColumns = integerArg('--outbound-full-columns', 4);
+const initialStorageFillPolicy = enumArg('--initial-fill-policy', ['full-columns', 'zone-balanced-50'] as const, 'full-columns');
+const storageSelectionPolicy = enumArg('--storage-selection-policy', ['sequential', 'traffic-aware'] as const, 'sequential');
+const collisionAvoidance = enumArg('--collision-avoidance', ['on', 'off'] as const, 'on');
 const outputPath = resolve(stringArg('--out') ?? `output/shuttle/physical-long-${Date.now()}.json`);
 const tracePath = resolve(stringArg('--trace-out') ?? outputPath.replace(/\.json$/i, '.trace.json'));
 const checkpointDir = resolve(stringArg('--checkpoint-dir') ?? outputPath.replace(/\.json$/i, '-checkpoints'));
 const checkpointMode = stringArg('--checkpoint-mode') ?? 'compact';
 const inlineTrace = process.argv.includes('--inline-trace') || checkpointMode === 'full';
 const eventLogRetain = integerArg('--event-log-retain', 5000);
+const eventLogRetainSec = numberArg('--event-log-retain-sec', 300);
 const stopOnCritical = process.argv.includes('--stop-on-critical');
 const maxPhysicalAnomalyEvents = integerArg('--max-physical-anomaly-events', 25);
+const auditEverySec = numberArg('--audit-every-sec', 1);
 
 mkdirSync(dirname(outputPath), { recursive: true });
 mkdirSync(dirname(tracePath), { recursive: true });
@@ -80,11 +125,16 @@ const scenario = createInboundOutboundDemoScenario({
     inboundOutboundMix: inboundRatePerHour + outboundRatePerHour > 0
       ? inboundRatePerHour / (inboundRatePerHour + outboundRatePerHour)
       : 0.5,
-    initialOutboundFullColumns
+    initialOutboundFullColumns,
+    initialStorageFillPolicy,
+    storageSelectionPolicy
   },
   layoutProfile: {
     layoutKind: 'top-lift-column',
     liftPairCount: regionCount
+  },
+  trafficPolicy: {
+    collisionAvoidanceEnabled: collisionAvoidance === 'on'
   }
 });
 
@@ -97,6 +147,8 @@ const traceSnapshots: Array<{ sequence: number; simTimeSec: number; tickIndex: n
 const checkpointRecords: Array<{ sequence: number; reason: string; simTimeSec: number; path: string; mode: string }> = [];
 let nextSampleSec = 0;
 let nextCheckpointSec = 0;
+let nextEventLogRetainSec = eventLogRetainSec;
+let nextAuditSec = auditEverySec > 0 ? auditEverySec : Number.POSITIVE_INFINITY;
 let checkpointSequence = 0;
 let lastDeadlocks = 0;
 let lastLivelocks = 0;
@@ -121,31 +173,65 @@ console.log(JSON.stringify({
   shuttleCount,
   inboundRatePerHour,
   outboundRatePerHour,
+  initialStorageFillPolicy,
+  storageSelectionPolicy,
+  collisionAvoidance,
+  auditEverySec,
   outputPath,
   tracePath
 }));
 
 while (sim.getClock().simTimeSec < durationSec - 1e-9 && sim.getClock().status === 'running') {
   const clock = sim.getClock();
-  const stepSec = Math.min(scenario.timeStepSec, durationSec - clock.simTimeSec);
-  if (stepSec <= 1e-9) {
+  const nextBoundarySec = Math.min(
+    durationSec,
+    nextSampleSec,
+    nextCheckpointSec,
+    nextAuditSec,
+    eventLogRetainSec > 0 ? nextEventLogRetainSec : Number.POSITIVE_INFINITY
+  );
+  const stepSec = Math.min(
+    Math.max(scenario.timeStepSec, nextBoundarySec - clock.simTimeSec),
+    durationSec - clock.simTimeSec
+  );
+  if (stepSec <= 1e-9 || !Number.isFinite(stepSec)) {
     break;
   }
-  const state = sim.step(stepSec);
-  auditState(state);
+  sim.advanceByInPlace(stepSec);
+  let state: ShuttleSimState | null = null;
+  const getCurrentState = () => {
+    state ??= sim.getState();
+    return state;
+  };
 
-  if (state.simTimeSec + 1e-9 >= nextSampleSec) {
-    const sample = createSample(state);
+  const simTimeSec = sim.getClock().simTimeSec;
+
+  if (auditEverySec > 0 && simTimeSec + 1e-9 >= nextAuditSec) {
+    auditState(getCurrentState());
+    while (nextAuditSec <= simTimeSec + 1e-9) {
+      nextAuditSec += auditEverySec;
+    }
+  }
+
+  if (simTimeSec + 1e-9 >= nextSampleSec) {
+    const sample = createSample(getCurrentState());
     samples.push(sample);
     console.log(JSON.stringify({ type: 'physical-sample', ...sample }));
     sim.retainRecentEventLog(eventLogRetain);
     nextSampleSec += sampleSec;
   }
 
-  if (state.simTimeSec + 1e-9 >= nextCheckpointSec) {
+  if (simTimeSec + 1e-9 >= nextCheckpointSec) {
     recordCheckpoint('periodic');
     sim.retainRecentEventLog(eventLogRetain);
     nextCheckpointSec += checkpointSec;
+  }
+
+  if (eventLogRetainSec > 0 && simTimeSec + 1e-9 >= nextEventLogRetainSec) {
+    sim.retainRecentEventLog(eventLogRetain);
+    while (nextEventLogRetainSec <= simTimeSec + 1e-9) {
+      nextEventLogRetainSec += eventLogRetainSec;
+    }
   }
 
   if (stopOnCritical && anomalies.some((anomaly) => anomaly.severity === 'critical')) {
@@ -170,6 +256,12 @@ const result = {
   avoidanceEnabled: finalState.traffic.collisionAvoidanceEnabled,
   controllerMode: scenario.trafficPolicy.controllerMode,
   layoutCalibrationProfile: scenario.layout.calibrationProfile?.id ?? null,
+  assumptions: {
+    initialOutboundFullColumns,
+    initialStorageFillPolicy,
+    storageSelectionPolicy,
+    collisionAvoidance
+  },
   pph: {
     inbound: finalState.kpis.inboundPph,
     outbound: finalState.kpis.outboundPph,
@@ -276,15 +368,139 @@ function createSample(state: ShuttleSimState): PhysicalSample {
     idleVehicles: state.vehicles.filter((vehicle) => vehicle.state === 'idle').length,
     blockedVehicles: state.vehicles.filter((vehicle) => vehicle.state === 'waiting-blocked').length,
     averageBusyPct: round(average(breakdowns.map((breakdown) => breakdown.busy)) * 100, 3),
+    averageProductivePct: round(average(breakdowns.map((breakdown) => breakdown.productive)) * 100, 3),
+    averageTasklessTravelPct: round(average(breakdowns.map((breakdown) => breakdown.tasklessTravel)) * 100, 3),
     averageWaitingPct: round(average(breakdowns.map((breakdown) => breakdown.waiting)) * 100, 3),
+    averageIdlePct: round(average(breakdowns.map((breakdown) => breakdown.idle)) * 100, 3),
     deadlocks: state.kpis.deadlockCount,
     livelocks: state.kpis.livelockCount,
     physicalViolations: state.traffic.physicalViolationCount,
     topBlockedReasons: Object.entries(state.kpis.blockedTimeByReasonSec)
       .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
       .slice(0, 5)
-      .map(([reason, sec]) => ({ reason, sec: round(sec, 3) }))
+      .map(([reason, sec]) => ({ reason, sec: round(sec, 3) })),
+    inboundColumnPredecessorWaitContexts: classifyInboundColumnPredecessorWaits(state)
   };
+}
+
+function classifyInboundColumnPredecessorWaits(state: ShuttleSimState): InboundColumnPredecessorWaitContexts {
+  const totals: InboundColumnPredecessorWaitContexts = {
+    total: 0,
+    emptyToPickup: 0,
+    loadedNearLift: 0,
+    loadedAway: 0,
+    noActivePredecessor: 0,
+    examples: [],
+    byColumn: []
+  };
+  const byColumn = new Map<number, Omit<InboundColumnPredecessorWaitContexts['byColumn'][number], 'column'>>();
+  const activeInboundTasks = state.tasks.filter((task) =>
+    task.kind === 'inbound' &&
+    (task.state === 'assigned' || task.state === 'in-progress')
+  );
+  const waitingTasks = state.tasks.filter((task) =>
+    task.kind === 'inbound' &&
+    task.state === 'queued' &&
+    task.waitReason === 'inbound-column-predecessor-wait'
+  );
+
+  for (const task of waitingTasks) {
+    const target = storageGridPositionFromNodeId(task.dropoffNodeId);
+    if (!target) {
+      continue;
+    }
+    const bucket = byColumn.get(target.column) ?? {
+      total: 0,
+      emptyToPickup: 0,
+      loadedNearLift: 0,
+      loadedAway: 0,
+      noActivePredecessor: 0
+    };
+    totals.total += 1;
+    bucket.total += 1;
+
+    const predecessor = activeInboundTasks
+      .filter((candidate) => {
+        const candidatePosition = storageGridPositionFromNodeId(candidate.dropoffNodeId);
+        return candidatePosition &&
+          candidatePosition.column === target.column &&
+          candidatePosition.row > target.row;
+      })
+      .sort((left, right) =>
+        (storageGridPositionFromNodeId(right.dropoffNodeId)?.row ?? 0) -
+        (storageGridPositionFromNodeId(left.dropoffNodeId)?.row ?? 0)
+      )[0];
+    const predecessorVehicle = predecessor?.vehicleId
+      ? state.vehicles.find((vehicle) => vehicle.id === predecessor.vehicleId)
+      : null;
+    const context = predecessorVehicle
+      ? predecessorVehicle.loaded
+        ? vehicleNearInboundLiftQueue(predecessorVehicle)
+          ? 'loadedNearLift'
+          : 'loadedAway'
+        : 'emptyToPickup'
+      : 'noActivePredecessor';
+
+    totals[context] += 1;
+    bucket[context] += 1;
+    if (totals.examples.length < 6) {
+      const inferredQueueNodeId = inboundQueueNodeIdFromPickup(task.pickupNodeId);
+      const queueBlockingVehicleIds = inferredQueueNodeId
+        ? state.vehicles
+          .filter((vehicle) =>
+            vehicle.currentNodeId === inferredQueueNodeId ||
+            vehicle.targetNodeId === inferredQueueNodeId ||
+            vehicle.plannedGoalNodeId === inferredQueueNodeId
+          )
+          .map((vehicle) => vehicle.id)
+          .sort((left, right) => left.localeCompare(right))
+        : [];
+      totals.examples.push({
+        taskId: task.id,
+        dropoffNodeId: task.dropoffNodeId,
+        column: target.column,
+        row: target.row,
+        context,
+        inferredQueueNodeId,
+        queueNodeStatus: inferredQueueNodeId
+          ? queueBlockingVehicleIds.length > 0
+            ? 'claimed'
+            : 'free'
+          : 'unknown',
+        queueBlockingVehicleIds,
+        predecessorTaskId: predecessor?.id ?? null,
+        predecessorDropoffNodeId: predecessor?.dropoffNodeId ?? null,
+        predecessorVehicleId: predecessorVehicle?.id ?? null,
+        predecessorVehicleLoaded: predecessorVehicle?.loaded ?? null,
+        predecessorCurrentNodeId: predecessorVehicle?.currentNodeId ?? null,
+        predecessorTargetNodeId: predecessorVehicle?.targetNodeId ?? null,
+        predecessorPlannedGoalNodeId: predecessorVehicle?.plannedGoalNodeId ?? null
+      });
+    }
+    byColumn.set(target.column, bucket);
+  }
+
+  totals.byColumn = [...byColumn.entries()]
+    .map(([column, counts]) => ({ column, ...counts }))
+    .sort((left, right) => right.total - left.total || left.column - right.column)
+    .slice(0, 8);
+  return totals;
+}
+
+function inboundQueueNodeIdFromPickup(pickupNodeId: string): string | null {
+  const match = /^lift-(\d+)-inbound-queue-\d+-service-exit$/.exec(pickupNodeId);
+  return match ? `parking-lift-${match[1]}-inbound-queue` : null;
+}
+
+function storageGridPositionFromNodeId(nodeId: string): { row: number; column: number } | null {
+  const match = /^storage-r(\d+)-c(\d+)$/.exec(nodeId);
+  return match ? { row: Number(match[1]), column: Number(match[2]) } : null;
+}
+
+function vehicleNearInboundLiftQueue(vehicle: VehicleState): boolean {
+  return [vehicle.currentNodeId, vehicle.targetNodeId, vehicle.plannedGoalNodeId]
+    .filter((nodeId): nodeId is string => Boolean(nodeId))
+    .some((nodeId) => /lift-\d+-inbound-queue/.test(nodeId));
 }
 
 function auditState(state: ShuttleSimState): void {
@@ -353,19 +569,40 @@ function auditVehicle(state: ShuttleSimState, vehicle: VehicleState): void {
     signature,
     sinceSec: state.simTimeSec,
     lastMovingSec: state.simTimeSec,
-    idleSinceSec: null
+    idleSinceSec: null,
+    edgeStallSinceSec: null,
+    lastX: vehicle.x,
+    lastZ: vehicle.z
   };
 
   if (trace.signature !== signature) {
     trace.signature = signature;
     trace.sinceSec = state.simTimeSec;
+    trace.edgeStallSinceSec = null;
   }
-  if (vehicle.speedMps > 0.02 || vehicle.currentEdgeId !== null) {
+  const movedSinceLastAudit = Math.hypot(vehicle.x - trace.lastX, vehicle.z - trace.lastZ) > 0.02;
+  if (vehicle.speedMps > 0.02 && movedSinceLastAudit) {
     trace.lastMovingSec = state.simTimeSec;
+  }
+  if (vehicle.currentEdgeId !== null && !movedSinceLastAudit && vehicle.state !== 'waiting-blocked') {
+    trace.edgeStallSinceSec ??= state.simTimeSec;
+    if (state.simTimeSec - trace.edgeStallSinceSec >= 120) {
+      addAnomaly(
+        state.simTimeSec,
+        'critical',
+        `vehicle-edge-stalled-over-120s:${vehicle.id}`,
+        `${vehicle.id} stayed on edge ${vehicle.currentEdgeId} for ${round(state.simTimeSec - trace.edgeStallSinceSec, 1)}s at ${vehicle.currentNodeId} -> ${vehicle.targetNodeId ?? '?'} x=${vehicle.x} z=${vehicle.z}`
+      );
+      trace.edgeStallSinceSec = state.simTimeSec;
+    }
+  } else {
+    trace.edgeStallSinceSec = null;
   }
   trace.idleSinceSec = vehicle.state === 'idle'
     ? trace.idleSinceSec ?? state.simTimeSec
     : null;
+  trace.lastX = vehicle.x;
+  trace.lastZ = vehicle.z;
 
   if (
     vehicle.state === 'waiting-blocked' &&
@@ -378,6 +615,21 @@ function auditVehicle(state: ShuttleSimState, vehicle: VehicleState): void {
       `vehicle-blocked-over-300s:${vehicle.id}`,
       `${vehicle.id} blocked ${round(state.simTimeSec - vehicle.waitingSinceSec, 1)}s at ${vehicle.currentNodeId} -> ${vehicle.targetNodeId ?? '?'} reason=${vehicle.waitReason ?? '?'} blocker=${vehicle.blockingVehicleId ?? '?'}`
     );
+  }
+  if (
+    vehicle.state === 'waiting-blocked' &&
+    vehicle.targetNodeId !== vehicle.currentNodeId &&
+    vehicle.waitReason !== 'inbound-lift-fifo-wait' &&
+    vehicle.waitReason !== 'outbound-lift-fifo-wait' &&
+    state.simTimeSec - trace.sinceSec >= 300
+  ) {
+    addAnomaly(
+      state.simTimeSec,
+      'critical',
+      `vehicle-blocked-signature-over-300s:${vehicle.id}`,
+      `${vehicle.id} blocked signature ${round(state.simTimeSec - trace.sinceSec, 1)}s at ${vehicle.currentNodeId} -> ${vehicle.targetNodeId ?? '?'} reason=${vehicle.waitReason ?? '?'} blocker=${vehicle.blockingVehicleId ?? '?'}`
+    );
+    trace.sinceSec = state.simTimeSec;
   }
 
   if (
@@ -536,6 +788,11 @@ function numberArg(name: string, fallback: number): number {
 
 function integerArg(name: string, fallback: number): number {
   return Math.max(0, Math.round(numberArg(name, fallback)));
+}
+
+function enumArg<const T extends readonly string[]>(name: string, allowed: T, fallback: T[number]): T[number] {
+  const value = valueAfter(name);
+  return value && (allowed as readonly string[]).includes(value) ? value as T[number] : fallback;
 }
 
 function stringArg(name: string): string | null {

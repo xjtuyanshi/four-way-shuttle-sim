@@ -1,0 +1,686 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shuttle Gridlock Change Log</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #627084;
+      --line: #d8e0ea;
+      --panel: #f7f9fc;
+      --blue: #2378c8;
+      --gold: #c79d24;
+      --purple: #8f78ff;
+      --green: #2f9e6d;
+      --red: #d14b3f;
+    }
+
+    body {
+      margin: 0;
+      font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: #fff;
+    }
+
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 32px 24px 56px;
+    }
+
+    h1, h2, h3 {
+      margin: 0;
+      line-height: 1.15;
+    }
+
+    h1 {
+      font-size: 34px;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin-top: 34px;
+      font-size: 23px;
+      padding-top: 24px;
+      border-top: 1px solid var(--line);
+    }
+
+    h3 {
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      margin: 8px 0 0;
+    }
+
+    .entry-meta {
+      margin: 10px 0 18px;
+      color: var(--muted);
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+      margin: 18px 0;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 16px;
+    }
+
+    .metric {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      padding: 9px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .metric:last-child {
+      border-bottom: 0;
+    }
+
+    .metric span:first-child {
+      color: var(--muted);
+    }
+
+    .metric strong {
+      font-variant-numeric: tabular-nums;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: #edf2f7;
+      border-radius: 4px;
+      padding: 1px 5px;
+    }
+
+    .diagram {
+      width: 100%;
+      height: auto;
+      display: block;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .key {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .swatch {
+      width: 16px;
+      height: 4px;
+      border-radius: 99px;
+      background: var(--blue);
+    }
+
+    .swatch.gold { background: var(--gold); }
+    .swatch.red { background: var(--red); }
+    .swatch.green { background: var(--green); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Shuttle Gridlock Change Log</h1>
+  <p class="subtitle">Incremental engineering log for routing, traffic-control, performance, and UI fixes. New changes should be appended here instead of replacing prior evidence.</p>
+
+  <h2>2026-05-31: Protect Active Inbound Fill Columns From Empty Pickup Traffic</h2>
+  <div class="entry-meta">Core routing · agent-refresh · top-lift-column-v1</div>
+
+  <div class="grid">
+    <section class="panel">
+      <h3>What Changed</h3>
+      <p>
+        Empty inbound pickup shuttles can no longer use a column as a transit corridor while another loaded inbound shuttle is actively filling that same column.
+        If an empty shuttle starts inside that active column, only its current node and safe side exits remain usable; the rest of the column stays protected.
+      </p>
+    </section>
+    <section class="panel">
+      <h3>Why It Matters</h3>
+      <p>
+        The 3991s failure pattern was a reciprocal claim at <code>storage-r01-c19</code> and <code>column-top-b-c19</code>: an empty shuttle tried to exit upward through the same column that a loaded shuttle was entering to fill.
+        That is a traffic-rule error, not a visual problem.
+      </p>
+    </section>
+  </div>
+
+  <svg class="diagram" viewBox="0 0 960 360" role="img" aria-label="Before and after active fill column routing diagram">
+    <defs>
+      <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M0,0 L0,6 L8,3 z" fill="#2378c8" />
+      </marker>
+      <marker id="arrowGreen" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M0,0 L0,6 L8,3 z" fill="#2f9e6d" />
+      </marker>
+    </defs>
+
+    <text x="40" y="38" font-size="18" font-weight="700">Before: empty shuttle cuts through active fill column</text>
+    <text x="520" y="38" font-size="18" font-weight="700">After: active column is protected</text>
+
+    <g transform="translate(40 70)">
+      <rect x="0" y="0" width="370" height="245" fill="#fff" stroke="#d8e0ea" rx="8" />
+      <line x1="70" y1="30" x2="70" y2="214" stroke="#d14b3f" stroke-width="10" opacity=".75" />
+      <line x1="140" y1="30" x2="140" y2="214" stroke="#d8e0ea" stroke-width="2" />
+      <line x1="210" y1="30" x2="210" y2="214" stroke="#d8e0ea" stroke-width="2" />
+      <line x1="20" y1="122" x2="340" y2="122" stroke="#c79d24" stroke-width="4" opacity=".7" />
+      <line x1="20" y1="30" x2="340" y2="30" stroke="#c79d24" stroke-width="4" opacity=".7" />
+
+      <g fill="#8f78ff" opacity=".75">
+        <rect x="58" y="54" width="24" height="20" rx="3" />
+        <rect x="58" y="84" width="24" height="20" rx="3" />
+        <rect x="58" y="144" width="24" height="20" rx="3" />
+        <rect x="128" y="54" width="24" height="20" rx="3" />
+        <rect x="128" y="84" width="24" height="20" rx="3" />
+        <rect x="198" y="54" width="24" height="20" rx="3" />
+      </g>
+
+      <path d="M70,122 C70,96 70,70 70,36 L140,36 L210,36 L280,36" fill="none" stroke="#2378c8" stroke-width="7" stroke-linecap="round" marker-end="url(#arrowBlue)" />
+      <circle cx="70" cy="122" r="15" fill="#2378c8" />
+      <text x="70" y="128" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">E</text>
+      <circle cx="210" cy="36" r="15" fill="#d14b3f" />
+      <text x="210" y="42" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">L</text>
+      <text x="20" y="235" font-size="13" fill="#627084">E = empty pickup shuttle, L = loaded fill shuttle</text>
+    </g>
+
+    <g transform="translate(520 70)">
+      <rect x="0" y="0" width="370" height="245" fill="#fff" stroke="#d8e0ea" rx="8" />
+      <line x1="70" y1="30" x2="70" y2="214" stroke="#d14b3f" stroke-width="10" opacity=".75" />
+      <line x1="140" y1="30" x2="140" y2="214" stroke="#d8e0ea" stroke-width="2" />
+      <line x1="210" y1="30" x2="210" y2="214" stroke="#d8e0ea" stroke-width="2" />
+      <line x1="20" y1="122" x2="340" y2="122" stroke="#c79d24" stroke-width="4" opacity=".7" />
+      <line x1="20" y1="30" x2="340" y2="30" stroke="#c79d24" stroke-width="4" opacity=".7" />
+
+      <g fill="#8f78ff" opacity=".75">
+        <rect x="58" y="54" width="24" height="20" rx="3" />
+        <rect x="58" y="84" width="24" height="20" rx="3" />
+        <rect x="58" y="144" width="24" height="20" rx="3" />
+        <rect x="128" y="54" width="24" height="20" rx="3" />
+        <rect x="128" y="84" width="24" height="20" rx="3" />
+        <rect x="198" y="54" width="24" height="20" rx="3" />
+      </g>
+
+      <path d="M70,122 L140,122 L210,122 C250,122 270,92 280,36" fill="none" stroke="#2f9e6d" stroke-width="7" stroke-linecap="round" marker-end="url(#arrowGreen)" />
+      <line x1="52" y1="40" x2="88" y2="204" stroke="#d14b3f" stroke-width="4" stroke-dasharray="8 8" />
+      <circle cx="70" cy="122" r="15" fill="#2f9e6d" />
+      <text x="70" y="128" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">E</text>
+      <circle cx="210" cy="36" r="15" fill="#d14b3f" />
+      <text x="210" y="42" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">L</text>
+      <text x="20" y="235" font-size="13" fill="#627084">The red protected column is no longer opened wholesale.</text>
+    </g>
+  </svg>
+
+  <div class="legend">
+    <span class="key"><span class="swatch"></span>Old conflicting route</span>
+    <span class="key"><span class="swatch green"></span>Protected-column route</span>
+    <span class="key"><span class="swatch red"></span>Active inbound fill column</span>
+    <span class="key"><span class="swatch gold"></span>Legal aisle/grid line</span>
+  </div>
+
+  <div class="grid">
+    <section class="panel">
+      <h3>Evidence So Far</h3>
+      <div class="metric"><span>Targeted regression</span><strong>Passed</strong></div>
+      <div class="metric"><span>Targeted tests in command</span><strong>4 / 4</strong></div>
+      <div class="metric"><span>4800s fast audit</span><strong>No deadlock / no physical violation</strong></div>
+      <div class="metric"><span>12h audit</span><strong>Passed in later full gridlock audit</strong></div>
+    </section>
+    <section class="panel">
+      <h3>Files Changed</h3>
+      <p><code>packages/shuttle-sim-core/src/index.ts</code></p>
+      <p><code>packages/shuttle-sim-core/src/index.test.ts</code></p>
+      <p><code>docs/shuttle-gridlock-change-log.html</code></p>
+    </section>
+  </div>
+
+  <h2>2026-06-01: Convert Repeated Gridlocks Into Explicit Traffic Rules</h2>
+  <div class="entry-meta">Core routing · reciprocal swaps · column access · 12h audit</div>
+
+  <div class="grid">
+    <section class="panel">
+      <h3>What Changed</h3>
+      <p>
+        The latest fix moves several repeated deadlock shapes out of ad hoc local avoidance and into explicit agent-refresh rules.
+        Reciprocal storage swaps, column-access/storage swaps, taskless no-stop waits, and blocked same-column exits are now detected directly and cleared before the deadlock smoke detector has to escalate.
+      </p>
+    </section>
+    <section class="panel">
+      <h3>Why It Matters</h3>
+      <p>
+        These failures were not independent visual glitches. They were missing traffic invariants: a shuttle could wait on a no-stop access node, two shuttles could target each other's cells, or a later inbound load could enter a column before its deeper predecessor was physically reachable.
+        The fix makes those states illegal or self-clearing in the core model.
+      </p>
+    </section>
+  </div>
+
+  <svg class="diagram" viewBox="0 0 960 430" role="img" aria-label="Root gridlock fixes diagram">
+    <defs>
+      <marker id="arrowRed2" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M0,0 L0,6 L8,3 z" fill="#d14b3f" />
+      </marker>
+      <marker id="arrowGreen2" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M0,0 L0,6 L8,3 z" fill="#2f9e6d" />
+      </marker>
+      <marker id="arrowBlue2" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M0,0 L0,6 L8,3 z" fill="#2378c8" />
+      </marker>
+    </defs>
+
+    <text x="40" y="36" font-size="18" font-weight="700">A. Reciprocal storage swap</text>
+    <text x="350" y="36" font-size="18" font-weight="700">B. Access/storage swap</text>
+    <text x="670" y="36" font-size="18" font-weight="700">C. Column order gating</text>
+
+    <g transform="translate(40 64)">
+      <rect x="0" y="0" width="250" height="145" fill="#fff" stroke="#d8e0ea" rx="8" />
+      <line x1="120" y1="20" x2="120" y2="125" stroke="#c79d24" stroke-width="5" opacity=".6" />
+      <rect x="92" y="32" width="56" height="30" rx="4" fill="#8f78ff" opacity=".75" />
+      <rect x="92" y="82" width="56" height="30" rx="4" fill="#8f78ff" opacity=".75" />
+      <circle cx="120" cy="47" r="17" fill="#2378c8" />
+      <text x="120" y="53" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">1</text>
+      <circle cx="120" cy="97" r="17" fill="#d14b3f" />
+      <text x="120" y="103" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">2</text>
+      <path d="M140,47 C176,48 176,96 140,97" fill="none" stroke="#d14b3f" stroke-width="5" marker-end="url(#arrowRed2)" />
+      <path d="M100,97 C64,96 64,48 100,47" fill="none" stroke="#2378c8" stroke-width="5" marker-end="url(#arrowBlue2)" />
+      <path d="M178,115 L218,115" stroke="#2f9e6d" stroke-width="6" stroke-linecap="round" marker-end="url(#arrowGreen2)" />
+      <text x="18" y="132" font-size="12" fill="#627084">One shuttle is moved to a legal hold before retry.</text>
+    </g>
+
+    <g transform="translate(350 64)">
+      <rect x="0" y="0" width="250" height="145" fill="#fff" stroke="#d8e0ea" rx="8" />
+      <line x1="42" y1="72" x2="210" y2="72" stroke="#c79d24" stroke-width="5" opacity=".6" />
+      <line x1="92" y1="22" x2="92" y2="122" stroke="#c79d24" stroke-width="5" opacity=".6" />
+      <rect x="64" y="82" width="56" height="30" rx="4" fill="#8f78ff" opacity=".75" />
+      <circle cx="92" cy="72" r="17" fill="#2378c8" />
+      <text x="92" y="78" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">A</text>
+      <circle cx="92" cy="97" r="17" fill="#d14b3f" />
+      <text x="92" y="103" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">S</text>
+      <path d="M109,72 L160,72 L188,97" fill="none" stroke="#2f9e6d" stroke-width="6" stroke-linecap="round" marker-end="url(#arrowGreen2)" />
+      <text x="18" y="132" font-size="12" fill="#627084">Access shuttle clears through a hold node, not no-stop.</text>
+    </g>
+
+    <g transform="translate(670 64)">
+      <rect x="0" y="0" width="250" height="145" fill="#fff" stroke="#d8e0ea" rx="8" />
+      <line x1="120" y1="20" x2="120" y2="125" stroke="#c79d24" stroke-width="5" opacity=".6" />
+      <rect x="92" y="24" width="56" height="24" rx="4" fill="#8f78ff" opacity=".55" />
+      <rect x="92" y="56" width="56" height="24" rx="4" fill="#8f78ff" opacity=".55" />
+      <rect x="92" y="88" width="56" height="24" rx="4" fill="#8f78ff" opacity=".55" />
+      <circle cx="120" cy="100" r="15" fill="#2378c8" />
+      <text x="120" y="105" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">1</text>
+      <circle cx="176" cy="68" r="15" fill="#c79d24" />
+      <text x="176" y="73" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">2</text>
+      <path d="M176,68 L148,68" fill="none" stroke="#d14b3f" stroke-width="5" stroke-dasharray="8 7" />
+      <text x="18" y="132" font-size="12" fill="#627084">Later same-column pickups wait until deeper predecessor clears.</text>
+    </g>
+
+    <text x="40" y="255" font-size="18" font-weight="700">D. No-stop access nodes cannot become parking</text>
+    <text x="520" y="255" font-size="18" font-weight="700">E. Same-column exit blocker can retreat</text>
+
+    <g transform="translate(40 280)">
+      <rect x="0" y="0" width="400" height="110" fill="#fff" stroke="#d8e0ea" rx="8" />
+      <line x1="30" y1="52" x2="355" y2="52" stroke="#c79d24" stroke-width="5" opacity=".6" />
+      <circle cx="170" cy="52" r="17" fill="#d14b3f" />
+      <text x="170" y="58" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">N</text>
+      <path d="M188,52 L252,52 L282,76" fill="none" stroke="#2f9e6d" stroke-width="6" stroke-linecap="round" marker-end="url(#arrowGreen2)" />
+      <rect x="260" y="65" width="48" height="28" rx="4" fill="#8f78ff" opacity=".75" />
+      <text x="18" y="96" font-size="12" fill="#627084">Taskless vehicles are pushed into legal storage/aisle holds.</text>
+    </g>
+
+    <g transform="translate(520 280)">
+      <rect x="0" y="0" width="400" height="110" fill="#fff" stroke="#d8e0ea" rx="8" />
+      <line x1="110" y1="15" x2="110" y2="95" stroke="#c79d24" stroke-width="5" opacity=".6" />
+      <rect x="82" y="24" width="56" height="24" rx="4" fill="#8f78ff" opacity=".75" />
+      <rect x="82" y="58" width="56" height="24" rx="4" fill="#8f78ff" opacity=".75" />
+      <circle cx="110" cy="36" r="15" fill="#2378c8" />
+      <text x="110" y="41" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">E</text>
+      <circle cx="110" cy="70" r="15" fill="#c79d24" />
+      <text x="110" y="75" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">L</text>
+      <path d="M90,70 L48,70" fill="none" stroke="#2f9e6d" stroke-width="6" stroke-linecap="round" marker-end="url(#arrowGreen2)" />
+      <text x="150" y="44" font-size="12" fill="#627084">Loaded or empty followers may retreat one legal cell</text>
+      <text x="150" y="64" font-size="12" fill="#627084">to unblock the exiting shuttle.</text>
+    </g>
+  </svg>
+
+  <div class="legend">
+    <span class="key"><span class="swatch"></span>Waiting/blocked vehicle</span>
+    <span class="key"><span class="swatch gold"></span>Legal grid / loaded vehicle</span>
+    <span class="key"><span class="swatch red"></span>Conflicting target or no-stop hold</span>
+    <span class="key"><span class="swatch green"></span>New legal clearance action</span>
+  </div>
+
+  <div class="grid">
+    <section class="panel">
+      <h3>Root Logic Changes</h3>
+      <p><code>agent-refresh</code> now proactively clears reciprocal storage swaps, column-access/storage swaps, taskless no-stop waits, and same-column storage exit blockers.</p>
+      <p>Inbound pickup dispatch now waits when a deeper same-column predecessor has not physically reached its dropoff, preserving column-fill reachability.</p>
+      <p>After ChatGPT Pro review, local clearance routes also reject any route node that is already reserved by another shuttle within the route travel window. A legal hold must be claimable before a breaker starts.</p>
+    </section>
+    <section class="panel">
+      <h3>Performance Evidence</h3>
+      <div class="metric"><span>12h simulated time</span><strong>43200 s completed</strong></div>
+      <div class="metric"><span>Full core regression</span><strong>263 / 263 passed</strong></div>
+      <div class="metric"><span>Typecheck</span><strong>Passed</strong></div>
+      <div class="metric"><span>Completed inbound</span><strong>2706</strong></div>
+      <div class="metric"><span>Completed outbound</span><strong>2714</strong></div>
+      <div class="metric"><span>Total throughput</span><strong>451.7 PPH</strong></div>
+      <div class="metric"><span>Deadlocks / physical violations</span><strong>0 / 0</strong></div>
+      <div class="metric"><span>Worst observed wait</span><strong>18.0 s</strong></div>
+      <div class="metric"><span>5:30 / 6:07 repro probes</span><strong>No waiting vehicles</strong></div>
+    </section>
+  </div>
+
+  <svg class="diagram" viewBox="0 0 960 260" role="img" aria-label="ChatGPT Pro reservation atomicity follow-up diagram">
+    <defs>
+      <marker id="arrowGreen3" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M0,0 L0,6 L8,3 z" fill="#2f9e6d" />
+      </marker>
+    </defs>
+    <text x="40" y="36" font-size="18" font-weight="700">Pro Review Follow-up: Legal hold must be claimable before clearance starts</text>
+    <g transform="translate(40 64)">
+      <rect x="0" y="0" width="880" height="150" fill="#fff" stroke="#d8e0ea" rx="8" />
+      <line x1="55" y1="75" x2="770" y2="75" stroke="#c79d24" stroke-width="5" opacity=".55" />
+      <rect x="340" y="48" width="62" height="54" rx="6" fill="#8f78ff" opacity=".55" />
+      <rect x="488" y="48" width="62" height="54" rx="6" fill="#8f78ff" opacity=".55" />
+      <circle cx="130" cy="75" r="18" fill="#2378c8" />
+      <text x="130" y="81" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">A</text>
+      <circle cx="235" cy="75" r="18" fill="#d14b3f" />
+      <text x="235" y="81" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">S</text>
+      <path d="M150,75 L326,75" fill="none" stroke="#2f9e6d" stroke-width="6" stroke-linecap="round" marker-end="url(#arrowGreen3)" />
+      <line x1="332" y1="42" x2="410" y2="110" stroke="#d14b3f" stroke-width="5" />
+      <line x1="410" y1="42" x2="332" y2="110" stroke="#d14b3f" stroke-width="5" />
+      <path d="M250,112 C330,135 420,135 492,88" fill="none" stroke="#2f9e6d" stroke-width="6" stroke-linecap="round" marker-end="url(#arrowGreen3)" />
+      <text x="55" y="132" font-size="13" fill="#627084">If the first hold is reserved inside the clearance window, the breaker refuses it instead of sending a shuttle into the constrained access path.</text>
+    </g>
+  </svg>
+
+  <div class="grid">
+    <section class="panel">
+      <h3>Verification Commands</h3>
+      <p><code>corepack pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts --testNamePattern "mixed loaded-empty|reciprocal storage swap|empty same-column reciprocal|later inbound column tasks|column-access storage swaps|same-column queue yields|loaded same-column follower|taskless no-stop middle|column-entry blocker|middle-aisle swap|active fill column|no-parking access|adjacent-swap yield route"</code></p>
+      <p><code>corepack pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts</code></p>
+      <p><code>corepack pnpm run typecheck</code></p>
+      <p><code>corepack pnpm --filter shuttle-dashboard build</code></p>
+      <p>Headless 12h audit with 60s max-wait gate, deadlock-count gate, and physical-violation gate.</p>
+    </section>
+    <section class="panel">
+      <h3>Pro Review Notes</h3>
+      <p>
+        The external review agreed that preserving graph legality and reachability is the right direction.
+        It flagged three remaining risk classes before PPH work: reservation atomicity, lift/column process ownership, and fairness/starvation under skewed demand.
+      </p>
+    </section>
+    <section class="panel">
+      <h3>UI Verification</h3>
+      <p>
+        The 2D Debug tab now renders through the same lightweight canvas path as 2D Lite, with debug nodes and edges layered on top instead of using the older inverted heavy map.
+        Browser checks verified that the <code>Traffic</code> and <code>Physics</code> buttons enter active state and that the shuttle legend explains <code>Empty task</code>, <code>Loaded</code>, <code>Waiting</code>, and <code>Idle</code>.
+      </p>
+      <div class="metric"><span>2D Debug render path</span><strong>CanvasLite + debug overlay</strong></div>
+      <div class="metric"><span>Traffic / Physics controls</span><strong>Active-state verified</strong></div>
+      <div class="metric"><span>Dashboard build</span><strong>Passed</strong></div>
+    </section>
+    <section class="panel">
+      <h3>Known Tradeoff</h3>
+      <p>
+        The model is now stable in this audit, but the stricter same-column predecessor gating makes throughput conservative.
+        The next performance work should improve column/lift scheduling and reservation planning without weakening the hard reachability constraints.
+      </p>
+    </section>
+  </div>
+
+  <h2>2026-06-01: Live Browser 5:15 / 6:12 Gridlock Investigation</h2>
+  <div class="entry-meta">Runtime process audit · stale API restart · targeted live repro</div>
+
+  <div class="grid">
+    <section class="panel">
+      <h3>What Happened</h3>
+      <p>
+        The browser was still connected to an API process started around 3:00AM, before the latest gridlock fixes were loaded.
+        That stale process reached a real stuck state: <code>SH-03</code> and <code>SH-07</code> parked on the inbound pickup spines with <code>inbound-source-not-at-pickup</code>, while their source pallets were still in buffer slot 02.
+        The following shuttles then formed long wait chains behind them.
+      </p>
+    </section>
+    <section class="panel">
+      <h3>Why The Earlier Audit Missed It</h3>
+      <p>
+        The 12h audit used a fresh in-process SimCore instance from the current source tree.
+        The live browser was not using that instance; it was using the stale long-running API server.
+        The right lesson is that future validation must include a live API/browser run after server restart, not only a headless core run.
+      </p>
+    </section>
+  </div>
+
+  <svg class="diagram" viewBox="0 0 960 250" role="img" aria-label="Live stale API wait-chain diagram">
+    <text x="40" y="36" font-size="18" font-weight="700">Stale live process failure shape</text>
+    <g transform="translate(40 60)">
+      <rect x="0" y="0" width="880" height="145" fill="#fff" stroke="#d8e0ea" rx="8" />
+      <line x1="95" y1="70" x2="330" y2="70" stroke="#c79d24" stroke-width="5" opacity=".55" />
+      <line x1="535" y1="70" x2="770" y2="70" stroke="#c79d24" stroke-width="5" opacity=".55" />
+      <circle cx="155" cy="70" r="18" fill="#d14b3f" />
+      <text x="155" y="76" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">3</text>
+      <circle cx="105" cy="70" r="18" fill="#2378c8" />
+      <text x="105" y="76" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">1</text>
+      <circle cx="210" cy="70" r="18" fill="#2378c8" />
+      <text x="210" y="76" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">2</text>
+      <circle cx="595" cy="70" r="18" fill="#d14b3f" />
+      <text x="595" y="76" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">7</text>
+      <circle cx="545" cy="70" r="18" fill="#2378c8" />
+      <text x="545" y="76" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">5</text>
+      <circle cx="650" cy="70" r="18" fill="#2378c8" />
+      <text x="650" y="76" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">6</text>
+      <text x="92" y="118" font-size="13" fill="#627084">Old API: front inbound shuttle waits on pickup spine while source remains in buffer slot 02.</text>
+      <text x="535" y="118" font-size="13" fill="#627084">Current API after restart: 5:15 and 6:12 have no waiting vehicles.</text>
+    </g>
+  </svg>
+
+  <div class="grid">
+    <section class="panel">
+      <h3>Live Verification After Restart</h3>
+      <div class="metric"><span>API process</span><strong>Restarted from current source</strong></div>
+      <div class="metric"><span>5:15 live check</span><strong>0 waiting vehicles</strong></div>
+      <div class="metric"><span>6:12 live check</span><strong>0 waiting vehicles</strong></div>
+      <div class="metric"><span>Deadlocks / physical violations</span><strong>0 / 0</strong></div>
+    </section>
+    <section class="panel">
+      <h3>Regression Guard</h3>
+      <p>
+        The regression <code>keeps unready top-lift inbound work from parking on the pickup stop and gridlocking traffic</code> now advances the core in place and verifies the 420s state without repeatedly cloning every intermediate state.
+      </p>
+      <p><code>corepack pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts --testNamePattern "unready top-lift inbound work|moves a later same-lift task off the pickup point"</code></p>
+    </section>
+  </div>
+
+  <h2>2026-06-01: Separate Pickup Targets From Shuttle Labels</h2>
+  <div class="entry-meta">2D readability · pickup marker semantics · route overlay cleanup</div>
+
+  <div class="grid">
+    <section class="panel">
+      <h3>What The Circle Was</h3>
+      <p>
+        The round numbered marker near outbound-left storage was a dashboard pickup target marker, not a physical shuttle and not a waypoint where the shuttle should hover.
+        It used the assigned vehicle number, so it looked too much like a vehicle and obscured the real route line.
+      </p>
+    </section>
+    <section class="panel">
+      <h3>Display Change</h3>
+      <p>
+        Pickup targets now render as small <code>P#</code> labels offset from the track with a thin leader line back to the exact pickup node.
+        Shuttle bodies keep the direction arrow inside the square, while the shuttle number moves to a separate corner badge so the label and arrow do not overlap.
+      </p>
+    </section>
+  </div>
+
+  <svg class="diagram" viewBox="0 0 960 230" role="img" aria-label="Pickup marker display cleanup diagram">
+    <text x="40" y="36" font-size="18" font-weight="700">Before: marker looked like a hovering shuttle</text>
+    <text x="520" y="36" font-size="18" font-weight="700">After: target label is separate from shuttle</text>
+    <g transform="translate(40 62)">
+      <rect x="0" y="0" width="390" height="120" fill="#fff" stroke="#d8e0ea" rx="8" />
+      <line x1="45" y1="65" x2="330" y2="65" stroke="#c79d24" stroke-width="5" opacity=".55" />
+      <circle cx="180" cy="45" r="15" fill="#e2b84b" stroke="#fff" stroke-width="3" />
+      <text x="180" y="50" text-anchor="middle" font-size="12" font-weight="700" fill="#15120b">8</text>
+      <rect x="220" y="54" width="24" height="22" rx="4" fill="#1976d2" />
+      <path d="M240,65 L232,60 L232,70 z" fill="#e7f2ff" />
+      <text x="232" y="69" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">8</text>
+      <text x="40" y="100" font-size="13" fill="#627084">Numbered circle can be mistaken for the vehicle itself.</text>
+    </g>
+    <g transform="translate(520 62)">
+      <rect x="0" y="0" width="390" height="120" fill="#fff" stroke="#d8e0ea" rx="8" />
+      <line x1="45" y1="65" x2="330" y2="65" stroke="#c79d24" stroke-width="5" opacity=".55" />
+      <circle cx="180" cy="65" r="3" fill="#e2b84b" />
+      <line x1="180" y1="65" x2="207" y2="38" stroke="#e2b84b" stroke-width="2" opacity=".6" />
+      <rect x="207" y="30" width="34" height="18" rx="5" fill="#e2b84b" stroke="#fff" stroke-width="2" />
+      <text x="224" y="43" text-anchor="middle" font-size="11" font-weight="700" fill="#15120b">P8</text>
+      <rect x="260" y="54" width="24" height="22" rx="4" fill="#1976d2" />
+      <path d="M280,65 L272,60 L272,70 z" fill="#e7f2ff" />
+      <rect x="276" y="44" width="16" height="14" rx="4" fill="#111820" stroke="#fff" />
+      <text x="284" y="55" text-anchor="middle" font-size="9" font-weight="700" fill="#fff">8</text>
+      <text x="40" y="100" font-size="13" fill="#627084">P# is only a pickup target; vehicle id and direction arrow are visually separated.</text>
+    </g>
+  </svg>
+
+  <div class="grid">
+    <section class="panel">
+      <h3>Verification</h3>
+      <div class="metric"><span>Dashboard typecheck</span><strong>Passed</strong></div>
+      <div class="metric"><span>Dashboard build</span><strong>Passed</strong></div>
+      <div class="metric"><span>Built preview asset</span><strong>Includes Pickup target</strong></div>
+    </section>
+    <section class="panel">
+      <h3>Files Changed</h3>
+      <p><code>apps/shuttle-dashboard/src/App.tsx</code></p>
+      <p><code>apps/shuttle-dashboard/src/styles.css</code></p>
+      <p><code>docs/shuttle-gridlock-change-log.html</code></p>
+    </section>
+  </div>
+
+  <h2>2026-06-11: Keep Lift Dock Markers And Idle Standby Inside Feasible Grid</h2>
+  <div class="entry-meta">Top-lift physical tick · collision avoidance · visual dock projection</div>
+
+  <div class="grid">
+    <section class="panel">
+      <h3>What Changed</h3>
+      <p>
+        Lift pickup/dropoff markers now render on the nearest feasible yellow rail instead of falling back to the lift workcell body.
+        Taskless standby shuttles no longer choose storage bank entry rows as parking targets, so the first/last row next to a traffic aisle remains a flow-through throat rather than a waiting spot.
+      </p>
+    </section>
+    <section class="panel">
+      <h3>Why It Matters</h3>
+      <p>
+        The previous 9h39m gate failure parked an idle shuttle at <code>storage-r01-c28</code>, blocking a loaded inbound shuttle trying to reach <code>storage-r02-c28</code>.
+        A tempting lateral move from <code>storage-r01-c28</code> to <code>storage-r01-c27</code> was rejected because that edge does not exist in the physical graph.
+      </p>
+    </section>
+  </div>
+
+  <div class="grid">
+    <section class="panel">
+      <h3>Validation</h3>
+      <div class="metric"><span>Targeted sim-core tests</span><strong>Passed</strong></div>
+      <div class="metric"><span>Sim-core typecheck</span><strong>Passed</strong></div>
+      <div class="metric"><span>Dashboard typecheck</span><strong>Passed</strong></div>
+      <div class="metric"><span>10m lift visual audit</span><strong>0 anomalies</strong></div>
+      <div class="metric"><span>10h physical gate</span><strong>0 anomalies</strong></div>
+    </section>
+    <section class="panel">
+      <h3>Gate Comparison</h3>
+      <div class="metric"><span>Old 14337s c09 pickup/service tug</span><strong>Passed 14400s</strong></div>
+      <div class="metric"><span>Old 23616s c15 storage/access swap</span><strong>Passed 25200s</strong></div>
+      <div class="metric"><span>Old 34788s r01-c28 idle blocker</span><strong>Passed 36000s</strong></div>
+      <div class="metric"><span>Final 10h PPH</span><strong>509.1 total</strong></div>
+    </section>
+  </div>
+
+  <div class="grid">
+    <section class="panel">
+      <h3>Artifacts</h3>
+      <p><code>output/shuttle/lift-visual-10m-entry-standby-filter.json</code></p>
+      <p><code>output/shuttle/physical-10h-entry-standby-filter-gate.json</code></p>
+      <p><code>output/shuttle/physical-10h-entry-standby-filter-gate.trace.json</code></p>
+    </section>
+    <section class="panel">
+      <h3>Files Changed</h3>
+      <p><code>packages/shuttle-sim-core/src/index.ts</code></p>
+      <p><code>packages/shuttle-sim-core/src/index.test.ts</code></p>
+      <p><code>apps/shuttle-dashboard/src/App.tsx</code></p>
+      <p><code>apps/shuttle-dashboard/src/ShuttleScene3D.tsx</code></p>
+    </section>
+  </div>
+
+  <h2>2026-06-11: Storage/Middle Entry Yield And Loaded Outbound Pocket Reachability</h2>
+  <div class="entry-meta">Top-lift physical tick · yellow-grid-only yield routing · 3D visual check</div>
+
+  <div class="grid">
+    <section class="panel">
+      <h3>What Changed</h3>
+      <p>
+        Empty storage-exit shuttles that block loaded inbound column entry now yield to an adjacent legal storage pocket instead of forcing a middle-aisle faceoff.
+        Loaded outbound shuttles can no longer accept a temporary storage yield pocket unless that pocket can still reach the outbound dropoff through legal yellow-grid routes.
+      </p>
+    </section>
+    <section class="panel">
+      <h3>Why It Matters</h3>
+      <p>
+        The old 13106s gate failed with a three-vehicle ring at <code>storage-r08-c17</code>, <code>column-middle-c15</code>, and <code>column-middle-c16</code>.
+        A later 26524s gate failed when <code>SH-05</code> was stranded loaded at <code>storage-r06-c22</code> with no reachable route to <code>column-bottom-b-c20</code>.
+      </p>
+    </section>
+  </div>
+
+  <div class="grid">
+    <section class="panel">
+      <h3>Validation</h3>
+      <div class="metric"><span>Targeted sim-core tests</span><strong>Passed</strong></div>
+      <div class="metric"><span>Sim-core typecheck</span><strong>Passed</strong></div>
+      <div class="metric"><span>5h physical gate</span><strong>0 anomalies</strong></div>
+      <div class="metric"><span>8h physical gate</span><strong>0 anomalies</strong></div>
+      <div class="metric"><span>3D browser smoke</span><strong>No console errors</strong></div>
+    </section>
+    <section class="panel">
+      <h3>Gate Comparison</h3>
+      <div class="metric"><span>Old 13106s middle/storage ring</span><strong>Passed 14400s and 18000s</strong></div>
+      <div class="metric"><span>Old 15343s top-a hold issue</span><strong>Passed 18000s</strong></div>
+      <div class="metric"><span>Old 26524s SH-05 route-unavailable</span><strong>Passed 28800s</strong></div>
+      <div class="metric"><span>Final 8h PPH</span><strong>504.5 total</strong></div>
+    </section>
+  </div>
+
+  <div class="grid">
+    <section class="panel">
+      <h3>Artifacts</h3>
+      <p><code>output/shuttle/physical-5h-loaded-outbound-pocket-reachability-gate.json</code></p>
+      <p><code>output/shuttle/physical-8h-loaded-outbound-pocket-reachability-gate.json</code></p>
+      <p><code>output/shuttle/physical-8h-loaded-outbound-pocket-reachability-gate.trace.json</code></p>
+    </section>
+    <section class="panel">
+      <h3>Files Changed</h3>
+      <p><code>packages/shuttle-sim-core/src/index.ts</code></p>
+      <p><code>packages/shuttle-sim-core/src/index.test.ts</code></p>
+      <p><code>docs/shuttle-gridlock-change-log.html</code></p>
+    </section>
+  </div>
+</main>
+</body>
+</html>
