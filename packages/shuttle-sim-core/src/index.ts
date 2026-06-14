@@ -6378,7 +6378,7 @@ export class ShuttleSimCore {
     if (this.assignmentHoldActive(vehicle)) {
       return false;
     }
-    if (this.tasklessPlannedRouteActive(vehicle)) {
+    if (this.tasklessPlannedRouteActive(vehicle) && !this.tasklessRoutePreemptibleForQueuedWork(vehicle)) {
       return false;
     }
     return vehicle.state === 'idle' ||
@@ -6393,6 +6393,17 @@ export class ShuttleSimCore {
       !vehicle.taskId &&
       vehicle.plannedGoalNodeId !== null &&
       vehicle.plannedGoalNodeId !== vehicle.currentNodeId;
+  }
+
+  private tasklessRoutePreemptibleForQueuedWork(vehicle: MutableVehicle): boolean {
+    return this.topLiftColumnLayoutEnabled() &&
+      !vehicle.taskId &&
+      !vehicle.loaded &&
+      vehicle.currentEdgeId === null &&
+      vehicle.legRemainingM <= 0 &&
+      vehicle.phaseRemainingSec <= 0 &&
+      !this.assignmentHoldActive(vehicle) &&
+      this.queuedTasks().length > 0;
   }
 
   private assignmentHoldActive(vehicle: MutableVehicle): boolean {
@@ -6610,6 +6621,45 @@ export class ShuttleSimCore {
       (reservation) => reservation.vehicleId !== vehicle.id || reservation.reasonCode === 'zone-hold'
     );
     this.ensureZoneHoldReservation(vehicle, vehicle.currentNodeId);
+  }
+
+  private resetTasklessVehicleAtCurrentNode(vehicle: MutableVehicle): void {
+    this.clearTasklessRouteReservations(vehicle);
+    this.resetNavigationAtCurrentNode(vehicle);
+    vehicle.state = 'idle';
+    vehicle.waitReason = null;
+    vehicle.blockingReservationId = null;
+    vehicle.blockingVehicleId = null;
+    vehicle.waitingSinceSec = null;
+    vehicle.yieldHoldUntilSec = null;
+    vehicle.yieldHoldNodeId = null;
+    vehicle.assignmentHoldUntilSec = null;
+    vehicle.directionSwitchReadyNodeId = null;
+  }
+
+  private tryAssignQueuedTaskToVehicle(vehicle: MutableVehicle): boolean {
+    if (vehicle.taskId || vehicle.loaded || this.queuedTasks().length === 0) {
+      return false;
+    }
+
+    this.resetTasklessVehicleAtCurrentNode(vehicle);
+    if (!this.canAcceptQueuedTask(vehicle)) {
+      return false;
+    }
+
+    const availableVehicleIds = new Set([vehicle.id]);
+    for (const { task } of this.queuedTasksForAssignment()) {
+      if (this.queuedTaskAssignmentPriority(task) > 0 || this.taskAssignmentBlockReason(task)) {
+        continue;
+      }
+      const assignment = this.bestAvailableVehicleForTask(task, availableVehicleIds);
+      if (!assignment || assignment.vehicle.id !== vehicle.id) {
+        continue;
+      }
+      this.assignTaskToVehicle(vehicle, task, assignment.route);
+      return true;
+    }
+    return false;
   }
 
   private routeDistanceM(routeNodeIds: string[], stopAtNodeId?: string): number {
@@ -10603,6 +10653,9 @@ export class ShuttleSimCore {
         kind: task.kind
       });
       vehicle.taskId = null;
+      if (this.tryAssignQueuedTaskToVehicle(vehicle)) {
+        return;
+      }
       if (this.dispatchVehicleAfterOutboundDropoff(vehicle, task)) {
         return;
       }
