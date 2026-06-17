@@ -34,6 +34,9 @@ const longRunTraceSnapshotThresholdSec = Number(process.env.SHUTTLE_LONG_RUN_TRA
 const maxPhysicalRecordingFrames = Number(process.env.SHUTTLE_PHYSICAL_RECORDING_MAX_FRAMES ?? 7200);
 const physicalRecordingJobChunkFrames = Number(process.env.SHUTTLE_PHYSICAL_RECORDING_CHUNK_FRAMES ?? 10);
 const maxRetainedPhysicalRecordings = Number(process.env.SHUTTLE_PHYSICAL_RECORDING_RETAIN ?? 3);
+const reviewDefaultRegionCount = 2;
+const reviewDefaultShuttleCount = 8;
+const reviewDefaultInitialOutboundFullColumns = 4;
 
 type ReplayCommandRecordV1 = {
   sequence: number;
@@ -234,7 +237,23 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '4mb' }));
 
-let sim = new ShuttleSimCore(createInboundOutboundDemoScenario());
+function createReviewDefaultScenario(): ReturnType<ShuttleSimCore['getScenario']> {
+  return createInboundOutboundDemoScenario({
+    name: `Inbound + Outbound ${reviewDefaultShuttleCount} Shuttle Column Review`,
+    vehicles: {
+      count: reviewDefaultShuttleCount
+    },
+    taskGeneration: {
+      initialOutboundFullColumns: reviewDefaultInitialOutboundFullColumns
+    },
+    layoutProfile: {
+      layoutKind: 'top-lift-column',
+      liftPairCount: reviewDefaultRegionCount
+    }
+  });
+}
+
+let sim = new ShuttleSimCore(createReviewDefaultScenario());
 const clients = new Set<WebSocket>();
 let lastEventSequence = -1;
 let lastStreamBroadcastMs = 0;
@@ -292,6 +311,7 @@ function createInboundSetupScenario(regionCount: number, shuttleCount: number, i
   const current = sim.getScenario();
   return createInboundOutboundDemoScenario({
     seed: current.seed,
+    name: `Inbound + Outbound ${shuttleCount} Shuttle Column Review`,
     durationSec: current.durationSec,
     timeStepSec: current.timeStepSec,
     vehicles: {

@@ -35,6 +35,7 @@ const shuttleCount = integerArg('--shuttles', 8);
 const inboundRatePerHour = numberArg('--inbound-pph', 3600);
 const outboundRatePerHour = numberArg('--outbound-pph', 3600);
 const initialOutboundFullColumns = integerArg('--outbound-full-columns', 4);
+const initialStorageFillPolicy = enumArg('--initial-fill-policy', ['full-columns', 'zone-balanced-50'] as const, 'full-columns');
 const outputPath = resolve(stringArg('--out') ?? `output/shuttle/lift-visual-audit-${Date.now()}.json`);
 const maxAnomalies = integerArg('--max-anomalies', 200);
 const stopOnCritical = process.argv.includes('--stop-on-critical');
@@ -51,6 +52,7 @@ const scenario = createInboundOutboundDemoScenario({
     inboundOutboundMix: inboundRatePerHour + outboundRatePerHour > 0
       ? inboundRatePerHour / (inboundRatePerHour + outboundRatePerHour)
       : 0.5,
+    initialStorageFillPolicy,
     initialOutboundFullColumns
   },
   layoutProfile: {
@@ -822,6 +824,11 @@ function numberArg(name: string, fallback: number): number {
 
 function integerArg(name: string, fallback: number): number {
   return Math.floor(numberArg(name, fallback));
+}
+
+function enumArg<const T extends readonly string[]>(name: string, values: T, fallback: T[number]): T[number] {
+  const value = valueAfter(name);
+  return values.includes(value ?? '') ? value as T[number] : fallback;
 }
 
 function stringArg(name: string): string | null {

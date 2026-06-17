@@ -80,6 +80,7 @@ export const TaskGenerationSchema = z.object({
   inboundOutboundMix: z.number().min(0).max(1).default(0.5),
   arrivalDistribution: z.enum(['deterministic', 'seeded-exponential']).default('deterministic'),
   maxTasks: z.number().int().positive().default(200),
+  initialStorageFillPolicy: z.enum(['full-columns', 'zone-balanced-50']).default('full-columns'),
   initialOutboundFullColumns: z.number().int().nonnegative().default(0)
 });
 
@@ -455,7 +456,9 @@ export const VehicleUtilizationBreakdownSchema = z.object({
   handling: z.number().min(0).max(1),
   waiting: z.number().min(0).max(1),
   idle: z.number().min(0).max(1),
-  tasklessTravel: z.number().min(0).max(1)
+  tasklessTravel: z.number().min(0).max(1),
+  queueReserveTravel: z.number().min(0).max(1).default(0),
+  wasteReposition: z.number().min(0).max(1).default(0)
 });
 
 export const LiftPphSnapshotSchema = z.object({

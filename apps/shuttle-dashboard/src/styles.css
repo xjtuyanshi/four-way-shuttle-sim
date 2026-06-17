@@ -1303,7 +1303,7 @@ input[type="range"] {
 
 .kpi-strip {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -1325,6 +1325,12 @@ input[type="range"] {
 .metric strong {
   font-size: 26px;
   line-height: 1;
+}
+
+.metric small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.25;
 }
 
 .capacity-panel {
@@ -1459,6 +1465,11 @@ input[type="range"] {
   stroke: var(--amber);
 }
 
+.pph-line.demand-outbound {
+  stroke: var(--cyan);
+  stroke-dasharray: 3 2;
+}
+
 .chart-grid-line {
   stroke: rgba(118, 137, 158, 0.18);
   stroke-width: 0.45;
@@ -1486,6 +1497,7 @@ input[type="range"] {
 
 .pph-legend {
   display: flex;
+  flex-wrap: wrap;
   gap: 14px;
   color: var(--muted);
   font-size: 12px;
@@ -1511,6 +1523,10 @@ input[type="range"] {
 
 .pph-legend .outbound {
   color: var(--amber);
+}
+
+.pph-legend .demand-outbound {
+  color: var(--cyan);
 }
 
 .lift-pph-grid {
@@ -1589,6 +1605,10 @@ input[type="range"] {
   color: var(--amber);
 }
 
+.vehicle-time-legend .queue-reserve {
+  color: #55d6be;
+}
+
 .vehicle-time-legend .taskless {
   color: #b58cff;
 }
@@ -1649,6 +1669,10 @@ input[type="range"] {
 
 .vehicle-time-segment.waiting {
   background: var(--amber);
+}
+
+.vehicle-time-segment.queue-reserve {
+  background: #55d6be;
 }
 
 .vehicle-time-segment.taskless {

@@ -31,6 +31,8 @@ type PhysicalSample = {
   averageBusyPct: number;
   averageProductivePct: number;
   averageTasklessTravelPct: number;
+  averageQueueReserveTravelPct: number;
+  averageWasteRepositionPct: number;
   averageWaitingPct: number;
   averageIdlePct: number;
   deadlocks: number;
@@ -370,6 +372,8 @@ function createSample(state: ShuttleSimState): PhysicalSample {
     averageBusyPct: round(average(breakdowns.map((breakdown) => breakdown.busy)) * 100, 3),
     averageProductivePct: round(average(breakdowns.map((breakdown) => breakdown.productive)) * 100, 3),
     averageTasklessTravelPct: round(average(breakdowns.map((breakdown) => breakdown.tasklessTravel)) * 100, 3),
+    averageQueueReserveTravelPct: round(average(breakdowns.map((breakdown) => breakdown.queueReserveTravel ?? 0)) * 100, 3),
+    averageWasteRepositionPct: round(average(breakdowns.map((breakdown) => breakdown.wasteReposition ?? breakdown.tasklessTravel)) * 100, 3),
     averageWaitingPct: round(average(breakdowns.map((breakdown) => breakdown.waiting)) * 100, 3),
     averageIdlePct: round(average(breakdowns.map((breakdown) => breakdown.idle)) * 100, 3),
     deadlocks: state.kpis.deadlockCount,

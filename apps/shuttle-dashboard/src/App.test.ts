@@ -10,6 +10,7 @@ import {
   shouldResetAfterParamUpdate,
   shouldResumeAfterParamUpdate,
   shouldInterpolateLiveVehicles,
+  summarizeOutboundDemandMix,
   summarizeScenarioSetup,
   summarizeResourceUtilization,
   vehicleCanInterpolateVisual,
@@ -155,6 +156,28 @@ describe('dashboard stream reducers', () => {
     expect(next?.simTimeSec).toBe(22);
     expect(next?.kpis.totalPph).toBe(120);
     expect(next?.kpis.reservationConflictCount).toBe(4);
+  });
+});
+
+describe('dashboard outbound demand mix', () => {
+  it('separates seeded outbound sweep from demand outbound throughput', () => {
+    const mix = summarizeOutboundDemandMix(kpis({
+      completedOutbound: 131,
+      completedSeededOutbound: 126,
+      completedDemandOutbound: 5,
+      demandOutboundPph: 15,
+      demandTotalPph: 135
+    }));
+
+    expect(mix).toMatchObject({
+      totalCompletedOutbound: 131,
+      seededOutboundCount: 126,
+      demandOutboundCount: 5,
+      demandOutboundPph: 15,
+      demandTotalPph: 135
+    });
+    expect(mix.seededSharePct).toBeCloseTo(96.183, 3);
+    expect(mix.demandSharePct).toBeCloseTo(3.817, 3);
   });
 });
 
@@ -445,8 +468,8 @@ describe('dashboard resource utilization', () => {
           'SH-02': 0.25
         },
         vehicleUtilizationBreakdown: {
-          'SH-01': { busy: 0.75, productive: 0.6, moving: 0.55, handling: 0.05, waiting: 0.1, idle: 0.25, tasklessTravel: 0 },
-          'SH-02': { busy: 0.25, productive: 0.05, moving: 0.1, handling: 0, waiting: 0.15, idle: 0.75, tasklessTravel: 0.05 }
+          'SH-01': { busy: 0.75, productive: 0.6, moving: 0.55, handling: 0.05, waiting: 0.1, idle: 0.25, tasklessTravel: 0, queueReserveTravel: 0, wasteReposition: 0 },
+          'SH-02': { busy: 0.25, productive: 0.05, moving: 0.1, handling: 0, waiting: 0.15, idle: 0.75, tasklessTravel: 0.05, queueReserveTravel: 0.03, wasteReposition: 0.02 }
         }
       })
     }));
@@ -467,7 +490,9 @@ describe('dashboard resource utilization', () => {
       averageProductivePct: 32.5,
       averageWaitingPct: 12.5,
       averageIdlePct: 50,
-      averageTasklessTravelPct: 2.5
+      averageTasklessTravelPct: 2.5,
+      averageQueueReserveTravelPct: 1.5,
+      averageWasteRepositionPct: 1
     });
     expect(summary.lifts).toMatchObject({
       total: 2,

@@ -171,6 +171,8 @@ type PphHistorySample = {
   simTimeSec: number;
   inboundPph: number;
   outboundPph: number;
+  demandOutboundPph: number;
+  demandTotalPph: number;
   totalPph: number;
   liftPph: Record<string, number>;
 };
@@ -364,6 +366,8 @@ type ResourceUtilizationSummary = {
     averageWaitingPct: number;
     averageIdlePct: number;
     averageTasklessTravelPct: number;
+    averageQueueReserveTravelPct: number;
+    averageWasteRepositionPct: number;
   };
   lifts: {
     total: number;
@@ -652,6 +656,8 @@ function createPphHistorySample(simTimeSec: number, kpis: KpiSnapshot): PphHisto
     simTimeSec,
     inboundPph: displayInboundPph(kpis),
     outboundPph,
+    demandOutboundPph: kpis.demandOutboundPph,
+    demandTotalPph: kpis.demandTotalPph,
     totalPph: displayTotalPph(kpis),
     liftPph: Object.fromEntries(Object.entries(kpis.liftPph ?? {}).map(([nodeId, value]) => [nodeId, value.pph]))
   };
@@ -667,6 +673,40 @@ function displayOutboundPph(kpis: KpiSnapshot): number {
 
 function displayTotalPph(kpis: KpiSnapshot): number {
   return kpis.pphWindowSec > 0 ? kpis.windowTotalPph : kpis.totalPph;
+}
+
+export function summarizeOutboundDemandMix(kpis: KpiSnapshot | null): {
+  totalCompletedOutbound: number;
+  seededOutboundCount: number;
+  demandOutboundCount: number;
+  seededSharePct: number;
+  demandSharePct: number;
+  demandOutboundPph: number;
+  demandTotalPph: number;
+} {
+  if (!kpis) {
+    return {
+      totalCompletedOutbound: 0,
+      seededOutboundCount: 0,
+      demandOutboundCount: 0,
+      seededSharePct: 0,
+      demandSharePct: 0,
+      demandOutboundPph: 0,
+      demandTotalPph: 0
+    };
+  }
+  const seededOutboundCount = kpis.completedSeededOutbound;
+  const demandOutboundCount = kpis.completedDemandOutbound;
+  const totalCompletedOutbound = Math.max(kpis.completedOutbound, seededOutboundCount + demandOutboundCount);
+  return {
+    totalCompletedOutbound,
+    seededOutboundCount,
+    demandOutboundCount,
+    seededSharePct: percent(seededOutboundCount, totalCompletedOutbound),
+    demandSharePct: percent(demandOutboundCount, totalCompletedOutbound),
+    demandOutboundPph: kpis.demandOutboundPph,
+    demandTotalPph: kpis.demandTotalPph
+  };
 }
 
 function appendPphHistorySample(previous: PphHistorySample[], sample: PphHistorySample): PphHistorySample[] {
@@ -1254,7 +1294,9 @@ export function summarizeResourceUtilization(
       averageProductivePct: average(vehicleBreakdowns.map((breakdown) => breakdown?.productive ?? 0)) * 100,
       averageWaitingPct: average(vehicleBreakdowns.map((breakdown) => breakdown?.waiting ?? 0)) * 100,
       averageIdlePct: average(vehicleBreakdowns.map((breakdown) => breakdown?.idle ?? 0)) * 100,
-      averageTasklessTravelPct: average(vehicleBreakdowns.map((breakdown) => breakdown?.tasklessTravel ?? 0)) * 100
+      averageTasklessTravelPct: average(vehicleBreakdowns.map((breakdown) => breakdown?.tasklessTravel ?? 0)) * 100,
+      averageQueueReserveTravelPct: average(vehicleBreakdowns.map((breakdown) => breakdown?.queueReserveTravel ?? 0)) * 100,
+      averageWasteRepositionPct: average(vehicleBreakdowns.map((breakdown) => breakdown?.wasteReposition ?? breakdown?.tasklessTravel ?? 0)) * 100
     },
     lifts: {
       total: liftPorts.length,
@@ -1282,28 +1324,51 @@ function KpiStrip({ scenario, kpis }: { scenario: ShuttleScenario | null; kpis: 
   const requestedTotalPph = scenario
     ? scenario.taskGeneration.inboundRatePerHour + scenario.taskGeneration.outboundRatePerHour
     : null;
-  const seedNote = kpis && kpis.completedSeededOutbound > 0
-    ? `${formatNumber(kpis.pphWindowSec, 0)}s rolling; ${kpis.completedSeededOutbound} seeded out raw`
+  const outboundMix = summarizeOutboundDemandMix(kpis);
+  const pphWindowNote = kpis && kpis.pphWindowSec > 0
+    ? `${formatNumber(kpis.pphWindowSec, 0)}s rolling`
+    : null;
+  const outboundMixNote = kpis
+    ? `${formatNumber(outboundMix.seededOutboundCount, 0)} seed sweep, ${formatNumber(outboundMix.demandOutboundCount, 0)} demand`
     : null;
   const items = [
-    ['Achieved total PPH', kpis ? formatNumber(displayTotalPph(kpis), 1) : '--'],
-    ['Achieved inbound PPH', kpis ? formatNumber(displayInboundPph(kpis), 1) : '--'],
-    ['Achieved outbound PPH', kpis ? formatNumber(displayOutboundPph(kpis), 1) : '--'],
-    ['Requested total PPH', requestedTotalPph !== null ? formatNumber(requestedTotalPph, 0) : '--'],
-    ['Active / queued', kpis ? `${kpis.activeTasks} / ${kpis.queuedTasks}` : '--'],
-    ['Task assign wait', kpis ? `${formatNumber(kpis.averageTaskWaitSec, 1)}s` : '--'],
-    ['Util / traffic hold', kpis ? `${formatNumber(averageUtilizationPct, 1)}% / ${formatNumber(averageWaitingPct, 1)}%` : '--'],
-    ['Deadlocks', kpis ? String(kpis.deadlockCount) : '--']
+    { label: 'Achieved total PPH', value: kpis ? formatNumber(displayTotalPph(kpis), 1) : '--', detail: pphWindowNote },
+    { label: 'Achieved inbound PPH', value: kpis ? formatNumber(displayInboundPph(kpis), 1) : '--', detail: pphWindowNote },
+    { label: 'Achieved outbound PPH', value: kpis ? formatNumber(displayOutboundPph(kpis), 1) : '--', detail: outboundMixNote },
+    {
+      label: 'Demand outbound PPH',
+      value: kpis ? formatNumber(outboundMix.demandOutboundPph, 1) : '--',
+      detail: kpis ? `${formatNumber(outboundMix.demandOutboundCount, 0)} demand moves, excludes seed sweep` : null
+    },
+    {
+      label: 'Seeded outbound',
+      value: kpis ? formatNumber(outboundMix.seededOutboundCount, 0) : '--',
+      detail: kpis && outboundMix.totalCompletedOutbound > 0
+        ? `${formatNumber(outboundMix.seededSharePct, 0)}% of completed outbound`
+        : null
+    },
+    {
+      label: 'Requested total PPH',
+      value: requestedTotalPph !== null ? formatNumber(requestedTotalPph, 0) : '--',
+      detail: 'inbound + outbound task pressure'
+    },
+    { label: 'Active / queued', value: kpis ? `${kpis.activeTasks} / ${kpis.queuedTasks}` : '--', detail: null },
+    { label: 'Task assign wait', value: kpis ? `${formatNumber(kpis.averageTaskWaitSec, 1)}s` : '--', detail: null },
+    {
+      label: 'Util / traffic hold',
+      value: kpis ? `${formatNumber(averageUtilizationPct, 1)}% / ${formatNumber(averageWaitingPct, 1)}%` : '--',
+      detail: null
+    },
+    { label: 'Deadlocks', value: kpis ? String(kpis.deadlockCount) : '--', detail: null }
   ];
 
   return (
     <section className="kpi-strip" aria-label="KPI summary">
-      {items.map(([label, value]) => (
-        <div className="metric" key={label}>
-          <span>{label}</span>
-          <strong>{value}</strong>
-          {label === 'Achieved outbound PPH' && seedNote ? <small>{seedNote}</small> : null}
-          {label === 'Requested total PPH' ? <small>inbound + outbound task pressure</small> : null}
+      {items.map((item) => (
+        <div className="metric" key={item.label}>
+          <span>{item.label}</span>
+          <strong>{item.value}</strong>
+          {item.detail ? <small>{item.detail}</small> : null}
         </div>
       ))}
     </section>
@@ -1403,7 +1468,7 @@ function ResourceUtilizationPanel({ scenario, state }: { scenario: ShuttleScenar
     {
       label: 'Shuttle idle/standby',
       value: `${formatNumber(summary.shuttles.averageIdlePct, 1)}%`,
-      detail: `taskless travel ${formatNumber(summary.shuttles.averageTasklessTravelPct, 1)}%, peak busy ${formatNumber(summary.shuttles.peakUtilizationPct, 1)}%`
+      detail: `queue reserve ${formatNumber(summary.shuttles.averageQueueReserveTravelPct, 1)}%, other reposition ${formatNumber(summary.shuttles.averageWasteRepositionPct, 1)}%, peak busy ${formatNumber(summary.shuttles.peakUtilizationPct, 1)}%`
     },
     {
       label: 'Lift approach slots',
@@ -1496,11 +1561,12 @@ function PphSparkline({ history, liftId, kind }: { history: PphHistorySample[]; 
 function PphTrendChart({ history }: { history: PphHistorySample[] }) {
   const maxPph = niceAxisCeil(Math.max(
     1,
-    ...history.flatMap((sample) => [sample.totalPph, sample.inboundPph, sample.outboundPph])
+    ...history.flatMap((sample) => [sample.totalPph, sample.inboundPph, sample.outboundPph, sample.demandOutboundPph])
   ));
   const totalPoints = pphTrendPoints(history, (sample) => sample.totalPph, maxPph);
   const inboundPoints = pphTrendPoints(history, (sample) => sample.inboundPph, maxPph);
   const outboundPoints = pphTrendPoints(history, (sample) => sample.outboundPph, maxPph);
+  const demandOutboundPoints = pphTrendPoints(history, (sample) => sample.demandOutboundPph, maxPph);
   const latest = history.at(-1);
   const yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => ({
     value: maxPph * ratio,
@@ -1527,6 +1593,7 @@ function PphTrendChart({ history }: { history: PphHistorySample[] }) {
         <polyline className="pph-line total" points={totalPoints} />
         <polyline className="pph-line inbound" points={inboundPoints} />
         <polyline className="pph-line outbound" points={outboundPoints} />
+        <polyline className="pph-line demand-outbound" points={demandOutboundPoints} />
         <text className="chart-axis-label x-axis" x="14" y="60">
           {history[0] ? formatClock(history[0].simTimeSec) : '--'}
         </text>
@@ -1538,6 +1605,7 @@ function PphTrendChart({ history }: { history: PphHistorySample[] }) {
         <span className="total">Total {latest ? formatNumber(latest.totalPph, 1) : '--'}</span>
         <span className="inbound">Inbound {latest ? formatNumber(latest.inboundPph, 1) : '--'}</span>
         <span className="outbound">Outbound {latest ? formatNumber(latest.outboundPph, 1) : '--'}</span>
+        <span className="demand-outbound">Demand out {latest ? formatNumber(latest.demandOutboundPph, 1) : '--'}</span>
       </div>
     </section>
   );
@@ -1555,19 +1623,24 @@ function VehicleTimeStackedBarChart({
     { key: 'productiveMoving', label: 'Moving', className: 'moving' },
     { key: 'handling', label: 'Lift/handle', className: 'handling' },
     { key: 'waiting', label: 'Traffic wait', className: 'waiting' },
-    { key: 'tasklessTravel', label: 'Reposition', className: 'taskless' },
+    { key: 'queueReserveTravel', label: 'Queue reserve', className: 'queue-reserve' },
+    { key: 'wasteReposition', label: 'Other reposition', className: 'taskless' },
     { key: 'idle', label: 'Idle', className: 'idle' }
   ] as const;
   const rows = vehicles.map((vehicle) => {
     const breakdown = breakdownByVehicle[vehicle.id];
-    const productiveMoving = breakdown ? Math.max(0, breakdown.moving - breakdown.tasklessTravel) : 0;
+    const tasklessTravel = breakdown?.tasklessTravel ?? 0;
+    const queueReserveTravel = breakdown?.queueReserveTravel ?? 0;
+    const wasteReposition = breakdown?.wasteReposition ?? Math.max(0, tasklessTravel - queueReserveTravel);
+    const productiveMoving = breakdown ? Math.max(0, breakdown.moving - tasklessTravel) : 0;
     return {
       vehicle,
       values: {
         productiveMoving,
         handling: breakdown?.handling ?? 0,
         waiting: breakdown?.waiting ?? 0,
-        tasklessTravel: breakdown?.tasklessTravel ?? 0,
+        queueReserveTravel,
+        wasteReposition,
         idle: breakdown?.idle ?? 0
       }
     };
