@@ -22869,6 +22869,98 @@ describe('shuttle phase 0 SimCore', () => {
     expect(block).toEqual({ reason: 'inbound-column-entry-occupied', blockingVehicleId: 'SH-02' });
   });
 
+  it('ignores stale local-route node claims after a vehicle has switched to a different active route', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 4,
+        initialOutboundFullColumns: 0
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    const internals = sim as unknown as {
+      vehicles: Array<Record<string, unknown>>;
+      localRouteNodeClaimBlocker(nodeId: string, vehicleId: string): string | null;
+    };
+    const claimant = internals.vehicles.find((vehicle) => vehicle.id === 'SH-02')!;
+    Object.assign(claimant, {
+      state: 'moving-to-pickup',
+      currentNodeId: 'storage-r08-c05',
+      targetNodeId: 'column-middle-c05',
+      routeNodeIds: ['storage-r08-c05', 'column-middle-c05'],
+      plannedRouteNodeIds: ['storage-r08-c05', 'column-middle-c05', 'column-middle-c06'],
+      localRouteNodeIds: ['storage-r08-c05', 'column-top-a-c10'],
+      localRouteReason: 'temporary-yield',
+      yieldHoldUntilSec: null,
+      yieldHoldNodeId: null
+    });
+
+    expect(internals.localRouteNodeClaimBlocker('column-top-a-c10', 'SH-06')).toBeNull();
+
+    Object.assign(claimant, {
+      routeNodeIds: ['storage-r08-c05', 'column-top-a-c10'],
+      targetNodeId: 'column-top-a-c10'
+    });
+
+    expect(internals.localRouteNodeClaimBlocker('column-top-a-c10', 'SH-06')).toBe('SH-02');
+  });
+
+  it('does not let blocked waiters reserve clearance pockets by target or planned goal', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 4,
+        initialOutboundFullColumns: 0
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    const internals = sim as unknown as {
+      vehicles: Array<Record<string, unknown>>;
+      topLiftAccessClearanceNodeClaimedByOtherVehicle(blocker: unknown, nodeId: string): boolean;
+    };
+    const blocker = internals.vehicles.find((vehicle) => vehicle.id === 'SH-05')!;
+    const waiter = internals.vehicles.find((vehicle) => vehicle.id === 'SH-07')!;
+    Object.assign(waiter, {
+      state: 'waiting-blocked',
+      currentNodeId: 'column-middle-c06',
+      targetNodeId: 'column-middle-c05',
+      plannedGoalNodeId: 'column-middle-c05',
+      routeNodeIds: ['column-middle-c06', 'column-middle-c05'],
+      plannedRouteNodeIds: ['column-middle-c06', 'column-middle-c05'],
+      localRouteNodeIds: [],
+      localRouteReason: null,
+      waitReason: 'inbound-column-entry-occupied',
+      blockingVehicleId: 'SH-02'
+    });
+
+    expect(internals.topLiftAccessClearanceNodeClaimedByOtherVehicle(blocker, 'column-middle-c05')).toBe(false);
+    expect(internals.topLiftAccessClearanceNodeClaimedByOtherVehicle(blocker, 'column-middle-c06')).toBe(true);
+  });
+
   it('does not reapply a turn delay to an already-started lift-corner clearance move', () => {
     const scenario = createInboundOutboundDemoScenario({
       layoutProfile: {
