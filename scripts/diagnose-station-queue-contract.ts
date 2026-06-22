@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
-import type { ShuttleSimState, VehicleState } from '@four-way-shuttle/schemas';
+import type { ShuttleSimState, TaskStateRecord, VehicleState } from '@four-way-shuttle/schemas';
 
 import {
   ShuttleSimCore,
@@ -17,6 +17,8 @@ type InternalSim = ShuttleSimCore & {
   tasklessInboundQueueStandbyRouteOriginAllowed(routeNodeIds: string[]): boolean;
   topLiftInboundQueueStandbyTargetNodeId(vehicle: VehicleState): string | null;
   topLiftInboundApproachQueueSlot(nodeId: string): { liftNodeId: string; slotIndex: number } | null;
+  taskLiftPortNodeId(task: TaskStateRecord): string | null;
+  topLiftInboundVehicleContributesQueueCoverage(vehicle: VehicleState, liftNodeId: string): boolean;
 };
 
 type CandidateRecord = {
@@ -26,6 +28,11 @@ type CandidateRecord = {
   targetNodeId: string | null;
   plannedGoalNodeId: string | null;
   localRouteReason: string | null;
+  taskId: string | null;
+  taskKind: string | null;
+  taskState: string | null;
+  taskLiftNodeId: string | null;
+  contributesInboundQueueCoverage: boolean | null;
   routeLength: number | null;
   routeEndNodeId: string | null;
   routeEndSlot: string | null;
@@ -117,7 +124,8 @@ writeFileSync(outputPath, `${JSON.stringify(report, null, 2)}\n`);
 console.log(JSON.stringify({ outputPath, summary }, null, 2));
 
 function sampleState(state: ShuttleSimState): Sample {
-  const candidates = state.vehicles.map((vehicle) => diagnoseCandidate(vehicle));
+  const tasksById = new Map(state.tasks.map((task) => [task.id, task]));
+  const candidates = state.vehicles.map((vehicle) => diagnoseCandidate(vehicle, tasksById));
   const candidateReasons = countBy(candidates, (candidate) => candidate.reason);
   return {
     timeSec: round(state.simTimeSec),
@@ -127,42 +135,52 @@ function sampleState(state: ShuttleSimState): Sample {
   };
 }
 
-function diagnoseCandidate(vehicle: VehicleState): CandidateRecord {
+function diagnoseCandidate(vehicle: VehicleState, tasksById: Map<string, TaskStateRecord>): CandidateRecord {
   if (vehicle.taskId) {
-    return candidate(vehicle, 'busy-task', null);
+    return candidate(vehicle, 'busy-task', null, tasksById);
   }
   if (vehicle.loaded) {
-    return candidate(vehicle, 'busy-loaded', null);
+    return candidate(vehicle, 'busy-loaded', null, tasksById);
   }
   if (vehicle.currentEdgeId || vehicle.legRemainingM > 0 || vehicle.phaseRemainingSec > 0) {
-    return candidate(vehicle, 'busy-moving', null);
+    return candidate(vehicle, 'busy-moving', null, tasksById);
   }
   if (internals.assignmentHoldActive(vehicle)) {
-    return candidate(vehicle, 'assignment-hold', null);
+    return candidate(vehicle, 'assignment-hold', null, tasksById);
   }
   if (internals.inboundDropoffStandbyHoldActive(vehicle)) {
-    return candidate(vehicle, 'inbound-dropoff-standby-hold', null);
+    return candidate(vehicle, 'inbound-dropoff-standby-hold', null, tasksById);
   }
   if (!internals.tasklessInboundQueueStandbyRerouteAllowed(vehicle)) {
-    return candidate(vehicle, 'standby-reroute-not-allowed', null);
+    return candidate(vehicle, 'standby-reroute-not-allowed', null, tasksById);
   }
   const targetNodeId = internals.topLiftInboundQueueStandbyTargetNodeId(vehicle);
   if (!targetNodeId) {
-    return candidate(vehicle, 'no-station-target', null);
+    return candidate(vehicle, 'no-station-target', null, tasksById);
   }
   const route = internals.routeToInboundQueueStandby(vehicle);
   if (!route || route.length <= 1) {
-    return candidate(vehicle, 'no-standby-route', route);
+    return candidate(vehicle, 'no-standby-route', route, tasksById);
   }
   if (!internals.tasklessInboundQueueStandbyRouteOriginAllowed(route)) {
-    return candidate(vehicle, 'route-origin-disallowed', route);
+    return candidate(vehicle, 'route-origin-disallowed', route, tasksById);
   }
-  return candidate(vehicle, 'dispatchable-reserve', route);
+  return candidate(vehicle, 'dispatchable-reserve', route, tasksById);
 }
 
-function candidate(vehicle: VehicleState, reason: string, route: string[] | null): CandidateRecord {
+function candidate(
+  vehicle: VehicleState,
+  reason: string,
+  route: string[] | null,
+  tasksById: Map<string, TaskStateRecord>
+): CandidateRecord {
   const routeEndNodeId = route?.at(-1) ?? null;
   const routeEndSlot = routeEndNodeId ? internals.topLiftInboundApproachQueueSlot(routeEndNodeId) : null;
+  const task = vehicle.taskId ? tasksById.get(vehicle.taskId) ?? null : null;
+  const taskLiftNodeId = task ? internals.taskLiftPortNodeId(task) : null;
+  const contributesInboundQueueCoverage = task?.kind === 'inbound' && taskLiftNodeId
+    ? internals.topLiftInboundVehicleContributesQueueCoverage(vehicle, taskLiftNodeId)
+    : null;
   return {
     vehicleId: vehicle.id,
     reason,
@@ -170,6 +188,11 @@ function candidate(vehicle: VehicleState, reason: string, route: string[] | null
     targetNodeId: vehicle.targetNodeId,
     plannedGoalNodeId: vehicle.plannedGoalNodeId,
     localRouteReason: vehicle.localRouteReason,
+    taskId: vehicle.taskId,
+    taskKind: task?.kind ?? null,
+    taskState: task?.state ?? null,
+    taskLiftNodeId,
+    contributesInboundQueueCoverage,
     routeLength: route?.length ?? null,
     routeEndNodeId,
     routeEndSlot: routeEndSlot ? `${routeEndSlot.liftNodeId}:s${routeEndSlot.slotIndex}` : null

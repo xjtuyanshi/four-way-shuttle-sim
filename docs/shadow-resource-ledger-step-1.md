@@ -1158,3 +1158,44 @@ Observed split-metric signal:
   - `lift-02-inbound`: average ready demand `2.541`, average active assignment queue lease `0.656`, average physical queue slot lease `0.180`, average soft standby reserve `0.049`.
 - There are repeated samples where ready demand is `3-4` while `nearCoveredDepth=0`, `tasklessStandbySoftReserveCount=0`, and `physicalQueueSlotLeaseCount=0`.
 - This supports a different next source cut: station admission should pull a near-field AMR earlier when ready demand is high, rather than making existing standby leases harder.
+
+## Rejected Source Cut: Queue Target Depth 3
+
+Date: 2026-06-22
+
+Experiment:
+
+- Changed `topLiftInboundQueueReplenishTargetDepth()` from `min(2, queueDepth)` to `min(3, queueDepth)`.
+- Hypothesis: ready demand often reaches `3-4` while near coverage is `0`, so protecting a third queue slot might pull one more near-field AMR before outbound consumes the fleet.
+
+Diagnostic enhancement:
+
+- Extended `scripts/diagnose-station-queue-contract.ts` so each candidate vehicle records:
+  - task id / kind / state,
+  - task lift port,
+  - whether an inbound busy vehicle contributes queue coverage.
+- Baseline 600s busy-task breakdown from `output/review/station-coverage-gap-task-breakdown-600s.json`:
+  - outbound busy tasks: `234`
+  - inbound busy but not queue-covered: `88`
+  - inbound busy and queue-covered: `66`
+
+Validation:
+
+```bash
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --sample-sec 10 --dt-sec 0.2 --out output/review/station-target-depth-3-diagnosis-600s.json
+./node_modules/.bin/tsx scripts/run-physical-24h-amr-audit.ts --hours 0.5 --out output/review/station-target-depth-3-0p5h-audit.json --checkpoint-dir output/review/station-target-depth-3-0p5h-checkpoints --audit-every-sec 30 --quiet-critical
+```
+
+Results:
+
+- 600s station diagnosis:
+  - total PPH `522`, inbound `180`, duplicate route lease `0`, physical violations `0`.
+- 30m physical audit:
+  - total PPH `510`, inbound `178`, outbound `332`.
+  - AMR anomalies `0`, critical anomalies `0`.
+
+Decision:
+
+- Rejected and reverted.
+- The higher queue target improved apparent total throughput only by letting outbound dominate; inbound got materially worse versus the accepted 30m baseline (`508 / 200 / 308`).
+- The next source cut should not increase reserve target depth globally. It should classify outbound assignment pressure when station ready demand is uncovered, and only defer outbound work when the same vehicle can become near-field inbound coverage without a long detour.
