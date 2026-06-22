@@ -22,6 +22,10 @@ const warningAnomalies = anomalies.filter((item) => item.severity === 'warn');
 const durationHours = data.finalSimTimeSec / 3600;
 const speed = data.finalSimTimeSec / Math.max(1, data.wallClockMs / 1000);
 const lastHourly = hourlyRows.at(-1) ?? {};
+const shadowLedger = data.shadowLedger ?? {};
+const finalShadowLedger = shadowLedger.final ?? data.traffic?.shadowLedger ?? {};
+const maxShadowCounts = shadowLedger.maxInvariantCounts ?? finalShadowLedger.invariantCounts ?? {};
+const maxShadowTotal = Number(maxShadowCounts.total ?? finalShadowLedger.invariantCounts?.total ?? 0);
 
 const payload = {
   generatedAt: new Date().toISOString(),
@@ -60,6 +64,7 @@ const html = `<!doctype html>
   <li><b class="${criticalAnomalies.length === 0 ? 'pass' : 'risk'}">24h run ${htmlEscape(data.status)} at ${round(durationHours, 1)}h.</b> Final total PPH ${round(data.pph.total, 3)}, inbound ${round(data.pph.inbound, 3)}, outbound ${round(data.pph.outbound, 3)}; headless speed ${round(speed, 1)}x real time.</li>
   <li><b class="${criticalAnomalies.length === 0 ? 'pass' : 'risk'}">AMR critical stuck signals: ${criticalAnomalies.length}.</b> The audit found ${warningAnomalies.length} warning anomalies and ${flaggedWindows.length} flagged 10-minute AMR windows.</li>
   <li><b class="${data.traffic.physicalViolations === 0 ? 'pass' : 'risk'}">Physical safety counters:</b> deadlock=${data.traffic.deadlocks}, livelock=${data.traffic.livelocks}, physicalViolation=${data.traffic.physicalViolations}, min separation ${round(data.traffic.minVehicleSeparationM ?? 0, 3)}m.</li>
+  <li><b class="${maxShadowTotal === 0 ? 'pass' : 'warn'}">Shadow resource ledger:</b> max invariant violations ${formatInt(maxShadowTotal)}, samples with violations ${formatInt(shadowLedger.samplesWithViolations ?? 0)} / ${formatInt(shadowLedger.samples ?? 0)}. This is diagnostic only and does not change vehicle behavior.</li>
   <li><b class="warn">新增矩阵：</b>每台 AMR 每 10 分钟完成任务数。持续 0 completion 不自动等于异常，但如果同时出现高 loopiness / 小 bbox / blocked，它就是强证据。</li>
 </ul>
 </div>
@@ -116,6 +121,37 @@ const html = `<!doctype html>
 </section>
 
 <section>
+<h2>Shadow Resource Ledger</h2>
+<p><b>这部分是系统级资源审计，不参与控制。</b> 它把 node occupancy、reservation、target/planned/local route claim 临时汇总成一张影子 ledger，用来观察 stale claim、hidden hold、blocked waiter future claim、FIFO/column 冲突是否随时间增长。</p>
+<div id="shadow-ledger-hourly" class="chart"></div>
+<div id="shadow-hotspots" class="chart"></div>
+<div class="two">
+  <div class="card">
+    <h3>Max Invariant Counts</h3>
+    <div class="table-wrap"><table class="small-table"><thead><tr><th>Invariant</th><th>Max count</th></tr></thead><tbody>${shadowCountRowsHtml()}</tbody></table></div>
+  </div>
+  <div class="card">
+    <h3>Duplicate Source Patterns</h3>
+    <div class="table-wrap"><table class="small-table"><thead><tr><th>Source Pattern</th><th>Samples</th></tr></thead><tbody>${shadowSourcePatternRowsHtml()}</tbody></table></div>
+  </div>
+</div>
+<div class="two">
+  <div class="card">
+    <h3>Top Duplicate Resources</h3>
+    <div class="table-wrap"><table class="small-table"><thead><tr><th>Resource</th><th>Samples</th><th>First</th><th>Last</th><th>Example</th></tr></thead><tbody>${shadowHotspotRowsHtml(shadowLedger.topDuplicateResources ?? [], 'resource')}</tbody></table></div>
+  </div>
+  <div class="card">
+    <h3>Top Duplicate Vehicle Pairs</h3>
+    <div class="table-wrap"><table class="small-table"><thead><tr><th>Vehicle Pair</th><th>Samples</th><th>First</th><th>Last</th><th>Example</th></tr></thead><tbody>${shadowHotspotRowsHtml(shadowLedger.topDuplicateVehiclePairs ?? [], 'pair')}</tbody></table></div>
+  </div>
+</div>
+<div class="card">
+  <h3>Sample Violations</h3>
+  <div class="table-wrap"><table class="small-table"><thead><tr><th>Time</th><th>Code</th><th>Severity</th><th>Vehicle</th><th>Resource</th><th>Detail</th></tr></thead><tbody>${shadowViolationRowsHtml()}</tbody></table></div>
+</div>
+</section>
+
+<section>
 <h2>AMR Summary Table</h2>
 <div class="table-wrap">
 <table><thead><tr><th>AMR</th><th>Path m</th><th>Completed</th><th>Moving h</th><th>Idle h</th><th>Blocked h</th><th>Flagged windows</th><th>Critical</th><th>Max loopiness</th><th>Max confined run</th><th>Top wait reason</th></tr></thead><tbody>${amrSummaryRows()}</tbody></table>
@@ -125,7 +161,7 @@ const html = `<!doctype html>
 <section>
 <h2>Hourly PPH Table</h2>
 <div class="table-wrap">
-<table><thead><tr><th>Hour</th><th>Hour In</th><th>Hour Out</th><th>Hour Total</th><th>Cum In PPH</th><th>Cum Out PPH</th><th>Cum Total PPH</th><th>Waiting</th><th>Blocked</th><th>Physical</th></tr></thead><tbody>${hourlyRowsHtml()}</tbody></table>
+<table><thead><tr><th>Hour</th><th>Hour In</th><th>Hour Out</th><th>Hour Total</th><th>Cum In PPH</th><th>Cum Out PPH</th><th>Cum Total PPH</th><th>Queued</th><th>Waiting</th><th>Blocked</th><th>Physical</th><th>Shadow</th><th>Top Hourly Blocked Reason</th><th>Task Wait Reasons</th></tr></thead><tbody>${hourlyRowsHtml()}</tbody></table>
 </div>
 </section>
 
@@ -183,6 +219,8 @@ const html = `<!doctype html>
   const windowIndexes = Array.from(new Set(windows.map((row) => row.windowIndex))).sort((a, b) => a - b);
   const windowLabels = windowIndexes.map((index) => 'H' + (index / 6).toFixed(index % 6 === 0 ? 0 : 1));
   const byKey = new Map(windows.map((row) => [row.vehicleId + '|' + row.windowIndex, row]));
+  const topDuplicateResources = data.shadowLedger?.topDuplicateResources || [];
+  const topDuplicateVehiclePairs = data.shadowLedger?.topDuplicateVehiclePairs || [];
   const darkLayout = {
     paper_bgcolor: '#101821',
     plot_bgcolor: '#101821',
@@ -356,6 +394,41 @@ const html = `<!doctype html>
     xaxis: { ...darkLayout.xaxis, title: 'Count' },
     yaxis: { ...darkLayout.yaxis, automargin: true }
   }, config);
+
+  Plotly.newPlot('shadow-ledger-hourly', [
+    { type: 'scatter', mode: 'lines+markers', name: 'Total shadow violations', x: hourly.map((row) => 'H' + row.hour), y: hourly.map((row) => row.shadowLedgerViolations || 0), line: { color: '#f5c451', width: 3 } },
+    { type: 'scatter', mode: 'lines+markers', name: 'Duplicate resource owners', x: hourly.map((row) => 'H' + row.hour), y: hourly.map((row) => row.shadowLedgerDuplicateResourceOwners || 0), line: { color: '#ff7b72', width: 2 } },
+    { type: 'scatter', mode: 'lines+markers', name: 'Blocked waiter future claims', x: hourly.map((row) => 'H' + row.hour), y: hourly.map((row) => row.shadowLedgerBlockedWaiterFutureClaims || 0), line: { color: '#8ab4ff', width: 2 } }
+  ], {
+    ...darkLayout,
+    title: { text: 'Shadow ledger invariant counts by hour', x: 0.02 },
+    xaxis: { ...darkLayout.xaxis, title: 'Hour' },
+    yaxis: { ...darkLayout.yaxis, title: 'Count', rangemode: 'tozero' }
+  }, config);
+
+  const duplicateHotspots = [
+    ...topDuplicateResources.slice(0, 10).map((row) => ({ ...row, kind: 'Resource', label: 'R ' + row.key })),
+    ...topDuplicateVehiclePairs.slice(0, 10).map((row) => ({ ...row, kind: 'Pair', label: 'P ' + row.key }))
+  ].sort((left, right) => left.samples - right.samples);
+  Plotly.newPlot('shadow-hotspots', [{
+    type: 'bar',
+    orientation: 'h',
+    x: duplicateHotspots.map((row) => row.samples),
+    y: duplicateHotspots.map((row) => row.label),
+    text: duplicateHotspots.map((row) => [
+      row.kind + ': ' + row.key,
+      'samples=' + row.samples,
+      'first=H' + (row.firstSec / 3600).toFixed(2) + ' last=H' + (row.lastSec / 3600).toFixed(2),
+      row.example?.detail || ''
+    ].join('<br>')),
+    hovertemplate: '%{text}<extra></extra>',
+    marker: { color: duplicateHotspots.map((row) => row.kind === 'Resource' ? '#ff7b72' : '#8ab4ff') }
+  }], {
+    ...darkLayout,
+    title: { text: 'Top duplicate claim hotspots', x: 0.02 },
+    xaxis: { ...darkLayout.xaxis, title: 'Samples' },
+    yaxis: { ...darkLayout.yaxis, automargin: true }
+  }, config);
 })();
 </script>
 </main></body></html>`;
@@ -406,10 +479,71 @@ function hourlyRowsHtml() {
     <td>${round(row.inboundPph, 3)}</td>
     <td>${round(row.outboundPph, 3)}</td>
     <td>${round(row.totalPph, 3)}</td>
+    <td>${formatInt(row.queuedTasks)}</td>
     <td>${formatInt(row.waitingVehicles)}</td>
     <td>${formatInt(row.blockedVehicles)}</td>
     <td>${formatInt(row.physicalViolations)}</td>
+    <td>${formatInt(row.shadowLedgerViolations)}</td>
+    <td>${formatReasonList(row.hourlyBlockedReasons, 'sec')}</td>
+    <td>${formatReasonList(row.taskWaitReasons, 'count')}</td>
   </tr>`).join('\n');
+}
+
+function formatReasonList(rows, valueKey) {
+  const source = Array.isArray(rows) ? rows : [];
+  return source.slice(0, 3).map((row) => {
+    const value = valueKey === 'sec' ? formatSec(row.sec) : formatInt(row.count);
+    return `${htmlEscape(row.reason ?? '-')} (${value})`;
+  }).join('<br>') || '-';
+}
+
+function shadowCountRowsHtml() {
+  const rows = Object.entries(maxShadowCounts)
+    .filter(([key]) => key !== 'total')
+    .sort((left, right) => Number(right[1] ?? 0) - Number(left[1] ?? 0) || left[0].localeCompare(right[0]));
+  return rows.map(([key, value]) => `<tr>
+    <td>${htmlEscape(key)}</td>
+    <td>${formatInt(value)}</td>
+  </tr>`).join('\n') || '<tr><td colspan="2">No shadow ledger counts available.</td></tr>';
+}
+
+function shadowViolationRowsHtml() {
+  const rows = shadowLedger.sampleViolations ?? [];
+  return rows.slice(0, 50).map((row) => `<tr>
+    <td>${formatWindow(row.timeSec ?? 0)}</td>
+    <td>${htmlEscape(row.code ?? '-')}</td>
+    <td>${htmlEscape(row.severity ?? '-')}</td>
+    <td>${htmlEscape(row.vehicleId ?? '-')}</td>
+    <td>${htmlEscape(row.resourceKey ?? '-')}</td>
+    <td style="white-space:normal;text-align:left">${htmlEscape(row.detail ?? '-')}</td>
+  </tr>`).join('\n') || '<tr><td colspan="6">No sampled shadow ledger violations.</td></tr>';
+}
+
+function shadowSourcePatternRowsHtml() {
+  const rows = shadowLedger.topDuplicateSourcePatterns ?? [];
+  return rows.slice(0, 20).map((row) => `<tr>
+    <td style="white-space:normal;text-align:left">${htmlEscape(row.pattern ?? '-')}</td>
+    <td>${formatInt(row.samples)}</td>
+  </tr>`).join('\n') || '<tr><td colspan="2">No duplicate source patterns.</td></tr>';
+}
+
+function shadowHotspotRowsHtml(rows, kind) {
+  return rows.slice(0, 20).map((row) => `<tr>
+    <td style="white-space:normal;text-align:left">${htmlEscape(row.key ?? '-')}</td>
+    <td>${formatInt(row.samples)}</td>
+    <td>${formatWindow(row.firstSec ?? 0)}</td>
+    <td>${formatWindow(row.lastSec ?? 0)}</td>
+    <td style="white-space:normal;text-align:left">${htmlEscape(shadowHotspotExample(row, kind))}</td>
+  </tr>`).join('\n') || '<tr><td colspan="5">No duplicate hotspots.</td></tr>';
+}
+
+function shadowHotspotExample(row, kind) {
+  const example = row.example ?? {};
+  const vehicle = example.vehicleId ? `vehicle=${example.vehicleId}` : '';
+  const other = example.otherVehicleId ? ` other=${example.otherVehicleId}` : '';
+  const resource = example.resourceKey ? ` resource=${example.resourceKey}` : '';
+  const prefix = kind === 'pair' ? `${vehicle}${other}` : resource;
+  return `${prefix} ${example.detail ?? ''}`.trim();
 }
 
 function flaggedRowsHtml() {

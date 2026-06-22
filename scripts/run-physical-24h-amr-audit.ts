@@ -25,13 +25,21 @@ type HourlyPphRow = {
   windowInboundPph: number;
   windowOutboundPph: number;
   windowTotalPph: number;
+  activeTasks: number;
+  queuedTasks: number;
   waitingVehicles: number;
   blockedVehicles: number;
   idleVehicles: number;
   physicalViolations: number;
   deadlocks: number;
   livelocks: number;
+  shadowLedgerViolations: number;
+  shadowLedgerDuplicateResourceOwners: number;
+  shadowLedgerBlockedWaiterFutureClaims: number;
   topBlockedReasons: Array<{ reason: string; sec: number }>;
+  hourlyBlockedReasons: Array<{ reason: string; sec: number }>;
+  taskStates: Array<{ state: string; count: number }>;
+  taskWaitReasons: Array<{ reason: string; count: number }>;
 };
 
 type VehicleWindowRow = {
@@ -101,6 +109,17 @@ type AmrAnomaly = {
   code: string;
   detail: string;
   metrics?: Record<string, number | string | boolean | null>;
+};
+
+type ShadowLedgerDiagnostics = ShuttleSimState['traffic']['shadowLedger'];
+type ShadowLedgerInvariantCounts = ShadowLedgerDiagnostics['invariantCounts'];
+type ShadowLedgerViolation = ShadowLedgerDiagnostics['violations'][number];
+type ShadowLedgerHotspot = {
+  key: string;
+  samples: number;
+  firstSec: number;
+  lastSec: number;
+  example: ShadowLedgerViolation & { timeSec: number };
 };
 
 type VehicleWindowAccumulator = {
@@ -220,6 +239,7 @@ let nextHourlySec = hourlySec;
 let lastFinalizedTenMinuteSec = 0;
 let previousHourInbound = 0;
 let previousHourOutbound = 0;
+let previousHourBlockedByReasonSec = new Map<string, number>();
 let lastAuditSec = 0;
 let lastDeadlocks = 0;
 let lastLivelocks = 0;
@@ -227,6 +247,15 @@ let lastPhysicalViolationCount = 0;
 let physicalViolationFirstSec: number | null = null;
 let physicalViolationSessions = 0;
 let inPhysicalViolation = false;
+let shadowLedgerSamples = 0;
+let shadowLedgerSamplesWithViolations = 0;
+let shadowLedgerFirstViolationSec: number | null = null;
+const shadowLedgerMaxInvariantCounts: Partial<Record<keyof ShadowLedgerInvariantCounts, number>> = {};
+const shadowLedgerViolationCodeCounts = new Map<string, number>();
+const shadowLedgerViolationSamples = new Map<string, ShadowLedgerViolation & { timeSec: number }>();
+const shadowLedgerDuplicateResourceCounts = new Map<string, ShadowLedgerHotspot>();
+const shadowLedgerDuplicatePairCounts = new Map<string, ShadowLedgerHotspot>();
+const shadowLedgerDuplicateSourcePatternCounts = new Map<string, number>();
 
 sim.start();
 const initialState = sim.getState();
@@ -305,6 +334,7 @@ if (hourlyPph.at(-1)?.timeSec !== finalState.simTimeSec && finalState.simTimeSec
 }
 recordCheckpoint(finalState, finalState.simTimeSec);
 
+const finalWaitingByVehicleId = waitingMapForState(finalState);
 const result = {
   schemaVersion: 'shuttle.amrAudit24h.v1',
   scenarioId: scenario.id,
@@ -355,12 +385,13 @@ const result = {
     physicalViolationFirstSec,
     physicalViolationSessions
   },
+  shadowLedger: summarizeShadowLedger(finalState),
   hourlyPph,
   tenMinuteWindows,
   amrSummary: summarizeVehicles(),
   anomalies,
   finalWaitingVehicles: finalState.traffic.waitingVehicles,
-  finalVehicles: finalState.vehicles.map(compactVehicle),
+  finalVehicles: finalState.vehicles.map((vehicle) => compactVehicle(vehicle, finalState.simTimeSec, finalWaitingByVehicleId)),
   checkpointDir,
   checkpoints,
   methodology: {
@@ -390,7 +421,17 @@ if (result.anomalies.some((anomaly) => anomaly.severity === 'critical')) {
 
 function auditState(state: ShuttleSimState, dtSec: number): void {
   if (state.kpis.deadlockCount > lastDeadlocks) {
-    addAnomaly(state.simTimeSec, null, null, 'critical', 'deadlock-count-increased', `${lastDeadlocks} -> ${state.kpis.deadlockCount}`);
+    const deadlockCandidateIds = state.traffic.deadlockCandidateVehicleIds ?? [];
+    const maxCurrentWaitSec = maxCurrentWaitingSec(state);
+    const severity = maxCurrentWaitSec >= thresholds.longWaitSec ? 'critical' : 'watch';
+    addAnomaly(
+      state.simTimeSec,
+      null,
+      null,
+      severity,
+      'deadlock-count-increased',
+      `${lastDeadlocks} -> ${state.kpis.deadlockCount}; activeCandidates=${deadlockCandidateIds.join(',') || 'none'}; maxCurrentWaitSec=${round(maxCurrentWaitSec, 3)}`
+    );
     lastDeadlocks = state.kpis.deadlockCount;
   }
   if (state.kpis.livelockCount > lastLivelocks) {
@@ -418,9 +459,85 @@ function auditState(state: ShuttleSimState, dtSec: number): void {
   if (state.status === 'error') {
     addAnomaly(state.simTimeSec, null, null, 'critical', 'simulation-error', state.error ?? 'unknown error');
   }
+  auditShadowLedger(state);
   for (const vehicle of state.vehicles) {
     updateVehicleWindow(state, vehicle as VehicleRuntimeState, dtSec);
   }
+}
+
+function maxCurrentWaitingSec(state: ShuttleSimState): number {
+  return Math.max(
+    0,
+    ...state.traffic.waitingVehicles.map((vehicle) =>
+      vehicle.waitingSinceSec === null ? 0 : Math.max(0, state.simTimeSec - vehicle.waitingSinceSec)
+    )
+  );
+}
+
+function auditShadowLedger(state: ShuttleSimState): void {
+  const ledger = state.traffic.shadowLedger;
+  shadowLedgerSamples += 1;
+  if (ledger.invariantCounts.total > 0) {
+    shadowLedgerSamplesWithViolations += 1;
+    shadowLedgerFirstViolationSec ??= state.simTimeSec;
+  }
+  for (const [key, value] of Object.entries(ledger.invariantCounts) as Array<[keyof ShadowLedgerInvariantCounts, number]>) {
+    shadowLedgerMaxInvariantCounts[key] = Math.max(shadowLedgerMaxInvariantCounts[key] ?? 0, value);
+  }
+  for (const violation of ledger.violations) {
+    shadowLedgerViolationCodeCounts.set(violation.code, (shadowLedgerViolationCodeCounts.get(violation.code) ?? 0) + 1);
+    const sampleKey = `${violation.code}|${violation.resourceKey ?? 'none'}|${violation.vehicleId ?? 'none'}|${violation.otherVehicleId ?? 'none'}`;
+    if (!shadowLedgerViolationSamples.has(sampleKey) && shadowLedgerViolationSamples.size < 50) {
+      shadowLedgerViolationSamples.set(sampleKey, { ...violation, timeSec: round(state.simTimeSec) });
+    }
+    if (violation.code === 'duplicate-resource-owner') {
+      recordShadowLedgerHotspot(
+        shadowLedgerDuplicateResourceCounts,
+        violation.resourceKey ?? 'none',
+        violation,
+        state.simTimeSec
+      );
+      recordShadowLedgerHotspot(
+        shadowLedgerDuplicatePairCounts,
+        `${violation.vehicleId ?? 'none'}+${violation.otherVehicleId ?? 'none'}`,
+        violation,
+        state.simTimeSec
+      );
+      const sourcePattern = shadowLedgerDuplicateSourcePattern(violation.detail);
+      shadowLedgerDuplicateSourcePatternCounts.set(
+        sourcePattern,
+        (shadowLedgerDuplicateSourcePatternCounts.get(sourcePattern) ?? 0) + 1
+      );
+    }
+  }
+}
+
+function recordShadowLedgerHotspot(
+  map: Map<string, ShadowLedgerHotspot>,
+  key: string,
+  violation: ShadowLedgerViolation,
+  timeSec: number
+): void {
+  const roundedTimeSec = round(timeSec);
+  const existing = map.get(key);
+  if (!existing) {
+    map.set(key, {
+      key,
+      samples: 1,
+      firstSec: roundedTimeSec,
+      lastSec: roundedTimeSec,
+      example: { ...violation, timeSec: roundedTimeSec }
+    });
+    return;
+  }
+  existing.samples += 1;
+  existing.firstSec = Math.min(existing.firstSec, roundedTimeSec);
+  existing.lastSec = Math.max(existing.lastSec, roundedTimeSec);
+}
+
+function shadowLedgerDuplicateSourcePattern(detail: string): string {
+  const match = detail.match(/\bvia\s+(.+)\.$/);
+  return match?.[1] ?? 'unknown';
 }
 
 function updateVehicleWindow(state: ShuttleSimState, vehicle: VehicleRuntimeState, dtSec: number): void {
@@ -688,26 +805,36 @@ function recordHourly(state: ShuttleSimState): void {
     windowInboundPph: round(state.kpis.windowInboundPph, 3),
     windowOutboundPph: round(state.kpis.windowOutboundPph, 3),
     windowTotalPph: round(state.kpis.windowTotalPph, 3),
+    activeTasks: state.kpis.activeTasks,
+    queuedTasks: state.kpis.queuedTasks,
     waitingVehicles: state.traffic.waitingVehicles.length,
     blockedVehicles: state.vehicles.filter((vehicle) => vehicle.state === 'waiting-blocked').length,
     idleVehicles: state.vehicles.filter((vehicle) => vehicle.state === 'idle').length,
     physicalViolations: state.traffic.physicalViolationCount,
     deadlocks: state.kpis.deadlockCount,
     livelocks: state.kpis.livelockCount,
-    topBlockedReasons: topBlockedReasons(state)
+    shadowLedgerViolations: state.traffic.shadowLedger.invariantCounts.total,
+    shadowLedgerDuplicateResourceOwners: state.traffic.shadowLedger.invariantCounts.duplicateResourceOwner,
+    shadowLedgerBlockedWaiterFutureClaims: state.traffic.shadowLedger.invariantCounts.blockedWaiterFutureClaim,
+    topBlockedReasons: topBlockedReasons(state),
+    hourlyBlockedReasons: hourlyBlockedReasonDeltas(state),
+    taskStates: taskStateCounts(state),
+    taskWaitReasons: taskWaitReasonCounts(state)
   });
   previousHourInbound = completedInbound;
   previousHourOutbound = completedOutbound;
+  previousHourBlockedByReasonSec = new Map(Object.entries(state.kpis.blockedTimeByReasonSec));
 }
 
 function recordCheckpoint(state: ShuttleSimState, timeSec: number): void {
   const checkpointPath = resolve(checkpointDir, `${String(checkpoints.length).padStart(4, '0')}-${Math.round(timeSec)}s.json`);
+  const waitingByVehicleId = waitingMapForState(state);
   const compact = {
     timeSec: round(state.simTimeSec),
     status: state.status,
     kpis: state.kpis,
     traffic: state.traffic,
-    vehicles: state.vehicles.map(compactVehicle),
+    vehicles: state.vehicles.map((vehicle) => compactVehicle(vehicle, state.simTimeSec, waitingByVehicleId)),
     tasks: state.tasks
       .filter((task) => task.state !== 'completed')
       .map((task) => ({
@@ -722,6 +849,10 @@ function recordCheckpoint(state: ShuttleSimState, timeSec: number): void {
   };
   writeFileSync(checkpointPath, `${JSON.stringify(compact, null, 2)}\n`);
   checkpoints.push({ timeSec: round(state.simTimeSec), path: checkpointPath });
+}
+
+function waitingMapForState(state: ShuttleSimState): Map<string, ShuttleSimState['traffic']['waitingVehicles'][number]> {
+  return new Map(state.traffic.waitingVehicles.map((waiting) => [waiting.vehicleId, waiting]));
 }
 
 function primeWindowAccumulators(state: ShuttleSimState, startSec: number): void {
@@ -791,10 +922,49 @@ function progressSample(state: ShuttleSimState) {
     totalPph: round(state.kpis.totalPph, 3),
     waitingVehicles: state.traffic.waitingVehicles.length,
     blockedVehicles: state.vehicles.filter((vehicle) => vehicle.state === 'waiting-blocked').length,
+    shadowLedgerViolations: state.traffic.shadowLedger.invariantCounts.total,
     newRiskWindows: recentRows.filter((row) => row.riskCodes.length > 0).length,
     maxLoopiness: round(Math.max(0, ...recentRows.map((row) => row.loopinessIndex)), 3),
     anomalies: anomalies.length
   };
+}
+
+function summarizeShadowLedger(finalState: ShuttleSimState) {
+  return {
+    final: finalState.traffic.shadowLedger,
+    samples: shadowLedgerSamples,
+    samplesWithViolations: shadowLedgerSamplesWithViolations,
+    firstViolationSec: shadowLedgerFirstViolationSec,
+    maxInvariantCounts: Object.fromEntries(
+      Object.entries(shadowLedgerMaxInvariantCounts)
+        .sort(([left], [right]) => left.localeCompare(right))
+    ),
+    topViolationCodes: [...shadowLedgerViolationCodeCounts.entries()]
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+      .slice(0, 12)
+      .map(([code, samples]) => ({ code, samples })),
+    topDuplicateResources: topShadowLedgerHotspots(shadowLedgerDuplicateResourceCounts, 20),
+    topDuplicateVehiclePairs: topShadowLedgerHotspots(shadowLedgerDuplicatePairCounts, 20),
+    topDuplicateSourcePatterns: [...shadowLedgerDuplicateSourcePatternCounts.entries()]
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+      .slice(0, 20)
+      .map(([pattern, samples]) => ({ pattern, samples })),
+    sampleViolations: [...shadowLedgerViolationSamples.values()]
+      .sort((left, right) => left.timeSec - right.timeSec || left.code.localeCompare(right.code))
+  };
+}
+
+function topShadowLedgerHotspots(map: Map<string, ShadowLedgerHotspot>, limit: number) {
+  return [...map.values()]
+    .sort((left, right) => right.samples - left.samples || left.key.localeCompare(right.key))
+    .slice(0, limit)
+    .map((hotspot) => ({
+      key: hotspot.key,
+      samples: hotspot.samples,
+      firstSec: hotspot.firstSec,
+      lastSec: hotspot.lastSec,
+      example: hotspot.example
+    }));
 }
 
 function topBlockedReasons(state: ShuttleSimState): Array<{ reason: string; sec: number }> {
@@ -804,8 +974,54 @@ function topBlockedReasons(state: ShuttleSimState): Array<{ reason: string; sec:
     .map(([reason, sec]) => ({ reason, sec: round(sec, 3) }));
 }
 
-function compactVehicle(vehicle: VehicleState) {
+function hourlyBlockedReasonDeltas(state: ShuttleSimState): Array<{ reason: string; sec: number }> {
+  const current = state.kpis.blockedTimeByReasonSec;
+  const reasons = new Set([...Object.keys(current), ...previousHourBlockedByReasonSec.keys()]);
+  return [...reasons]
+    .map((reason) => ({
+      reason,
+      sec: round((current[reason] ?? 0) - (previousHourBlockedByReasonSec.get(reason) ?? 0), 3)
+    }))
+    .filter((row) => row.sec > 1e-9)
+    .sort((left, right) => right.sec - left.sec || left.reason.localeCompare(right.reason))
+    .slice(0, 12);
+}
+
+function taskStateCounts(state: ShuttleSimState): Array<{ state: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const task of state.tasks) {
+    if (task.state === 'completed' || task.state === 'failed') {
+      continue;
+    }
+    counts.set(task.state, (counts.get(task.state) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((left, right) => left[0].localeCompare(right[0]))
+    .map(([stateName, count]) => ({ state: stateName, count }));
+}
+
+function taskWaitReasonCounts(state: ShuttleSimState): Array<{ reason: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const task of state.tasks) {
+    if (task.state === 'completed' || task.state === 'failed' || !task.waitReason) {
+      continue;
+    }
+    counts.set(task.waitReason, (counts.get(task.waitReason) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, 12)
+    .map(([reason, count]) => ({ reason, count }));
+}
+
+function compactVehicle(
+  vehicle: VehicleState,
+  simTimeSec: number,
+  waitingByVehicleId: Map<string, ShuttleSimState['traffic']['waitingVehicles'][number]>
+) {
   const runtime = vehicle as VehicleRuntimeState;
+  const waiting = waitingByVehicleId.get(vehicle.id) ?? null;
+  const waitingSinceSec = runtime.waitingSinceSec ?? waiting?.waitingSinceSec ?? null;
   return {
     id: vehicle.id,
     state: vehicle.state,
@@ -813,13 +1029,23 @@ function compactVehicle(vehicle: VehicleState) {
     taskId: vehicle.taskId,
     currentNodeId: vehicle.currentNodeId,
     targetNodeId: vehicle.targetNodeId,
+    currentEdgeId: vehicle.currentEdgeId,
+    routeIndex: vehicle.routeIndex,
+    routeNodeIds: vehicle.routeNodeIds,
+    plannedRouteNodeIds: vehicle.plannedRouteNodeIds,
     plannedGoalNodeId: vehicle.plannedGoalNodeId,
+    localRouteNodeIds: vehicle.localRouteNodeIds,
+    localRouteReason: vehicle.localRouteReason,
     waitReason: vehicle.waitReason,
-    waitingSinceSec: runtime.waitingSinceSec ?? null,
+    waitingSinceSec,
+    currentWaitSec: waitingSinceSec === null ? 0 : round(Math.max(0, simTimeSec - waitingSinceSec), 3),
     blockingVehicleId: vehicle.blockingVehicleId,
     blockedTimeSec: vehicle.blockedTimeSec,
     idleTimeSec: vehicle.idleTimeSec,
     busyTimeSec: vehicle.busyTimeSec,
+    legRemainingM: vehicle.legRemainingM,
+    phaseRemainingSec: vehicle.phaseRemainingSec,
+    directionSwitchReadyNodeId: vehicle.directionSwitchReadyNodeId,
     x: round(vehicle.x, 3),
     z: round(vehicle.z, 3),
     speedMps: round(vehicle.speedMps, 3)

@@ -587,6 +587,38 @@ export const LiftPortDiagnosticsSchema = z.object({
   utilization: z.number().min(0).max(1)
 });
 
+export const ShadowLedgerInvariantCountsSchema = z.object({
+  staleLocalRouteClaim: z.number().int().nonnegative().default(0),
+  blockedWaiterFutureClaim: z.number().int().nonnegative().default(0),
+  orphanedYieldHold: z.number().int().nonnegative().default(0),
+  reservationOwnerMismatch: z.number().int().nonnegative().default(0),
+  duplicateResourceOwner: z.number().int().nonnegative().default(0),
+  conflictSessionMismatch: z.number().int().nonnegative().default(0),
+  liftFifoInversion: z.number().int().nonnegative().default(0),
+  columnModeConflict: z.number().int().nonnegative().default(0),
+  total: z.number().int().nonnegative().default(0)
+});
+
+export const ShadowLedgerViolationSchema = z.object({
+  code: z.string(),
+  severity: z.enum(['watch', 'warn', 'critical']),
+  resourceKey: z.string().nullable(),
+  vehicleId: z.string().nullable(),
+  otherVehicleId: z.string().nullable().default(null),
+  detail: z.string()
+});
+
+export const ShadowResourceLedgerDiagnosticsSchema = z.object({
+  schemaVersion: z.literal('shadow-resource-ledger.v1').default('shadow-resource-ledger.v1'),
+  enabled: z.boolean().default(false),
+  leaseCount: z.number().int().nonnegative().default(0),
+  currentOccupancyLeaseCount: z.number().int().nonnegative().default(0),
+  reservationLeaseCount: z.number().int().nonnegative().default(0),
+  futureClaimLeaseCount: z.number().int().nonnegative().default(0),
+  invariantCounts: ShadowLedgerInvariantCountsSchema.default({}),
+  violations: z.array(ShadowLedgerViolationSchema).default([])
+});
+
 export const TrafficDiagnosticsSchema = z.object({
   trafficMode: z.enum(['flow-debug', 'segment-safe', 'agent-simple', 'agent-minimal', 'agent-refresh']).default('flow-debug'),
   safetyValidated: z.boolean().default(false),
@@ -601,6 +633,7 @@ export const TrafficDiagnosticsSchema = z.object({
   conflictSessions: z.array(ConflictSessionSchema).default([]),
   liftPorts: z.array(LiftPortDiagnosticsSchema).default([]),
   deadlockCandidateVehicleIds: z.array(z.string()),
+  shadowLedger: ShadowResourceLedgerDiagnosticsSchema.default({}),
   minVehicleSeparationM: z.number().nonnegative().nullable(),
   maxObservedSpeedMps: z.number().nonnegative(),
   physicalViolationCount: z.number().int().nonnegative()

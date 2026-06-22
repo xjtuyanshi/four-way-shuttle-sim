@@ -105,12 +105,14 @@ type QueueSample = {
 const durationSec = numberArg('--duration-sec', 3600);
 const sampleSec = numberArg('--sample-sec', 10);
 const dtSec = numberArg('--dt-sec', 0.2);
+const progressSec = numberArg('--progress-sec', 1800);
 const regionCount = integerArg('--regions', 2);
 const shuttleCount = integerArg('--shuttles', 8);
 const inboundRatePerHour = numberArg('--inbound-pph', 3600);
 const outboundRatePerHour = numberArg('--outbound-pph', 3600);
 const initialOutboundFullColumns = integerArg('--outbound-full-columns', 4);
 const initialStorageFillPolicy = enumArg('--initial-fill-policy', ['full-columns', 'zone-balanced-50'] as const, 'full-columns');
+const storageSelectionPolicy = enumArg('--storage-selection-policy', ['sequential', 'traffic-aware'] as const, 'sequential');
 const outputPath = resolve(stringArg('--out') ?? `output/review/queue-reserve-efficiency-${Date.now()}.json`);
 
 mkdirSync(dirname(outputPath), { recursive: true });
@@ -126,7 +128,8 @@ const scenario = createInboundOutboundDemoScenario({
       ? inboundRatePerHour / (inboundRatePerHour + outboundRatePerHour)
       : 0.5,
     initialOutboundFullColumns,
-    initialStorageFillPolicy
+    initialStorageFillPolicy,
+    storageSelectionPolicy
   },
   layoutProfile: {
     layoutKind: 'top-lift-column',
@@ -138,15 +141,40 @@ const sim = new ShuttleSimCore(scenario);
 const internals = sim as unknown as InternalSim;
 const samples: QueueSample[] = [];
 let nextSampleSec = 0;
+let nextProgressSec = progressSec > 0 ? progressSec : Number.POSITIVE_INFINITY;
 
 sim.start();
-for (let elapsedSec = 0; elapsedSec < durationSec - 1e-9 && sim.getClock().status === 'running'; elapsedSec += dtSec) {
-  const state = sim.step(Math.min(dtSec, durationSec - elapsedSec));
-  if (state.simTimeSec + 1e-9 < nextSampleSec) {
-    continue;
+samples.push(sampleState(sim.getState()));
+nextSampleSec = sampleSec;
+while (sim.getClock().simTimeSec < durationSec - 1e-9 && sim.getClock().status === 'running') {
+  const clock = sim.getClock();
+  const nextBoundarySec = Math.min(durationSec, nextSampleSec, nextProgressSec);
+  const stepSec = Math.min(
+    Math.max(dtSec, nextBoundarySec - clock.simTimeSec),
+    durationSec - clock.simTimeSec
+  );
+  if (stepSec <= 1e-9 || !Number.isFinite(stepSec)) {
+    break;
   }
-  samples.push(sampleState(state));
-  nextSampleSec += sampleSec;
+  sim.advanceByInPlace(stepSec);
+  const nextClock = sim.getClock();
+  if (progressSec > 0 && nextClock.simTimeSec + 1e-9 >= nextProgressSec) {
+    console.error(JSON.stringify({
+      type: 'queue-reserve-diagnosis-progress',
+      timeSec: round(nextClock.simTimeSec),
+      durationSec,
+      samples: samples.length
+    }));
+    while (nextProgressSec <= nextClock.simTimeSec + 1e-9) {
+      nextProgressSec += progressSec;
+    }
+  }
+  if (nextClock.simTimeSec + 1e-9 >= nextSampleSec) {
+    samples.push(sampleState(sim.getState()));
+    while (nextSampleSec <= nextClock.simTimeSec + 1e-9) {
+      nextSampleSec += sampleSec;
+    }
+  }
 }
 
 const finalState = sim.getState();
@@ -164,7 +192,9 @@ const report = {
     inboundRatePerHour,
     outboundRatePerHour,
     initialOutboundFullColumns,
-    initialStorageFillPolicy
+    initialStorageFillPolicy,
+    storageSelectionPolicy,
+    progressSec
   },
   final: {
     simTimeSec: finalState.simTimeSec,
