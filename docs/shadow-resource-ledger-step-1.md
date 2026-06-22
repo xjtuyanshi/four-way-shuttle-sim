@@ -988,3 +988,59 @@ Updated next step:
 - Convert station route leases from shadow diagnostics into a runtime station coordinator table.
 - First source cut should only read station-owned queue slot leases for inbound station entry and release them on pickup/service transition.
 - Do not make middle/spine global planned-route ownership shorter until the station lease table can prove which station actually owns the contested route segment.
+
+## Runtime Station Queue Slot Lease Read Cut
+
+Change:
+
+- Added a runtime `StationQueueSlotLease` view for inbound top-lift station queue slots.
+- Centralized station queue slot claims from:
+  - current physical node occupancy,
+  - current target node,
+  - planned goal node,
+  - taskless inbound standby soft claims.
+- Switched `inboundQueueSlotClaimedByOtherVehicle()` to read that station queue slot lease view instead of rebuilding the same slot-level claim scan locally.
+
+Rejected during this cut:
+
+- Do not replace `topLiftInboundQueueNodeHardClaimedByOtherVehicle()` with slot-level lease ownership.
+- That function must remain exact-node semantics. A brief experiment showed that promoting all hard node claims to slot claims would incorrectly blur queue order / physical node ownership.
+- The existing exact tests:
+  - `keeps a trailing loaded outbound shuttle in its lift queue slot until the front dropoff clears`
+  - `lets the physically leading inbound queue shuttle proceed when an earlier task is behind it`
+  are already red on the current head before this cut, so they are tracked as baseline red items rather than regressions from this change.
+
+Validation:
+
+```bash
+pnpm --filter @four-way-shuttle/sim-core exec tsc --noEmit
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "reports station-owned shadow contracts|reports duplicate station route leases|allows projected inbound queue vehicles|keeps upstream inbound queue slots available|lets real inbound work override far taskless standby queue claims|holds taskless inbound queue standby vehicles|compresses a taskless inbound queue standby forward|treats same-lift inbound queue vehicles|keeps a later same-lift inbound queue task|uses the next yellow queue slot|uses the tail projected queue slot|does not let a detached storage detour reserve every projected inbound queue slot" --reporter=dot
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --sample-sec 10 --dt-sec 0.2 --out output/review/station-runtime-queue-lease-read-diagnosis-600s.json
+./node_modules/.bin/tsx scripts/run-physical-24h-amr-audit.ts --hours 0.5 --out output/review/station-runtime-queue-lease-read-0p5h-audit.json --checkpoint-dir output/review/station-runtime-queue-lease-read-0p5h-checkpoints --audit-every-sec 30 --quiet-critical
+```
+
+Results:
+
+- Targeted runtime tests: `12 passed`.
+- 600s station diagnosis:
+  - File: `output/review/station-runtime-queue-lease-read-diagnosis-600s.json`
+  - Total PPH `516`, inbound `210`, duplicate route lease `0`, physical violations `0`.
+  - Station invariant total `1`, from `demandWithoutCoverage=1`.
+- 30m physical audit:
+  - File: `output/review/station-runtime-queue-lease-read-0p5h-audit.json`
+  - Total PPH `508`, inbound `200`, outbound `308`.
+  - AMR anomalies `0`, critical anomalies `0`.
+
+Decision:
+
+- Accepted as the first minimal runtime read cut.
+- This is behavior-equivalent at the 30m audit scale and gives later source-of-truth work one runtime station lease query to use.
+- It does not solve the underlying inbound PPH imbalance or long-window AMR dropout risk yet.
+
+Next step:
+
+- Move from read-only claim lookup to an explicit station-owned queue slot lease lifecycle:
+  - allocate the queue slot lease when the station admits an inbound queue resource,
+  - release it on pickup / service transition,
+  - keep exact node occupancy separate from station queue slot lease,
+  - keep far route and middle/spine planned-route ownership unchanged until station leases prove which station owns the contested segment.

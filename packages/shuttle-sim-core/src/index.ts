@@ -237,6 +237,15 @@ type ShadowStationRouteLease = ShadowStationContractSnapshot['routeLeases'][numb
 type ShadowStationContractViolation = ShadowStationContracts['violations'][number];
 type ShadowStationContractInvariantCounts = ShadowStationContracts['invariantCounts'];
 
+type StationQueueSlotLease = {
+  liftNodeId: string;
+  vehicleId: string;
+  nodeId: string;
+  slotIndex: number;
+  phase: 'occupied' | 'targeted' | 'planned';
+  soft: boolean;
+};
+
 export type ShuttleSimDebugState = {
   currentNodeOccupancy: Array<{ nodeId: string; vehicleId: string }>;
   storageNodeOccupancy: Array<{ nodeId: string; loadId: string }>;
@@ -3838,6 +3847,66 @@ export class ShuttleSimCore {
     return null;
   }
 
+  private topLiftInboundStationQueueSlotLeases(liftNodeId: string): StationQueueSlotLease[] {
+    if (!this.topLiftColumnLayoutEnabled() || this.liftPortKindForNodeId(liftNodeId) !== 'inbound') {
+      return [];
+    }
+    const leases: StationQueueSlotLease[] = [];
+    const addLease = (
+      vehicle: MutableVehicle,
+      nodeId: string | null | undefined,
+      phase: StationQueueSlotLease['phase'],
+      soft = false
+    ): void => {
+      if (!nodeId) {
+        return;
+      }
+      const slot = this.topLiftInboundApproachQueueSlot(nodeId);
+      if (slot?.liftNodeId !== liftNodeId) {
+        return;
+      }
+      leases.push({
+        liftNodeId,
+        vehicleId: vehicle.id,
+        nodeId,
+        slotIndex: slot.slotIndex,
+        phase,
+        soft
+      });
+    };
+
+    for (const vehicle of this.vehicles) {
+      addLease(vehicle, vehicle.currentNodeId, 'occupied');
+      addLease(vehicle, vehicle.targetNodeId, 'targeted');
+      addLease(
+        vehicle,
+        vehicle.plannedGoalNodeId,
+        'planned',
+        this.tasklessInboundQueueStandbySoftClaim(vehicle, vehicle.plannedGoalNodeId ?? '')
+      );
+    }
+
+    return leases.sort((left, right) =>
+      left.slotIndex - right.slotIndex ||
+      left.phase.localeCompare(right.phase) ||
+      left.vehicleId.localeCompare(right.vehicleId)
+    );
+  }
+
+  private topLiftInboundStationQueueSlotClaim(
+    slot: { liftNodeId: string; slotIndex: number },
+    vehicleId: string,
+    ignoredVehicleId: string | null = null,
+    options: { includeSoftPlannedLeases?: boolean } = {}
+  ): StationQueueSlotLease | null {
+    return this.topLiftInboundStationQueueSlotLeases(slot.liftNodeId).find((lease) =>
+      lease.slotIndex === slot.slotIndex &&
+      lease.vehicleId !== vehicleId &&
+      lease.vehicleId !== ignoredVehicleId &&
+      (!lease.soft || options.includeSoftPlannedLeases)
+    ) ?? null;
+  }
+
   private inboundSourceLoadBelongsToLift(load: LoadStateRecord | null | undefined, liftNodeId: string): boolean {
     return Boolean(
       load &&
@@ -4134,29 +4203,11 @@ export class ShuttleSimCore {
     vehicle?: MutableVehicle | VehicleState | null,
     ignoredVehicleId: string | null = null
   ): boolean {
-    for (const other of this.vehicles) {
-      if (other.id === vehicle?.id || other.id === ignoredVehicleId) {
-        continue;
-      }
-      const claimedNodeIds = [
-        other.currentNodeId,
-        other.targetNodeId,
-        this.tasklessInboundQueueStandbySoftClaim(other, other.plannedGoalNodeId ?? '')
-          ? null
-          : other.plannedGoalNodeId
-      ].filter((nodeId): nodeId is string => Boolean(nodeId));
-      if (claimedNodeIds.some((nodeId) => {
-        const slot = this.topLiftInboundApproachQueueSlot(nodeId);
-        return Boolean(
-          slot &&
-          slot.liftNodeId === candidateSlot.liftNodeId &&
-          slot.slotIndex === candidateSlot.slotIndex
-        );
-      })) {
-        return true;
-      }
-    }
-    return false;
+    return this.topLiftInboundStationQueueSlotClaim(
+      candidateSlot,
+      vehicle?.id ?? '',
+      ignoredVehicleId
+    ) !== null;
   }
 
   private topLiftInboundQueueNodeHardClaimedByOtherVehicle(
@@ -4165,8 +4216,7 @@ export class ShuttleSimCore {
     ignoredVehicleId: string | null = null,
     options: { includeTasklessStandbyPlannedGoal?: boolean } = {}
   ): string | null {
-    const slot = this.topLiftInboundApproachQueueSlot(nodeId);
-    if (!slot) {
+    if (!this.topLiftInboundApproachQueueSlot(nodeId)) {
       return this.nodeClaimedByOtherVehicle(nodeId, vehicleId);
     }
     const occupantId = this.currentNodeOccupancy.get(nodeId);
