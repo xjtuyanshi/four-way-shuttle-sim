@@ -24305,6 +24305,86 @@ describe('shuttle phase 0 SimCore', () => {
     expect(parsed.traffic.shadowLedger.violations.some((violation) => violation.code === 'blocked-waiter-future-claim')).toBe(false);
   });
 
+  it('does not let far planned route nodes become active shadow owners', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 4,
+        initialOutboundFullColumns: 0
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({
+      id: 'far-planned-inbound-load',
+      state: 'waiting',
+      nodeId: 'column-top-a-c09',
+      vehicleId: null,
+      weightKg: 100
+    });
+    sim.addTaskForTest({
+      id: 'far-planned-inbound-task',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c09',
+      dropoffNodeId: 'storage-r08-c05',
+      loadId: 'far-planned-inbound-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', ['storage-r08-c05']);
+    sim.setVehicleTaskForTest('SH-01', 'far-planned-inbound-task', false);
+    sim.setVehicleRouteForTest('SH-02', ['module-01-spine-middle']);
+
+    const internals = sim as unknown as {
+      vehicles: Array<Record<string, unknown>>;
+    };
+    const claimant = internals.vehicles.find((vehicle) => vehicle.id === 'SH-01')!;
+    Object.assign(claimant, {
+      state: 'moving-to-pickup',
+      currentNodeId: 'storage-r08-c05',
+      targetNodeId: 'column-middle-c05',
+      taskId: 'far-planned-inbound-task',
+      routeNodeIds: ['storage-r08-c05', 'column-middle-c05'],
+      plannedGoalNodeId: 'column-top-a-c09',
+      plannedRouteNodeIds: [
+        'storage-r08-c05',
+        'column-middle-c05',
+        'column-middle-c06',
+        'column-middle-c07',
+        'column-middle-c08',
+        'column-middle-c09',
+        'module-01-spine-middle',
+        'column-top-a-c09'
+      ],
+      localRouteNodeIds: [],
+      localRouteReason: null
+    });
+
+    const parsed = ShuttleSimStateSchema.parse(sim.getState());
+    expect(parsed.traffic.shadowLedger.invariantCounts.duplicateResourceOwner).toBe(0);
+    expect(parsed.traffic.shadowLedger.violations.some((violation) =>
+      violation.code === 'duplicate-resource-owner' &&
+      violation.resourceKey === 'node:module-01-spine-middle'
+    )).toBe(false);
+  });
+
   it('reports blocked waiters that still own future reservations in the shadow resource ledger', () => {
     const scenario = createInboundOutboundDemoScenario({
       layoutProfile: {

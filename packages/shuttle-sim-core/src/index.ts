@@ -17169,6 +17169,53 @@ export class ShuttleSimCore {
     return routeCandidates;
   }
 
+  private shadowPlannedRouteClaimTail(vehicle: MutableVehicle, maxNodeCount = 6): string[] {
+    if (vehicle.plannedRouteNodeIds.length < 2) {
+      return [];
+    }
+    const routeTail = this.vehicleRouteTail(vehicle, vehicle.plannedRouteNodeIds);
+    if (routeTail.length < 2) {
+      return [];
+    }
+    return this.topLiftRemoteInboundActiveServiceRouteShouldStageClaims(vehicle, routeTail)
+      ? routeTail.slice(0, maxNodeCount)
+      : routeTail;
+  }
+
+  private topLiftRemoteInboundActiveServiceRouteShouldStageClaims(vehicle: MutableVehicle, routeTail: string[]): boolean {
+    if (!this.topLiftColumnLayoutEnabled()) {
+      return false;
+    }
+    const task = this.taskForVehicle(vehicle);
+    if (
+      task?.kind !== 'inbound' ||
+      (task.state !== 'assigned' && task.state !== 'in-progress')
+    ) {
+      return false;
+    }
+    const liftNodeId = this.taskLiftPortNodeId(task);
+    if (!liftNodeId || this.liftPortKindForNodeId(liftNodeId) !== 'inbound') {
+      return false;
+    }
+    const currentSlot = this.topLiftInboundApproachQueueSlot(vehicle.currentNodeId);
+    const targetSlot = this.topLiftInboundApproachQueueSlot(vehicle.targetNodeId ?? '');
+    const plannedSlot = this.topLiftInboundApproachQueueSlot(vehicle.plannedGoalNodeId ?? '');
+    if (
+      plannedSlot?.liftNodeId !== liftNodeId ||
+      currentSlot?.liftNodeId === liftNodeId ||
+      targetSlot?.liftNodeId === liftNodeId
+    ) {
+      return false;
+    }
+    return routeTail.some((nodeId) => {
+      if (this.isStorageNode(nodeId)) {
+        return true;
+      }
+      const level = topLiftAisleLevel(nodeId);
+      return level === 'middle' || level === 'bottom-a' || level === 'bottom-b';
+    });
+  }
+
   private vehicleRouteTail(vehicle: MutableVehicle, routeNodeIds: string[]): string[] {
     if (routeNodeIds.length === 0) {
       return [];
@@ -34014,7 +34061,7 @@ export class ShuttleSimCore {
       }
 
       if (claimAllowed && vehicle.state !== 'waiting-blocked') {
-        for (const nodeId of this.vehicleRouteTail(vehicle, vehicle.plannedRouteNodeIds).slice(1, 9)) {
+        for (const nodeId of this.shadowPlannedRouteClaimTail(vehicle).slice(1, 9)) {
           addLease({
             resourceKey: `node:${nodeId}`,
             kind: 'planned-route-claim',

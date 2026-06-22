@@ -893,3 +893,55 @@ Updated next step:
 - Move the source-of-truth cut one level earlier: station-owned active WIP and demand admission.
 - The station should decide how many inbound tasks may be active versus how many AMRs must remain as queue reservations before `bestAvailableVehicleForTask()` sees the vehicles.
 - Keep queue resource selection FIFO, but do not solve station ownership by hiding queue vehicles locally inside `topLiftInboundQueueResourcesForTask()`.
+
+Rejected admission experiment:
+
+- Experiment C: use station admission capacity for mixed inbound task creation only, with cap equal to `topLiftInboundQueueReplenishTargetDepth`.
+  - 600s output: `output/review/station-admission-task-selection-cap-600s.json`
+  - 600s result improved short-window total PPH from current baseline `516` to `534`, and inbound PPH from `210` to `222`.
+  - Average ready demand improved from `2.484` to `0.738`.
+  - Max active service per station dropped from `3` to `2`.
+  - 30m output: `output/review/station-admission-task-selection-cap-0p5h-audit.json`
+  - 30m current-head baseline: `output/review/station-admission-current-head-baseline-0p5h-audit.json`
+  - 30m baseline PPH: total `508`, inbound `200`, outbound `308`, anomalies `0`, final shadow total `2`.
+  - 30m experiment PPH: total `494`, inbound `194`, outbound `300`, anomalies `0`, final shadow total `4`.
+  - Decision: rejected and reverted. Task admission capping helps the first 10 minutes but causes a 30m throughput regression and more final shadow ownership ambiguity.
+
+Updated next step:
+
+- Do not reduce inbound task admission globally.
+- Focus on remote active-service route ownership: the remaining 30m regression is concentrated in duplicate future owners and middle/spine opposing claims, not in collision or AMR anomaly windows.
+- The next source-of-truth cut should narrow or stage future claims for far inbound active-service routes before they enter the lift queue, while keeping station demand admission unchanged.
+
+Rejected planned-claim source experiments:
+
+- Experiment D: make active traffic claims use only the first `4` planned-route nodes for every vehicle, and mirror that in shadow planned-route leases.
+  - 600s station diagnosis: `output/review/planned-claim-nearfield-station-diagnosis-600s.json`
+  - 10m physical audit: `output/review/planned-claim-nearfield-10m-audit.json`
+  - 30m physical audit: `output/review/planned-claim-nearfield-0p5h-audit.json`
+  - 10m result looked promising: total `540`, inbound `228`, anomalies `0`, max shadow total `3`.
+  - 30m result regressed: total `502`, inbound `190`, outbound `312`, anomalies `0`; baseline was total `508`, inbound `200`, outbound `308`.
+  - Decision: rejected and reverted as behavior. A global near-field planned-claim cut removes too much useful coordination.
+- Experiment E: narrow active planned-route claims only for remote active inbound service routes, using a `6` node claim window.
+  - 600s station diagnosis: `output/review/remote-inbound-planned-claim-stage-station-diagnosis-600s.json`
+  - 30m physical audit: `output/review/remote-inbound-planned-claim-stage-0p5h-audit.json`
+  - 600s station result: invariant total `0`, total `540`, inbound `228`.
+  - 30m result regressed further: total `496`, inbound `194`, outbound `302`, anomalies `0`.
+  - Decision: rejected and reverted as behavior. Even the targeted active-claim staging delays useful inbound/outbound coordination enough to lose throughput by 30m.
+
+Accepted shadow-only refinement:
+
+- Keep runtime route arbitration unchanged.
+- In shadow resource ledger only, stage planned-route leases for remote active inbound service routes with a `6` node window so far planned nodes are not counted as current shadow owners.
+- Test added: `does not let far planned route nodes become active shadow owners`.
+- 30m physical audit after this shadow-only change: `output/review/shadow-only-remote-inbound-planned-claim-stage-0p5h-audit.json`
+  - PPH matches current-head baseline exactly: total `508`, inbound `200`, outbound `308`, anomalies `0`.
+  - Shadow duplicate-resource-owner sample count decreased from `127` to `121`, while max duplicate-resource-owner remained `12`.
+
+Updated next step:
+
+- Do not change `activeTrafficClaimRouteCandidates()` by simply truncating planned routes.
+- The next source cut needs an explicit station-owned route lease / release contract, not a generic planned-route horizon:
+  - active service may own only the next physical approach segment until it reaches the station queue.
+  - station queue slots should be leased by station coordinator and released on pickup/service transition.
+  - middle/spine opposing-claim checks should consult those station leases instead of inferring ownership from full planned routes.
