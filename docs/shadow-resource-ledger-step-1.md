@@ -1199,3 +1199,56 @@ Decision:
 - Rejected and reverted.
 - The higher queue target improved apparent total throughput only by letting outbound dominate; inbound got materially worse versus the accepted 30m baseline (`508 / 200 / 308`).
 - The next source cut should not increase reserve target depth globally. It should classify outbound assignment pressure when station ready demand is uncovered, and only defer outbound work when the same vehicle can become near-field inbound coverage without a long detour.
+
+## Rejected Source Cut: Short Outbound Preempt For Uncovered Inbound Queue
+
+Date: 2026-06-22
+
+Experiment:
+
+- Tried a narrow source cut that would release an unloaded outbound task and send that AMR to inbound queue standby when:
+  - the AMR was stopped at a legal node,
+  - the destination inbound lift had ready demand with zero near covered depth,
+  - the released standby route was legal,
+  - and the route length was at most `8` nodes.
+- Hypothesis: when an inbound lift has uncovered ready demand, a nearby unloaded outbound AMR might be a better station-owned queue resource than letting it continue outbound.
+
+Diagnostic enhancement retained:
+
+- Kept read-only diagnostics in `scripts/diagnose-station-queue-contract.ts`:
+  - `releasedStandbyRouteLength`
+  - `releasedStandbyRouteEndNodeId`
+  - `releasedStandbyRouteEndSlot`
+  - `releasedStandbyRouteOriginAllowed`
+- `routeToInboundQueueStandby(...)` now accepts a diagnostic-only `allowTaskedVehicle` option so the script can ask "what if this unloaded outbound assignment were released?" without changing normal runtime behavior.
+
+Validation:
+
+```bash
+pnpm --filter @four-way-shuttle/sim-core exec tsc --noEmit
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "reports station-owned shadow contracts|reports duplicate station route leases|keeps station shadow contract sampling|allows projected inbound queue vehicles|keeps upstream inbound queue slots available|lets real inbound work override far taskless standby queue claims|holds taskless inbound queue standby vehicles|compresses a taskless inbound queue standby forward|treats same-lift inbound queue vehicles|keeps a later same-lift inbound queue task|uses the next yellow queue slot|uses the tail projected queue slot|does not let a detached storage detour reserve every projected inbound queue slot|does not let outbound work steal" --reporter=dot
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --sample-sec 10 --dt-sec 0.2 --out output/review/outbound-preempt-short-inbound-coverage-diagnosis-600s.json
+./node_modules/.bin/tsx scripts/run-physical-24h-amr-audit.ts --hours 0.5 --out output/review/outbound-preempt-short-inbound-coverage-0p5h-audit.json --checkpoint-dir output/review/outbound-preempt-short-inbound-coverage-0p5h-checkpoints --audit-every-sec 30 --quiet-critical
+```
+
+Results:
+
+- Typecheck: passed.
+- Targeted queue contract tests: `14 passed`, `449 skipped`.
+- 600s station diagnosis:
+  - total PPH `516`, inbound `210`, duplicate route lease `0`, physical violations `0`.
+  - Candidate route evidence: `488` candidate records, `17` had a hypothetical released standby route, only `1` was origin-allowed, and `0` were origin-allowed with length `<= 8`.
+- 30m physical audit:
+  - total PPH `504`, inbound `200`, outbound `304`.
+  - AMR anomalies `0`, critical anomalies `0`.
+  - Shadow station invariant total `1`; shadow resource ledger watch violations `5`.
+- After reverting the runtime preempt cut and keeping only diagnostics:
+  - 600s diagnosis `output/review/current-diagnostic-only-station-contract-600s.json`: total PPH `516`, inbound `210`, duplicate route lease `0`, physical violations `0`.
+  - 30m audit `output/review/current-diagnostic-only-0p5h-audit.json`: total PPH `508`, inbound `200`, outbound `308`, AMR anomalies `0`, critical anomalies `0`.
+
+Decision:
+
+- Rejected and reverted as runtime behavior.
+- It did not improve inbound versus the accepted 30m baseline (`508 / 200 / 308`) and slightly reduced total/outbound.
+- The evidence shows this is not a useful local preemption rule: legal near-field outbound-to-inbound opportunities are too rare under the current route-origin rules.
+- Next source work should focus on station admission / queue ownership earlier in the lifecycle, not on stealing already-assigned outbound tasks after the fleet is committed.

@@ -13,9 +13,9 @@ type InternalSim = ShuttleSimCore & {
   assignmentHoldActive(vehicle: VehicleState): boolean;
   inboundDropoffStandbyHoldActive(vehicle: VehicleState): boolean;
   tasklessInboundQueueStandbyRerouteAllowed(vehicle: VehicleState): boolean;
-  routeToInboundQueueStandby(vehicle: VehicleState): string[] | null;
+  routeToInboundQueueStandby(vehicle: VehicleState, fromNodeId?: string, options?: { allowTaskedVehicle?: boolean }): string[] | null;
   tasklessInboundQueueStandbyRouteOriginAllowed(routeNodeIds: string[]): boolean;
-  topLiftInboundQueueStandbyTargetNodeId(vehicle: VehicleState): string | null;
+  topLiftInboundQueueStandbyTargetNodeId(vehicle: VehicleState, fromNodeId?: string, options?: { allowTaskedVehicle?: boolean }): string | null;
   topLiftInboundApproachQueueSlot(nodeId: string): { liftNodeId: string; slotIndex: number } | null;
   taskLiftPortNodeId(task: TaskStateRecord): string | null;
   topLiftInboundVehicleContributesQueueCoverage(vehicle: VehicleState, liftNodeId: string): boolean;
@@ -33,6 +33,10 @@ type CandidateRecord = {
   taskState: string | null;
   taskLiftNodeId: string | null;
   contributesInboundQueueCoverage: boolean | null;
+  releasedStandbyRouteLength: number | null;
+  releasedStandbyRouteEndNodeId: string | null;
+  releasedStandbyRouteEndSlot: string | null;
+  releasedStandbyRouteOriginAllowed: boolean | null;
   routeLength: number | null;
   routeEndNodeId: string | null;
   routeEndSlot: string | null;
@@ -181,6 +185,13 @@ function candidate(
   const contributesInboundQueueCoverage = task?.kind === 'inbound' && taskLiftNodeId
     ? internals.topLiftInboundVehicleContributesQueueCoverage(vehicle, taskLiftNodeId)
     : null;
+  const releasedStandbyRoute = task?.kind === 'outbound' && !vehicle.loaded
+    ? internals.routeToInboundQueueStandby(vehicle, vehicle.currentNodeId, { allowTaskedVehicle: true })
+    : null;
+  const releasedStandbyRouteEndNodeId = releasedStandbyRoute?.at(-1) ?? null;
+  const releasedStandbyRouteEndSlot = releasedStandbyRouteEndNodeId
+    ? internals.topLiftInboundApproachQueueSlot(releasedStandbyRouteEndNodeId)
+    : null;
   return {
     vehicleId: vehicle.id,
     reason,
@@ -193,6 +204,14 @@ function candidate(
     taskState: task?.state ?? null,
     taskLiftNodeId,
     contributesInboundQueueCoverage,
+    releasedStandbyRouteLength: releasedStandbyRoute?.length ?? null,
+    releasedStandbyRouteEndNodeId,
+    releasedStandbyRouteEndSlot: releasedStandbyRouteEndSlot
+      ? `${releasedStandbyRouteEndSlot.liftNodeId}:s${releasedStandbyRouteEndSlot.slotIndex}`
+      : null,
+    releasedStandbyRouteOriginAllowed: releasedStandbyRoute
+      ? internals.tasklessInboundQueueStandbyRouteOriginAllowed(releasedStandbyRoute)
+      : null,
     routeLength: route?.length ?? null,
     routeEndNodeId,
     routeEndSlot: routeEndSlot ? `${routeEndSlot.liftNodeId}:s${routeEndSlot.slotIndex}` : null

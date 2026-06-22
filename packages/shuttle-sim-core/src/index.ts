@@ -11763,8 +11763,12 @@ export class ShuttleSimCore {
       vehicle.localRouteReason === 'post-dropoff-column-exit';
   }
 
-  private routeToInboundQueueStandby(vehicle: MutableVehicle, fromNodeId = vehicle.currentNodeId): string[] | null {
-    const targetNodeId = this.topLiftInboundQueueStandbyTargetNodeId(vehicle, fromNodeId);
+  private routeToInboundQueueStandby(
+    vehicle: MutableVehicle,
+    fromNodeId = vehicle.currentNodeId,
+    options: { allowTaskedVehicle?: boolean } = {}
+  ): string[] | null {
+    const targetNodeId = this.topLiftInboundQueueStandbyTargetNodeId(vehicle, fromNodeId, options);
     if (!targetNodeId) {
       return null;
     }
@@ -11779,7 +11783,7 @@ export class ShuttleSimCore {
         route.at(-1) === targetNodeId &&
         this.routeEdgesExist(route) &&
         this.agentRefreshLocalRouteNodesClear(vehicle, route) &&
-        this.tasklessInboundQueueStandbyRouteAllowed(vehicle, route) &&
+        this.tasklessInboundQueueStandbyRouteAllowed(vehicle, route, options) &&
         this.routeAvoidsActiveTopLiftOutboundDockBlocks(vehicle, route)
       ) {
         return route;
@@ -11818,8 +11822,17 @@ export class ShuttleSimCore {
     return null;
   }
 
-  private tasklessInboundQueueStandbyRouteAllowed(vehicle: MutableVehicle, routeNodeIds: string[]): boolean {
-    if (!this.topLiftColumnLayoutEnabled() || vehicle.loaded || vehicle.taskId || routeNodeIds.length <= 1) {
+  private tasklessInboundQueueStandbyRouteAllowed(
+    vehicle: MutableVehicle,
+    routeNodeIds: string[],
+    options: { allowTaskedVehicle?: boolean } = {}
+  ): boolean {
+    if (
+      !this.topLiftColumnLayoutEnabled() ||
+      vehicle.loaded ||
+      (!options.allowTaskedVehicle && vehicle.taskId) ||
+      routeNodeIds.length <= 1
+    ) {
       return true;
     }
     const protectedNodeIds = this.activeTopLiftInboundMainFlowProtectedNodeIds(vehicle.id);
@@ -11895,8 +11908,12 @@ export class ShuttleSimCore {
     }
   }
 
-  private topLiftInboundQueueStandbyTargetNodeId(vehicle: MutableVehicle, fromNodeId = vehicle.currentNodeId): string | null {
-    if (!this.mixedTopLiftFlowEnabled() || vehicle.loaded || vehicle.taskId) {
+  private topLiftInboundQueueStandbyTargetNodeId(
+    vehicle: MutableVehicle,
+    fromNodeId = vehicle.currentNodeId,
+    options: { allowTaskedVehicle?: boolean } = {}
+  ): string | null {
+    if (!this.mixedTopLiftFlowEnabled() || vehicle.loaded || (!options.allowTaskedVehicle && vehicle.taskId)) {
       return null;
     }
     const inboundLifts = this.inboundLiftNodes();
