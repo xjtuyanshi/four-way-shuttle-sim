@@ -2068,3 +2068,119 @@ Updated next step:
   - station should reserve candidates before they fall to bottom/storage idle,
   - source-of-truth lease should be tied to station demand and queue slot,
   - and validation must show reduced zero-reserve head-gap samples, not only better total PPH.
+
+## Rejected Reserve Pool Formation Experiments
+
+Date: 2026-06-22
+
+These experiments were run after commit `743708d` and intentionally reverted before commit.
+
+### Short reserve connector route allowed
+
+Change:
+
+- Relaxed `tasklessInboundQueueStandbyRouteOriginAllowed(...)` for short, monotonic, non-storage connector routes:
+  - terminal had to be a formal inbound reserve queue node,
+  - route length had to be at most `10`,
+  - route could only move upward through `bottom-b/bottom-a/middle/top-b/top-a`,
+  - no storage, inbound port, or outbound port nodes were allowed.
+
+Validation:
+
+```bash
+./node_modules/.bin/tsx scripts/diagnose-idle-reserve-pool.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/idle-reserve-pool-600s-after-short-reserve-connector.json
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/station-queue-contract-600s-after-short-reserve-connector.json
+./node_modules/.bin/tsx scripts/diagnose-assignment-admission.ts --duration-sec 600 --dt-sec 0.2 --out output/review/assignment-admission-600s-after-short-reserve-connector.json
+```
+
+Result:
+
+- Runtime KPIs were unchanged versus `743708d`:
+  - total PPH `552`.
+  - inbound PPH `228`.
+  - physical violations `0`.
+  - zero-reserve-during-head-gap stayed `45/45`.
+- Diagnostic opportunity improved but behavior did not:
+  - released standby route `originAllowed` rose from `1` to `22`.
+  - station-specific release opportunities rose from `0` to `5`.
+
+Decision:
+
+- Reverted.
+- This showed the next blocker was not route parsing alone; most useful candidates were already busy on outbound assignments.
+
+### Empty outbound preemption to reserve
+
+Change:
+
+- Before assignment, tried to preempt stationary, empty, not-yet-picked outbound assignments into inbound queue reserve when a short station route existed.
+
+Validation:
+
+```bash
+./node_modules/.bin/tsx scripts/diagnose-idle-reserve-pool.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/idle-reserve-pool-600s-after-outbound-preempt-reserve.json
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/station-queue-contract-600s-after-outbound-preempt-reserve.json
+./node_modules/.bin/tsx scripts/diagnose-assignment-admission.ts --duration-sec 600 --dt-sec 0.2 --out output/review/assignment-admission-600s-after-outbound-preempt-reserve.json
+```
+
+Result:
+
+- With route length at most `10`:
+  - total PPH fell to `540`.
+  - inbound PPH fell to `222`.
+  - routeInfeasible doubled from `14` to `28`.
+  - assignment churn appeared: `195` total assignments and `157` outbound assignments in 600s.
+- Tightening preemption to route length at most `8`:
+  - 600s improved to total PPH `570`, inbound PPH `264`, physical violations `0`.
+  - 30m improved only modestly to total PPH `538`, inbound PPH `206`, physical violations `0`.
+  - but lightweight 30m event counting showed unacceptable churn:
+    - `vehicle-standby-dispatched:inbound-queue-reserve-preempt-outbound` occurred `442` times,
+    - `task-assigned:nearest-available-agent-refresh` occurred `717` times.
+
+Decision:
+
+- Reverted.
+- Preempting outbound tasks after assignment is not the clean resource contract. It improves some short-window metrics but creates assignment churn and hurts simulation speed/explainability.
+
+### Outbound active task limit
+
+Change:
+
+- Tried reducing `topLiftMixedFlowOutboundActiveTaskLimit()` so mixed flow reserves more vehicles for inbound lift queue work:
+  - limit `4` for 8 shuttles / 2 inbound lifts,
+  - then limit `5`.
+
+Validation:
+
+```bash
+./node_modules/.bin/tsx scripts/diagnose-idle-reserve-pool.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/idle-reserve-pool-600s-after-outbound-active-limit-4.json
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/station-queue-contract-600s-after-outbound-active-limit-4.json
+./node_modules/.bin/tsx scripts/diagnose-assignment-admission.ts --duration-sec 600 --dt-sec 0.2 --out output/review/assignment-admission-600s-after-outbound-active-limit-4.json
+./node_modules/.bin/tsx scripts/diagnose-idle-reserve-pool.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/idle-reserve-pool-600s-after-outbound-active-limit-5.json
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/station-queue-contract-600s-after-outbound-active-limit-5.json
+./node_modules/.bin/tsx scripts/diagnose-assignment-admission.ts --duration-sec 600 --dt-sec 0.2 --out output/review/assignment-admission-600s-after-outbound-active-limit-5.json
+```
+
+Result:
+
+- Limit `4`:
+  - inbound PPH improved to `252`,
+  - but total PPH fell to `486`,
+  - routeInfeasible rose to `95`.
+- Limit `5`:
+  - total PPH fell to `528`,
+  - inbound PPH fell to `210`,
+  - head-gap samples rose to `48`,
+  - fleet-busy rose to `65`.
+
+Decision:
+
+- Reverted.
+- A static outbound active limit is too blunt. It either starves outbound or worsens station routing; the next attempt must be station-specific and lease-based, not a global cap.
+
+Updated next step:
+
+- Implement a station-owned reserve admission gate before outbound assignment, not after:
+  - do not preempt already-assigned outbound work repeatedly,
+  - do not globally reduce outbound capacity,
+  - instead, at outbound assignment time, check the specific candidate vehicle against the station reserve ledger and hold only that assignment when the same vehicle can satisfy a near, station-specific reserve lease.
