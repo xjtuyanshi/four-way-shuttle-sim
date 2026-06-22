@@ -26,6 +26,12 @@ const shadowLedger = data.shadowLedger ?? {};
 const finalShadowLedger = shadowLedger.final ?? data.traffic?.shadowLedger ?? {};
 const maxShadowCounts = shadowLedger.maxInvariantCounts ?? finalShadowLedger.invariantCounts ?? {};
 const maxShadowTotal = Number(maxShadowCounts.total ?? finalShadowLedger.invariantCounts?.total ?? 0);
+const hasCoreSafetyWatch = Number(data.traffic.deadlocks ?? 0) > 0 || Number(data.traffic.livelocks ?? 0) > 0;
+const coreSafetyClass = data.traffic.physicalViolations > 0
+  ? 'risk'
+  : hasCoreSafetyWatch
+    ? 'warn'
+    : 'pass';
 
 const payload = {
   generatedAt: new Date().toISOString(),
@@ -63,7 +69,7 @@ const html = `<!doctype html>
 <ul>
   <li><b class="${criticalAnomalies.length === 0 ? 'pass' : 'risk'}">24h run ${htmlEscape(data.status)} at ${round(durationHours, 1)}h.</b> Final total PPH ${round(data.pph.total, 3)}, inbound ${round(data.pph.inbound, 3)}, outbound ${round(data.pph.outbound, 3)}; headless speed ${round(speed, 1)}x real time.</li>
   <li><b class="${criticalAnomalies.length === 0 ? 'pass' : 'risk'}">AMR critical stuck signals: ${criticalAnomalies.length}.</b> The audit found ${warningAnomalies.length} warning anomalies and ${flaggedWindows.length} flagged 10-minute AMR windows.</li>
-  <li><b class="${data.traffic.physicalViolations === 0 ? 'pass' : 'risk'}">Physical safety counters:</b> deadlock=${data.traffic.deadlocks}, livelock=${data.traffic.livelocks}, physicalViolation=${data.traffic.physicalViolations}, min separation ${round(data.traffic.minVehicleSeparationM ?? 0, 3)}m.</li>
+  <li><b class="${coreSafetyClass}">Physical safety counters:</b> deadlock=${data.traffic.deadlocks}, livelock=${data.traffic.livelocks}, physicalViolation=${data.traffic.physicalViolations}, min separation ${round(data.traffic.minVehicleSeparationM ?? 0, 3)}m. ${hasCoreSafetyWatch ? 'Deadlock/livelock counter changes are treated as watch signals unless they coincide with a long current wait or critical AMR window.' : ''}</li>
   <li><b class="${maxShadowTotal === 0 ? 'pass' : 'warn'}">Shadow resource ledger:</b> max invariant violations ${formatInt(maxShadowTotal)}, samples with violations ${formatInt(shadowLedger.samplesWithViolations ?? 0)} / ${formatInt(shadowLedger.samples ?? 0)}. This is diagnostic only and does not change vehicle behavior.</li>
   <li><b class="warn">新增矩阵：</b>每台 AMR 每 10 分钟完成任务数。持续 0 completion 不自动等于异常，但如果同时出现高 loopiness / 小 bbox / blocked，它就是强证据。</li>
 </ul>
