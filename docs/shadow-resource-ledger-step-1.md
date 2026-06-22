@@ -1663,3 +1663,65 @@ Updated next step:
   - measure when outbound assignments were created relative to inbound demand becoming ready,
   - add a shadow "would reserve instead of assigning outbound" decision at assignment time,
   - then A/B test a bounded admission rule only where the shadow decision actually fires.
+
+## Assignment Admission Timing Audit
+
+Date: 2026-06-22
+
+Change:
+
+- Added `scripts/diagnose-assignment-admission.ts`.
+- The script advances the physical 3D tick simulation at `dt=0.2s`, watches `task-assigned` events, and records the pre-step station contract state for every assignment.
+- For every assignment it captures:
+  - task kind,
+  - route length and level pattern,
+  - pre-assignment ready/claimed station demand,
+  - physical head reservation count,
+  - head-reservation gap count,
+  - affected station ids,
+  - and whether an outbound assignment happened while a station already needed physical head reserve.
+- This is script-only diagnostics. It does not change runtime behavior or UI performance.
+
+Validation:
+
+```bash
+./node_modules/.bin/tsx scripts/diagnose-assignment-admission.ts --duration-sec 600 --dt-sec 0.2 --out output/review/assignment-admission-shadow-600s.json
+```
+
+Results:
+
+- 600s assignment admission diagnosis:
+  - total assignments `96`.
+  - inbound assignments `38`.
+  - outbound assignments `58`.
+  - outbound assignments while a station had a head-reservation gap `34`.
+  - outbound assignments while a station had a fleet-busy head-reservation gap `34`.
+  - outbound-while-gap share `58.62%`.
+  - average pre-assignment ready demand for outbound assignments `5.034`.
+  - average pre-assignment head gap count for outbound assignments `0.828`.
+  - affected stations: `lift-02-inbound=29`, `lift-01-inbound=19`.
+  - final 600s behavior stayed at total PPH `516`, inbound `210`, physical violations `0`.
+
+Rejected experiment:
+
+- Tried a local, uncommitted source cut in the main assignment loop:
+  - after selecting an outbound assignment candidate, if that same candidate could immediately take a legal inbound queue reserve route for a station needing physical head reserve, send it to reserve instead of assigning outbound.
+- 600s station diagnosis and assignment diagnosis were identical to baseline:
+  - total PPH `516`, inbound `210`, physical violations `0`.
+  - outbound assignments while head gap stayed `34`.
+  - head-reservation gap distribution stayed unchanged.
+- The source cut was removed before commit.
+
+Decision:
+
+- Assignment timing is a real problem: many outbound assignments happen while inbound stations already need physical head reserve.
+- But the first bounded admission cut did not fire because those outbound candidates are generally in bottom/storage flows, not in a location with a valid immediate inbound reserve route.
+- Do not add a no-op source rule.
+
+Updated next step:
+
+- Move the admission decision earlier, before selecting the outbound task/candidate pair:
+  - compare available vehicles against inbound reserve routes before considering outbound work,
+  - classify available vehicles by top-lane reserve eligibility versus lower-level outbound suitability,
+  - then reserve only vehicles that have a valid short inbound queue route and would otherwise be consumed by outbound work.
+- The next source cut should operate on the available vehicle pool, not after outbound assignment selection.
