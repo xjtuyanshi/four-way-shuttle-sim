@@ -741,3 +741,87 @@ Next step:
 - Keep the accepted read-purity fix.
 - Do not use broad planned-goal queue identity as a fix.
 - The next queue attempt should be narrower: explicit queue-owned lease / handoff only for vehicles physically in or immediately entering a lift queue slot, with bounded TTL and no protection for long top-lane standby tours.
+
+## Station-Owned Contract Shadow Mode
+
+Date: 2026-06-22
+
+Goal:
+
+- Keep the existing 3D tick simulation as the high-fidelity source of physical movement.
+- Add a station-owned shadow contract before changing behavior.
+- Make inbound lift demand, AMR queue reservation, physical queue occupancy, and active inbound service visible as separate concepts.
+- Use the shadow contract to prove whether a future station coordinator is needed before changing task assignment or pathing.
+
+Implementation:
+
+- Added `traffic.shadowLedger.stationContracts`.
+- Added per-inbound-lift station snapshots with:
+  - `demandCount`
+  - `readyDemandCount`
+  - `claimedDemandCount`
+  - `sourceBufferOccupancy`
+  - `targetDepth`
+  - `physicalDepth`
+  - `nearCoveredDepth`
+  - `farForecastDepth`
+  - `queueReservationCount`
+  - `activeServiceDepth`
+  - bounded demand and vehicle-commitment samples
+- Added station invariant counters:
+  - `demandWithoutCoverage`
+  - `queueReservationOverTarget`
+  - `physicalDepthOverTarget`
+  - `activeServiceWithoutDemand`
+  - `duplicateVehicleCommitment`
+- Added tests that prove:
+  - one inbound station can report claimed demand, an AMR queue reservation, and active service separately.
+  - sampling the station contract within a 3D tick is read-only and does not change the engine snapshot hash.
+
+Validation commands:
+
+```bash
+./node_modules/.bin/tsc -p packages/shuttle-schemas/tsconfig.json --noEmit
+./node_modules/.bin/tsc -p packages/shuttle-sim-core/tsconfig.json --noEmit
+./node_modules/.bin/vitest run packages/shuttle-sim-core/src/index.test.ts -t "station-owned shadow contracts|station shadow contract sampling" --reporter verbose
+./node_modules/.bin/tsx scripts/diagnose-queue-reserve-efficiency.ts --duration-sec 300 --sample-sec 10 --dt-sec 0.2 --progress-sec 0 --initial-fill-policy zone-balanced-50 --out output/review/station-contract-shadow-smoke-300s.json
+```
+
+300s smoke evidence:
+
+- File: `output/review/station-contract-shadow-smoke-300s.json`
+- Samples: `30`
+- Average covered depth: `0.567`
+- Average standby depth: `0`
+- Average reserve vehicles: `0`
+- Average active inbound empty vehicles: `1.433`
+- Average active inbound in queue slot: `0.433`
+- Average active inbound in transit to queue: `0.967`
+- Far active inbound route samples: `14`
+- Off-queue waiting samples: `12`
+- Final total PPH: `528`
+- Final inbound PPH: `204`
+- Final physical violations: `0`
+- Final deadlocks/livelocks: `0 / 0`
+
+Station-contract finding:
+
+- `lift-01-inbound`: `readyDemandCount=2`, `nearCoveredDepth=0`, `queueReservationCount=0`, `activeServiceDepth=2`.
+- `lift-02-inbound`: `readyDemandCount=3`, `nearCoveredDepth=0`, `queueReservationCount=0`, `activeServiceDepth=1`.
+- Final invariant counts: `demandWithoutCoverage=2`, total station-contract invariants `2`.
+
+Interpretation:
+
+- The current problem is now visible as a station contract failure: inbound lifts can have ready demand while no near AMR queue coverage exists.
+- The current logic still services inbound by binding active inbound vehicles from farther away instead of maintaining a true lift-owned FIFO queue resource.
+- This validates the ChatGPT Pro recommendation: the next behavior-changing step should be a station-owned coordinator / lease handoff, not another local path guard.
+
+Next step:
+
+- Keep station contracts in shadow mode as the comparison surface.
+- Implement the smallest source-of-truth change at the lift station boundary:
+  - station owns a bounded `queueReservation` target depth.
+  - task assignment consumes station queue resources in FIFO order.
+  - physical queue slot occupancy and AMR reservation are separate but reconciled by station invariants.
+  - active inbound service must correspond to real station demand.
+- Run 10m A/B first, compare against this smoke and the latest accepted baseline before attempting 30m/24h.

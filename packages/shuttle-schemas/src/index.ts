@@ -608,6 +608,76 @@ export const ShadowLedgerViolationSchema = z.object({
   detail: z.string()
 });
 
+export const ShadowStationContractDemandSchema = z.object({
+  id: z.string(),
+  kind: z.enum(['source-load', 'inbound-task']),
+  status: z.enum(['announced', 'ready', 'claimed', 'completed']),
+  stationId: z.string(),
+  loadId: z.string().nullable(),
+  taskId: z.string().nullable(),
+  nodeId: z.string().nullable()
+});
+
+export const ShadowStationVehicleCommitmentSchema = z.object({
+  vehicleId: z.string(),
+  kind: z.enum(['queueReservation', 'activeInboundService']),
+  stationId: z.string(),
+  phase: z.enum(['approaching', 'parked', 'service']).nullable(),
+  taskId: z.string().nullable(),
+  loadId: z.string().nullable(),
+  currentNodeId: z.string(),
+  targetNodeId: z.string().nullable(),
+  plannedGoalNodeId: z.string().nullable(),
+  currentQueueSlot: z.number().int().positive().nullable(),
+  targetQueueSlot: z.number().int().positive().nullable(),
+  plannedQueueSlot: z.number().int().positive().nullable(),
+  routeLeavesTopLevel: z.boolean().default(false)
+});
+
+export const ShadowStationContractSnapshotSchema = z.object({
+  stationId: z.string(),
+  kind: z.literal('inbound'),
+  demandCount: z.number().int().nonnegative(),
+  readyDemandCount: z.number().int().nonnegative(),
+  claimedDemandCount: z.number().int().nonnegative(),
+  sourceBufferOccupancy: z.number().int().nonnegative(),
+  sourceBufferCapacity: z.number().int().positive(),
+  targetDepth: z.number().int().nonnegative(),
+  physicalDepth: z.number().int().nonnegative(),
+  nearCoveredDepth: z.number().int().nonnegative(),
+  farForecastDepth: z.number().int().nonnegative(),
+  queueReservationCount: z.number().int().nonnegative(),
+  activeServiceDepth: z.number().int().nonnegative(),
+  demands: z.array(ShadowStationContractDemandSchema).default([]),
+  vehicleCommitments: z.array(ShadowStationVehicleCommitmentSchema).default([])
+});
+
+export const ShadowStationContractInvariantCountsSchema = z.object({
+  demandWithoutCoverage: z.number().int().nonnegative().default(0),
+  queueReservationOverTarget: z.number().int().nonnegative().default(0),
+  physicalDepthOverTarget: z.number().int().nonnegative().default(0),
+  activeServiceWithoutDemand: z.number().int().nonnegative().default(0),
+  duplicateVehicleCommitment: z.number().int().nonnegative().default(0),
+  total: z.number().int().nonnegative().default(0)
+});
+
+export const ShadowStationContractViolationSchema = z.object({
+  code: z.string(),
+  severity: z.enum(['watch', 'warn', 'critical']),
+  stationId: z.string().nullable(),
+  vehicleId: z.string().nullable(),
+  detail: z.string()
+});
+
+export const ShadowStationContractDiagnosticsSchema = z.object({
+  schemaVersion: z.literal('shadow-station-contracts.v1').default('shadow-station-contracts.v1'),
+  enabled: z.boolean().default(false),
+  stationCount: z.number().int().nonnegative().default(0),
+  invariantCounts: ShadowStationContractInvariantCountsSchema.default({}),
+  stations: z.array(ShadowStationContractSnapshotSchema).default([]),
+  violations: z.array(ShadowStationContractViolationSchema).default([])
+});
+
 export const ShadowResourceLedgerDiagnosticsSchema = z.object({
   schemaVersion: z.literal('shadow-resource-ledger.v1').default('shadow-resource-ledger.v1'),
   enabled: z.boolean().default(false),
@@ -616,7 +686,8 @@ export const ShadowResourceLedgerDiagnosticsSchema = z.object({
   reservationLeaseCount: z.number().int().nonnegative().default(0),
   futureClaimLeaseCount: z.number().int().nonnegative().default(0),
   invariantCounts: ShadowLedgerInvariantCountsSchema.default({}),
-  violations: z.array(ShadowLedgerViolationSchema).default([])
+  violations: z.array(ShadowLedgerViolationSchema).default([]),
+  stationContracts: ShadowStationContractDiagnosticsSchema.default({})
 });
 
 export const TrafficDiagnosticsSchema = z.object({

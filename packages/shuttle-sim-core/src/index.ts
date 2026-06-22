@@ -229,6 +229,12 @@ type ShadowResourceLease = {
 
 type ShadowLedgerViolation = ShuttleSimState['traffic']['shadowLedger']['violations'][number];
 type ShadowLedgerInvariantCounts = ShuttleSimState['traffic']['shadowLedger']['invariantCounts'];
+type ShadowStationContracts = ShuttleSimState['traffic']['shadowLedger']['stationContracts'];
+type ShadowStationContractSnapshot = ShadowStationContracts['stations'][number];
+type ShadowStationContractDemand = ShadowStationContractSnapshot['demands'][number];
+type ShadowStationVehicleCommitment = ShadowStationContractSnapshot['vehicleCommitments'][number];
+type ShadowStationContractViolation = ShadowStationContracts['violations'][number];
+type ShadowStationContractInvariantCounts = ShadowStationContracts['invariantCounts'];
 
 export type ShuttleSimDebugState = {
   currentNodeOccupancy: Array<{ nodeId: string; vehicleId: string }>;
@@ -33651,6 +33657,269 @@ export class ShuttleSimCore {
     };
   }
 
+  private calculateShadowStationContractDiagnostics(): ShadowStationContracts {
+    type CountKey = Exclude<keyof ShadowStationContractInvariantCounts, 'total'>;
+
+    const invariantCounts: ShadowStationContractInvariantCounts = {
+      demandWithoutCoverage: 0,
+      queueReservationOverTarget: 0,
+      physicalDepthOverTarget: 0,
+      activeServiceWithoutDemand: 0,
+      duplicateVehicleCommitment: 0,
+      total: 0
+    };
+    const violations: ShadowStationContractViolation[] = [];
+    const addViolation = (
+      countKey: CountKey,
+      violation: ShadowStationContractViolation
+    ): void => {
+      invariantCounts[countKey] += 1;
+      if (violations.length < 50) {
+        violations.push(violation);
+      }
+    };
+
+    if (!this.topLiftColumnLayoutEnabled()) {
+      return {
+        schemaVersion: 'shadow-station-contracts.v1',
+        enabled: false,
+        stationCount: 0,
+        invariantCounts,
+        stations: [],
+        violations: []
+      };
+    }
+
+    const activeInboundTasks = this.tasks.filter((task) =>
+      task.kind === 'inbound' &&
+      (task.state === 'queued' || task.state === 'assigned' || task.state === 'in-progress')
+    );
+    const commitmentStationIdsByVehicle = new Map<string, Set<string>>();
+    const stationSnapshots: ShadowStationContractSnapshot[] = this.inboundLiftNodes().map((liftNode) => {
+      const stationId = liftNode.id;
+      const sourceLoads = this.inboundLiftWaitingSourceLoads(stationId);
+      const stationTasks = activeInboundTasks.filter((task) => this.taskLiftPortNodeId(task) === stationId);
+      const tasksByLoadId = new Map(stationTasks.map((task) => [task.loadId, task]));
+      const demandsById = new Map<string, ShadowStationContractDemand>();
+      const frontSourceNodeId = this.inboundSourceFrontBufferNodeId(stationId);
+
+      for (const load of sourceLoads) {
+        const task = tasksByLoadId.get(load.id) ?? null;
+        const status: ShadowStationContractDemand['status'] = task
+          ? task.state === 'queued'
+            ? 'ready'
+            : 'claimed'
+          : load.nodeId === frontSourceNodeId
+            ? 'ready'
+            : 'announced';
+        demandsById.set(`load:${load.id}`, {
+          id: `load:${load.id}`,
+          kind: 'source-load',
+          status,
+          stationId,
+          loadId: load.id,
+          taskId: task?.id ?? null,
+          nodeId: load.nodeId
+        });
+      }
+
+      for (const task of stationTasks) {
+        if (demandsById.has(`load:${task.loadId}`)) {
+          continue;
+        }
+        demandsById.set(`task:${task.id}`, {
+          id: `task:${task.id}`,
+          kind: 'inbound-task',
+          status: task.state === 'queued' ? 'ready' : 'claimed',
+          stationId,
+          loadId: task.loadId,
+          taskId: task.id,
+          nodeId: task.pickupNodeId
+        });
+      }
+
+      const demands = [...demandsById.values()].sort((left, right) =>
+        left.status.localeCompare(right.status) ||
+        (left.taskId ?? '').localeCompare(right.taskId ?? '') ||
+        (left.loadId ?? '').localeCompare(right.loadId ?? '') ||
+        left.id.localeCompare(right.id)
+      );
+
+      const vehicleCommitments: ShadowStationVehicleCommitment[] = [];
+      const physicalQueueOccupants = new Set<string>();
+      for (const vehicle of this.vehicles) {
+        const currentSlot = this.topLiftInboundApproachQueueSlot(vehicle.currentNodeId);
+        const targetSlot = this.topLiftInboundApproachQueueSlot(vehicle.targetNodeId ?? '');
+        const plannedSlot = this.topLiftInboundApproachQueueSlot(vehicle.plannedGoalNodeId ?? '');
+        const currentQueueSlot = currentSlot?.liftNodeId === stationId ? currentSlot.slotIndex : null;
+        const targetQueueSlot = targetSlot?.liftNodeId === stationId ? targetSlot.slotIndex : null;
+        const plannedQueueSlot = plannedSlot?.liftNodeId === stationId ? plannedSlot.slotIndex : null;
+        if (currentQueueSlot !== null) {
+          physicalQueueOccupants.add(vehicle.id);
+        }
+
+        const task = this.taskForVehicle(vehicle);
+        const activeInboundService =
+          task?.kind === 'inbound' &&
+          this.taskLiftPortNodeId(task) === stationId &&
+          (task.state === 'assigned' || task.state === 'in-progress');
+        const queueReservation =
+          !activeInboundService &&
+          !vehicle.loaded &&
+          vehicle.taskId === null &&
+          vehicle.localRouteReason === 'inbound-queue-standby' &&
+          (currentQueueSlot !== null || targetQueueSlot !== null || plannedQueueSlot !== null);
+        if (!activeInboundService && !queueReservation) {
+          continue;
+        }
+
+        const routeNodeIds = [
+          vehicle.currentNodeId,
+          vehicle.targetNodeId,
+          vehicle.plannedGoalNodeId,
+          ...vehicle.routeNodeIds,
+          ...vehicle.plannedRouteNodeIds,
+          ...vehicle.localRouteNodeIds
+        ].filter((nodeId): nodeId is string => Boolean(nodeId));
+        const routeLeavesTopLevel = routeNodeIds.some((nodeId) => {
+          if (this.isStorageNode(nodeId)) {
+            return true;
+          }
+          const level = topLiftAisleLevel(nodeId);
+          return level === 'middle' || level === 'bottom-a' || level === 'bottom-b';
+        });
+        const phase: ShadowStationVehicleCommitment['phase'] = activeInboundService
+          ? 'service'
+          : currentQueueSlot !== null
+            ? 'parked'
+            : 'approaching';
+        vehicleCommitments.push({
+          vehicleId: vehicle.id,
+          kind: activeInboundService ? 'activeInboundService' : 'queueReservation',
+          stationId,
+          phase,
+          taskId: task?.id ?? null,
+          loadId: task?.loadId ?? null,
+          currentNodeId: vehicle.currentNodeId,
+          targetNodeId: vehicle.targetNodeId,
+          plannedGoalNodeId: vehicle.plannedGoalNodeId,
+          currentQueueSlot,
+          targetQueueSlot,
+          plannedQueueSlot,
+          routeLeavesTopLevel
+        });
+        const stations = commitmentStationIdsByVehicle.get(vehicle.id) ?? new Set<string>();
+        stations.add(stationId);
+        commitmentStationIdsByVehicle.set(vehicle.id, stations);
+      }
+
+      vehicleCommitments.sort((left, right) =>
+        left.kind.localeCompare(right.kind) ||
+        (left.currentQueueSlot ?? 99) - (right.currentQueueSlot ?? 99) ||
+        (left.plannedQueueSlot ?? 99) - (right.plannedQueueSlot ?? 99) ||
+        left.vehicleId.localeCompare(right.vehicleId)
+      );
+
+      const targetDepth = this.topLiftInboundQueueReplenishTargetDepth(stationId);
+      const nearCoveredDepth = this.topLiftInboundQueueCoveredDepth(stationId);
+      const queueReservationCount = vehicleCommitments.filter((commitment) => commitment.kind === 'queueReservation').length;
+      const activeServiceDepth = vehicleCommitments.filter((commitment) => commitment.kind === 'activeInboundService').length;
+      const farForecastDepth = vehicleCommitments.filter((commitment) =>
+        commitment.plannedQueueSlot !== null &&
+        commitment.currentQueueSlot === null &&
+        commitment.targetQueueSlot === null &&
+        commitment.routeLeavesTopLevel
+      ).length;
+      const readyDemandCount = demands.filter((demand) => demand.status === 'ready').length;
+      const claimedDemandCount = demands.filter((demand) => demand.status === 'claimed').length;
+      const physicalDepth = physicalQueueOccupants.size;
+
+      if (readyDemandCount > 0 && nearCoveredDepth === 0) {
+        addViolation('demandWithoutCoverage', {
+          code: 'station-demand-without-near-coverage',
+          severity: 'watch',
+          stationId,
+          vehicleId: null,
+          detail: `${stationId} has ${readyDemandCount} ready inbound demand(s) but nearCoveredDepth=0.`
+        });
+      }
+      if (queueReservationCount > targetDepth) {
+        addViolation('queueReservationOverTarget', {
+          code: 'station-queue-reservation-over-target',
+          severity: 'watch',
+          stationId,
+          vehicleId: null,
+          detail: `${stationId} has ${queueReservationCount} queue reservations for targetDepth=${targetDepth}.`
+        });
+      }
+      if (targetDepth > 0 && physicalDepth > targetDepth) {
+        addViolation('physicalDepthOverTarget', {
+          code: 'station-physical-depth-over-target',
+          severity: 'warn',
+          stationId,
+          vehicleId: null,
+          detail: `${stationId} has ${physicalDepth} physical queue occupants for targetDepth=${targetDepth}.`
+        });
+      }
+      if (activeServiceDepth > 0 && demands.length === 0) {
+        addViolation('activeServiceWithoutDemand', {
+          code: 'station-active-service-without-demand',
+          severity: 'warn',
+          stationId,
+          vehicleId: vehicleCommitments.find((commitment) => commitment.kind === 'activeInboundService')?.vehicleId ?? null,
+          detail: `${stationId} has ${activeServiceDepth} active inbound service vehicle(s), but no matching demand entry.`
+        });
+      }
+
+      return {
+        stationId,
+        kind: 'inbound',
+        demandCount: demands.length,
+        readyDemandCount,
+        claimedDemandCount,
+        sourceBufferOccupancy: sourceLoads.length,
+        sourceBufferCapacity: this.inboundSourceBufferCapacity(stationId),
+        targetDepth,
+        physicalDepth,
+        nearCoveredDepth,
+        farForecastDepth,
+        queueReservationCount,
+        activeServiceDepth,
+        demands: demands.slice(0, 12),
+        vehicleCommitments: vehicleCommitments.slice(0, 12)
+      };
+    });
+
+    for (const [vehicleId, stationIds] of commitmentStationIdsByVehicle.entries()) {
+      if (stationIds.size <= 1) {
+        continue;
+      }
+      addViolation('duplicateVehicleCommitment', {
+        code: 'station-duplicate-vehicle-commitment',
+        severity: 'critical',
+        stationId: null,
+        vehicleId,
+        detail: `${vehicleId} has shadow station commitments for ${[...stationIds].sort().join(', ')}.`
+      });
+    }
+
+    invariantCounts.total =
+      invariantCounts.demandWithoutCoverage +
+      invariantCounts.queueReservationOverTarget +
+      invariantCounts.physicalDepthOverTarget +
+      invariantCounts.activeServiceWithoutDemand +
+      invariantCounts.duplicateVehicleCommitment;
+
+    return {
+      schemaVersion: 'shadow-station-contracts.v1',
+      enabled: true,
+      stationCount: stationSnapshots.length,
+      invariantCounts,
+      stations: stationSnapshots,
+      violations
+    };
+  }
+
   private calculateShadowResourceLedgerDiagnostics(): ShuttleSimState['traffic']['shadowLedger'] {
     type CountKey = Exclude<keyof ShadowLedgerInvariantCounts, 'total'>;
 
@@ -33938,7 +34207,8 @@ export class ShuttleSimCore {
         lease.kind === 'local-route-claim'
       ).length,
       invariantCounts,
-      violations
+      violations,
+      stationContracts: this.calculateShadowStationContractDiagnostics()
     };
   }
 

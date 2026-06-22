@@ -1577,6 +1577,117 @@ describe('shuttle phase 0 SimCore', () => {
     expect(topVehicle.plannedGoalNodeId).toMatch(/^column-top-a-c(?:09|10|11)$/);
   });
 
+  it('reports station-owned shadow contracts for inbound demand, queue reservation, and active service', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    }));
+    sim.addLoadForTest({
+      id: 'shadow-contract-load',
+      state: 'waiting',
+      nodeId: 'lift-01-inbound-buffer-03',
+      vehicleId: null,
+      weightKg: 100
+    });
+    sim.addTaskForTest({
+      id: 'shadow-contract-task',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r02-c08',
+      loadId: 'shadow-contract-load',
+      vehicleId: 'SH-02',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', ['column-top-a-c09']);
+    sim.setVehicleRouteForTest('SH-02', ['column-top-a-c10']);
+    sim.setVehicleTaskForTest('SH-02', 'shadow-contract-task', false);
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        plannedGoalNodeId: string | null;
+        plannedRouteNodeIds: string[];
+        localRouteNodeIds: string[];
+        localRouteReason: string | null;
+      }>;
+    };
+    const reserveVehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    reserveVehicle.plannedGoalNodeId = 'column-top-a-c09';
+    reserveVehicle.plannedRouteNodeIds = ['column-top-a-c09'];
+    reserveVehicle.localRouteNodeIds = [];
+    reserveVehicle.localRouteReason = 'inbound-queue-standby';
+
+    const state = ShuttleSimStateSchema.parse(sim.getState());
+    const stationContracts = state.traffic.shadowLedger.stationContracts;
+    const station = stationContracts.stations.find((candidate) => candidate.stationId === 'lift-01-inbound');
+
+    expect(stationContracts.enabled).toBe(true);
+    expect(station).toMatchObject({
+      stationId: 'lift-01-inbound',
+      demandCount: 1,
+      claimedDemandCount: 1,
+      queueReservationCount: 1,
+      activeServiceDepth: 1,
+      physicalDepth: 2,
+      nearCoveredDepth: 2
+    });
+    expect(station?.demands).toContainEqual(expect.objectContaining({
+      kind: 'source-load',
+      status: 'claimed',
+      loadId: 'shadow-contract-load',
+      taskId: 'shadow-contract-task'
+    }));
+    expect(station?.vehicleCommitments).toContainEqual(expect.objectContaining({
+      vehicleId: 'SH-01',
+      kind: 'queueReservation',
+      currentQueueSlot: 1
+    }));
+    expect(station?.vehicleCommitments).toContainEqual(expect.objectContaining({
+      vehicleId: 'SH-02',
+      kind: 'activeInboundService',
+      taskId: 'shadow-contract-task'
+    }));
+  });
+
+  it('keeps station shadow contract sampling read-only within a 3D tick', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      durationSec: 12,
+      timeStepSec: 0.2,
+      vehicles: { count: 4 },
+      taskGeneration: {
+        inboundRatePerHour: 3600,
+        outboundRatePerHour: 3600,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 2,
+        initialStorageFillPolicy: 'zone-balanced-50',
+        maxTasks: 24
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.start();
+    sim.advanceByInPlace(1);
+
+    const beforeHash = hashEngineSnapshot(sim.createSnapshot());
+    const state = ShuttleSimStateSchema.parse(sim.getState());
+    const afterHash = hashEngineSnapshot(sim.createSnapshot());
+
+    expect(state.traffic.shadowLedger.stationContracts.enabled).toBe(true);
+    expect(state.traffic.shadowLedger.stationContracts.stationCount).toBeGreaterThan(0);
+    expect(afterHash).toBe(beforeHash);
+  });
+
   it('protects taskless shuttles for inbound queue reserve before ordinary outbound work', () => {
     const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
       vehicles: { count: 2 },
