@@ -1682,6 +1682,17 @@ describe('shuttle phase 0 SimCore', () => {
         targetReserveDepth: 0,
         queueCoverageGap: 0,
         stationNeedsReservation: false
+      },
+      serviceTransition: {
+        mode: 'shadow',
+        headReservationVehicleId: 'SH-01',
+        headReservationSlot: 1,
+        headDemandId: 'load:shadow-contract-load',
+        headDemandStatus: 'claimed',
+        activeServiceVehicleId: 'SH-02',
+        activeServiceTaskId: 'shadow-contract-task',
+        readyToStartService: false,
+        gap: 'none'
       }
     });
     expect(station?.demands).toContainEqual(expect.objectContaining({
@@ -1715,6 +1726,64 @@ describe('shuttle phase 0 SimCore', () => {
       resourceKey: 'station:lift-01-inbound:queue-slot:2',
       slotIndex: 2
     }));
+  });
+
+  it('previews unbound head reservation service transitions without mutating dispatch', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    }));
+    sim.addLoadForTest({
+      id: 'shadow-transition-load',
+      state: 'waiting',
+      nodeId: 'lift-01-inbound-buffer-03',
+      vehicleId: null,
+      weightKg: 100
+    });
+    sim.setVehicleRouteForTest('SH-01', ['column-top-a-c09']);
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        plannedGoalNodeId: string | null;
+        plannedRouteNodeIds: string[];
+        localRouteNodeIds: string[];
+        localRouteReason: string | null;
+        taskId: string | null;
+      }>;
+    };
+    const reserveVehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    reserveVehicle.plannedGoalNodeId = 'column-top-a-c09';
+    reserveVehicle.plannedRouteNodeIds = ['column-top-a-c09'];
+    reserveVehicle.localRouteNodeIds = [];
+    reserveVehicle.localRouteReason = 'inbound-queue-standby';
+
+    const state = ShuttleSimStateSchema.parse(sim.getState());
+    const station = state.traffic.shadowLedger.stationContracts.stations.find((candidate) =>
+      candidate.stationId === 'lift-01-inbound'
+    );
+
+    expect(reserveVehicle.taskId).toBeNull();
+    expect(station?.serviceTransition).toMatchObject({
+      mode: 'shadow',
+      headReservationVehicleId: 'SH-01',
+      headReservationSlot: 1,
+      headDemandId: 'load:shadow-transition-load',
+      headDemandStatus: 'ready',
+      activeServiceVehicleId: null,
+      activeServiceTaskId: null,
+      readyToStartService: true,
+      gap: 'ready-reservation-not-bound'
+    });
+    expect(station?.demandCount).toBe(1);
+    expect(station?.queueReservationCount).toBe(1);
+    expect(station?.activeServiceDepth).toBe(0);
   });
 
   it('does not report loaded inbound delivery as station active service', () => {

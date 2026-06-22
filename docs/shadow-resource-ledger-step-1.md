@@ -1476,3 +1476,65 @@ Updated next step:
 - Retry the reservation-to-service source transition using this ledger as the source of truth in shadow comparison first.
 - The coordinator should convert only a head station reservation plus a ready/claimed ledger demand into `activeInboundService`.
 - Do not change 3D motion behavior until the shadow comparison shows which current implicit decision would change and why.
+
+## Shadow Source Transition Preview
+
+Date: 2026-06-22
+
+Change:
+
+- Added a shadow-only `serviceTransition` block to each inbound station contract snapshot.
+- The preview records:
+  - physical head taskless queue reservation,
+  - head ready/claimed source-side demand,
+  - current active inbound service vehicle/task,
+  - whether a source transition could start immediately,
+  - and a `gap` classification.
+- Extended `scripts/diagnose-station-queue-contract.ts` with service transition gap counts and average ready-to-start count.
+
+Reason:
+
+- The previous step proved the source-side demand ledger can distinguish waiting, claimed, and picked demand without changing behavior.
+- Before retrying any source cut, this preview asks a narrower question: do we actually have a taskless AMR physically at the station queue head while ready/claimed source demand is waiting?
+- This stays shadow-only and does not bind tasks, move vehicles, reserve paths, or change collision avoidance.
+
+Validation:
+
+```bash
+pnpm --filter @four-way-shuttle/schemas exec tsc --noEmit
+pnpm --filter @four-way-shuttle/sim-core exec tsc --noEmit
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "station-owned shadow contracts|previews unbound head reservation|does not report loaded inbound delivery|reports duplicate station route leases|keeps station shadow contract sampling" --reporter=dot
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --sample-sec 10 --dt-sec 0.2 --out output/review/station-shadow-source-transition-preview-600s.json
+./node_modules/.bin/tsx scripts/run-physical-24h-amr-audit.ts --hours 0.5 --out output/review/station-shadow-source-transition-preview-0p5h-audit.json --checkpoint-dir output/review/station-shadow-source-transition-preview-0p5h-checkpoints --audit-every-sec 30 --quiet-critical
+```
+
+Results:
+
+- Typecheck passed for schemas and sim-core.
+- Targeted station tests passed: `5 passed`, `460 skipped`.
+- 600s station diagnosis:
+  - total PPH `516`, inbound `210`, physical violations `0`.
+  - station invariant total `1`, same as the accepted baseline.
+  - service transition gap counts: `none=57`, `waiting-for-head-reservation=63`, `waiting-for-demand=2`.
+  - `ready-reservation-not-bound=0`.
+  - average ready-to-start service count `0`.
+- 30m physical audit:
+  - total PPH `508`, inbound `200`, outbound `308`.
+  - AMR anomalies `0`, critical anomalies `0`.
+
+Decision:
+
+- Accepted as shadow-only source transition preview.
+- This disproves the next naive fix: in the observed 600s window, the system is not usually sitting with a taskless AMR at the physical station head waiting to be bound.
+- The dominant gap is upstream: ready source demand often exists while no physical head reservation exists.
+
+Updated next step:
+
+- Focus the next source cut on head-reservation supply, not task binding at the station.
+- Add a shadow audit for why ready demand lacks a physical head reservation:
+  - no reserve candidate,
+  - reserve candidate moving but not yet at head,
+  - route infeasible to station queue,
+  - candidate blocked by outbound work,
+  - hold timers / assignment holds.
+- Only after this audit identifies a bounded source should we change queue-reserve dispatch behavior.

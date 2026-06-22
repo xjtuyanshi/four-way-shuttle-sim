@@ -234,6 +234,7 @@ type ShadowStationContractSnapshot = ShadowStationContracts['stations'][number];
 type ShadowStationContractDemand = ShadowStationContractSnapshot['demands'][number];
 type ShadowStationVehicleCommitment = ShadowStationContractSnapshot['vehicleCommitments'][number];
 type ShadowStationRouteLease = ShadowStationContractSnapshot['routeLeases'][number];
+type ShadowStationServiceTransition = ShadowStationContractSnapshot['serviceTransition'];
 type ShadowStationContractViolation = ShadowStationContracts['violations'][number];
 type ShadowStationContractInvariantCounts = ShadowStationContracts['invariantCounts'];
 type ShadowInboundDemandLedger = ShadowStationContracts['inboundDemandLedger'];
@@ -33959,6 +33960,54 @@ export class ShuttleSimCore {
     };
   }
 
+  private calculateShadowStationServiceTransition(
+    demands: ShadowStationContractDemand[],
+    vehicleCommitments: ShadowStationVehicleCommitment[]
+  ): ShadowStationServiceTransition {
+    const activeService = vehicleCommitments
+      .filter((commitment) => commitment.kind === 'activeInboundService')
+      .sort((left, right) =>
+        (left.currentQueueSlot ?? 99) - (right.currentQueueSlot ?? 99) ||
+        left.vehicleId.localeCompare(right.vehicleId)
+      )[0] ?? null;
+    const headReservation = vehicleCommitments
+      .filter((commitment) => commitment.kind === 'queueReservation' && commitment.currentQueueSlot !== null)
+      .sort((left, right) =>
+        (left.currentQueueSlot ?? 99) - (right.currentQueueSlot ?? 99) ||
+        left.vehicleId.localeCompare(right.vehicleId)
+      )[0] ?? null;
+    const headDemand = demands
+      .filter((demand) => demand.status === 'ready' || demand.status === 'claimed')
+      .sort((left, right) =>
+        this.shadowInboundDemandStatusRank(left.status) - this.shadowInboundDemandStatusRank(right.status) ||
+        (left.taskId ?? '').localeCompare(right.taskId ?? '') ||
+        (left.loadId ?? '').localeCompare(right.loadId ?? '') ||
+        left.id.localeCompare(right.id)
+      )[0] ?? null;
+    const readyToStartService = activeService === null && headReservation !== null && headDemand !== null;
+    const gap: ShadowStationServiceTransition['gap'] = activeService
+      ? 'none'
+      : headReservation && headDemand
+        ? 'ready-reservation-not-bound'
+        : headDemand
+          ? 'waiting-for-head-reservation'
+          : headReservation
+            ? 'waiting-for-demand'
+            : 'no-ready-demand';
+
+    return {
+      mode: 'shadow',
+      headReservationVehicleId: headReservation?.vehicleId ?? null,
+      headReservationSlot: headReservation?.currentQueueSlot ?? null,
+      headDemandId: headDemand?.id ?? null,
+      headDemandStatus: headDemand?.status === 'ready' || headDemand?.status === 'claimed' ? headDemand.status : null,
+      activeServiceVehicleId: activeService?.vehicleId ?? null,
+      activeServiceTaskId: activeService?.taskId ?? null,
+      readyToStartService,
+      gap
+    };
+  }
+
   private calculateShadowStationContractDiagnostics(): ShadowStationContracts {
     type CountKey = Exclude<keyof ShadowStationContractInvariantCounts, 'total'>;
 
@@ -34209,6 +34258,7 @@ export class ShuttleSimCore {
           : activeServiceDepth > 0
             ? 'hold-active-service'
             : 'match-head-reservation';
+      const serviceTransition = this.calculateShadowStationServiceTransition(demands, vehicleCommitments);
 
       if (readyDemandCount > 0 && nearCoveredDepth === 0) {
         addViolation('demandWithoutCoverage', {
@@ -34276,6 +34326,7 @@ export class ShuttleSimCore {
           dispatchableReserveCandidateCount,
           candidateReasonCounts
         },
+        serviceTransition,
         demands: demands.slice(0, 12),
         vehicleCommitments: vehicleCommitments.slice(0, 12),
         routeLeases

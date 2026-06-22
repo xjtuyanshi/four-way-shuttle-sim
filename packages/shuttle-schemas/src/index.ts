@@ -699,6 +699,24 @@ export const ShadowStationCoordinatorSchema = z.object({
   candidateReasonCounts: z.record(z.number().int().nonnegative()).default({})
 });
 
+export const ShadowStationServiceTransitionSchema = z.object({
+  mode: z.literal('shadow').default('shadow'),
+  headReservationVehicleId: z.string().nullable(),
+  headReservationSlot: z.number().int().positive().nullable(),
+  headDemandId: z.string().nullable(),
+  headDemandStatus: z.enum(['ready', 'claimed']).nullable(),
+  activeServiceVehicleId: z.string().nullable(),
+  activeServiceTaskId: z.string().nullable(),
+  readyToStartService: z.boolean().default(false),
+  gap: z.enum([
+    'none',
+    'no-ready-demand',
+    'waiting-for-head-reservation',
+    'waiting-for-demand',
+    'ready-reservation-not-bound'
+  ])
+});
+
 export const ShadowStationContractSnapshotSchema = z.object({
   stationId: z.string(),
   kind: z.literal('inbound'),
@@ -726,6 +744,16 @@ export const ShadowStationContractSnapshotSchema = z.object({
     eligibleTasklessVehicleCount: 0,
     dispatchableReserveCandidateCount: 0,
     candidateReasonCounts: {}
+  }),
+  serviceTransition: ShadowStationServiceTransitionSchema.default({
+    headReservationVehicleId: null,
+    headReservationSlot: null,
+    headDemandId: null,
+    headDemandStatus: null,
+    activeServiceVehicleId: null,
+    activeServiceTaskId: null,
+    readyToStartService: false,
+    gap: 'no-ready-demand'
   }),
   demands: z.array(ShadowStationContractDemandSchema).default([]),
   vehicleCommitments: z.array(ShadowStationVehicleCommitmentSchema).default([]),

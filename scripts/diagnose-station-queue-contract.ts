@@ -233,6 +233,7 @@ function candidate(
 function summarize(samples: Sample[], finalState: ShuttleSimState): Record<string, unknown> {
   const stationEntries = samples.flatMap((sample) => sample.stationContracts.stations);
   const coordinatorEntries = stationEntries.map((station) => station.coordinator);
+  const serviceTransitionEntries = stationEntries.map((station) => station.serviceTransition);
   const ledgerEntries = samples.map((sample) => sample.stationContracts.inboundDemandLedger);
   const candidateEntries = samples.flatMap((sample) => sample.candidates);
   const releasedRouteCandidates = candidateEntries.filter((candidate) => candidate.releasedStandbyRouteLength !== null);
@@ -291,6 +292,10 @@ function summarize(samples: Sample[], finalState: ShuttleSimState): Record<strin
     averageCoordinatorQueueCoverageGap: round(average(coordinatorEntries.map((coordinator) => coordinator.queueCoverageGap)), 3),
     averageCoordinatorActiveServiceGap: round(average(coordinatorEntries.map((coordinator) => coordinator.activeServiceGap)), 3),
     averageCoordinatorDispatchableReserveCandidateCount: round(average(coordinatorEntries.map((coordinator) => coordinator.dispatchableReserveCandidateCount)), 3),
+    serviceTransitionGapCounts: countBy(serviceTransitionEntries, (transition) => transition.gap),
+    averageReadyToStartServiceCount: round(average(samples.map((sample) =>
+      sample.stationContracts.stations.filter((station) => station.serviceTransition.readyToStartService).length
+    )), 3),
     coordinatorCandidateReasonCounts: coordinatorEntries.reduce<Record<string, number>>((accumulator, coordinator) => {
       for (const [reason, count] of Object.entries(coordinator.candidateReasonCounts)) {
         accumulator[reason] = (accumulator[reason] ?? 0) + count;
