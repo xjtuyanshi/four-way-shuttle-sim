@@ -1538,3 +1538,68 @@ Updated next step:
   - candidate blocked by outbound work,
   - hold timers / assignment holds.
 - Only after this audit identifies a bounded source should we change queue-reserve dispatch behavior.
+
+## Shadow Head Reservation Supply Audit
+
+Date: 2026-06-22
+
+Change:
+
+- Added a shadow-only `headReservationSupply` block to each inbound station contract snapshot.
+- The audit records:
+  - physical head taskless queue reservation,
+  - physical / approaching / forecast reservation counts,
+  - ready and claimed source-side demand,
+  - dispatchable reserve candidate count,
+  - dominant candidate reason,
+  - raw candidate reason counts,
+  - and grouped candidate buckets: `dispatchable`, `busy`, `routeInfeasible`, `held`, `noTarget`, `unavailable`.
+- Extended `scripts/diagnose-station-queue-contract.ts` with head-reservation supply gap counts and bucket counts.
+
+Reason:
+
+- The source transition preview showed `ready-reservation-not-bound=0`, so binding a task at the station head is not the observed missing step.
+- This audit asks the upstream question: when source-side demand is ready/claimed, why is there no physical head reservation?
+- It remains shadow-only and does not change queue dispatch, task assignment, routing, collision avoidance, or vehicle motion.
+
+Validation:
+
+```bash
+pnpm --filter @four-way-shuttle/schemas exec tsc --noEmit
+pnpm --filter @four-way-shuttle/sim-core exec tsc --noEmit
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "station-owned shadow contracts|previews unbound head reservation|classifies missing physical head reservation|does not report loaded inbound delivery|reports duplicate station route leases|keeps station shadow contract sampling" --reporter=dot
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --sample-sec 10 --dt-sec 0.2 --out output/review/station-shadow-head-reservation-supply-audit-600s.json
+./node_modules/.bin/tsx scripts/run-physical-24h-amr-audit.ts --hours 0.5 --out output/review/station-shadow-head-reservation-supply-audit-0p5h.json --checkpoint-dir output/review/station-shadow-head-reservation-supply-audit-0p5h-checkpoints --audit-every-sec 30 --quiet-critical
+```
+
+Results:
+
+- Typecheck passed for schemas and sim-core.
+- Targeted station tests passed: `6 passed`, `460 skipped`.
+- 600s station diagnosis:
+  - total PPH `516`, inbound `210`, physical violations `0`.
+  - station invariant total `1`, same as accepted baseline.
+  - head reservation supply gaps: `fleet-busy=63`, `active-service-present=57`, `no-ready-demand=2`.
+  - average physical head reservation count `0.016`.
+  - average physical reservation count `0.049`.
+  - average approaching reservation count `0`.
+  - average forecast reservation count `0`.
+  - candidate buckets: `busy=904`, `routeInfeasible=30`, `held=22`, `noTarget=4`, `dispatchable=0`.
+  - raw coordinator candidate reasons: `busy-task=776`, `busy-moving=128`, `no-station-route=30`, `assignment-hold=14`, `inbound-dropoff-standby-hold=8`, `no-open-station-target=4`.
+- 30m physical audit:
+  - total PPH `508`, inbound `200`, outbound `308`.
+  - AMR anomalies `0`, critical anomalies `0`.
+
+Decision:
+
+- Accepted as shadow-only head-reservation supply instrumentation.
+- The observed missing step is not an unbound physical queue head and not an immediately dispatchable idle AMR.
+- The dominant explanation is that, when station demand is ready, the fleet is already busy or moving; route infeasibility and holds are secondary.
+
+Updated next step:
+
+- Do not patch station binding yet.
+- Compare candidate busy tasks by kind and queue coverage, then design a bounded source-of-truth change:
+  - protect at least one near-field taskless reserve before assigning lower-priority outbound work,
+  - or let the station coordinator preempt/release selected empty outbound assignments only when it can produce a short, valid inbound reserve route.
+- Any source cut must be A/B checked against this baseline before running longer 3D tests.

@@ -717,6 +717,45 @@ export const ShadowStationServiceTransitionSchema = z.object({
   ])
 });
 
+export const ShadowStationHeadReservationSupplyBucketCountsSchema = z.object({
+  dispatchable: z.number().int().nonnegative().default(0),
+  busy: z.number().int().nonnegative().default(0),
+  routeInfeasible: z.number().int().nonnegative().default(0),
+  held: z.number().int().nonnegative().default(0),
+  noTarget: z.number().int().nonnegative().default(0),
+  unavailable: z.number().int().nonnegative().default(0)
+});
+
+export const ShadowStationHeadReservationSupplySchema = z.object({
+  mode: z.literal('shadow').default('shadow'),
+  gap: z.enum([
+    'none',
+    'no-ready-demand',
+    'active-service-present',
+    'head-reservation-present',
+    'reserve-in-transit',
+    'dispatchable-candidate-available',
+    'fleet-busy',
+    'route-infeasible',
+    'held-by-assignment',
+    'no-open-station-target',
+    'unknown'
+  ]),
+  readyDemandCount: z.number().int().nonnegative(),
+  claimedDemandCount: z.number().int().nonnegative(),
+  targetReserveDepth: z.number().int().nonnegative(),
+  nearCoveredDepth: z.number().int().nonnegative(),
+  physicalHeadReservationVehicleId: z.string().nullable(),
+  physicalHeadReservationSlot: z.number().int().positive().nullable(),
+  physicalReservationCount: z.number().int().nonnegative(),
+  approachingReservationCount: z.number().int().nonnegative(),
+  forecastReservationCount: z.number().int().nonnegative(),
+  dispatchableReserveCandidateCount: z.number().int().nonnegative(),
+  dominantCandidateReason: z.string().nullable(),
+  candidateBucketCounts: ShadowStationHeadReservationSupplyBucketCountsSchema.default({}),
+  candidateReasonCounts: z.record(z.number().int().nonnegative()).default({})
+});
+
 export const ShadowStationContractSnapshotSchema = z.object({
   stationId: z.string(),
   kind: z.literal('inbound'),
@@ -754,6 +793,22 @@ export const ShadowStationContractSnapshotSchema = z.object({
     activeServiceTaskId: null,
     readyToStartService: false,
     gap: 'no-ready-demand'
+  }),
+  headReservationSupply: ShadowStationHeadReservationSupplySchema.default({
+    gap: 'no-ready-demand',
+    readyDemandCount: 0,
+    claimedDemandCount: 0,
+    targetReserveDepth: 0,
+    nearCoveredDepth: 0,
+    physicalHeadReservationVehicleId: null,
+    physicalHeadReservationSlot: null,
+    physicalReservationCount: 0,
+    approachingReservationCount: 0,
+    forecastReservationCount: 0,
+    dispatchableReserveCandidateCount: 0,
+    dominantCandidateReason: null,
+    candidateBucketCounts: {},
+    candidateReasonCounts: {}
   }),
   demands: z.array(ShadowStationContractDemandSchema).default([]),
   vehicleCommitments: z.array(ShadowStationVehicleCommitmentSchema).default([]),

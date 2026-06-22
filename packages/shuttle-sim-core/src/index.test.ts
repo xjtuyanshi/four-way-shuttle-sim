@@ -1693,6 +1693,17 @@ describe('shuttle phase 0 SimCore', () => {
         activeServiceTaskId: 'shadow-contract-task',
         readyToStartService: false,
         gap: 'none'
+      },
+      headReservationSupply: {
+        mode: 'shadow',
+        gap: 'active-service-present',
+        readyDemandCount: 0,
+        claimedDemandCount: 1,
+        physicalHeadReservationVehicleId: 'SH-01',
+        physicalHeadReservationSlot: 1,
+        physicalReservationCount: 1,
+        approachingReservationCount: 0,
+        forecastReservationCount: 0
       }
     });
     expect(station?.demands).toContainEqual(expect.objectContaining({
@@ -1781,9 +1792,87 @@ describe('shuttle phase 0 SimCore', () => {
       readyToStartService: true,
       gap: 'ready-reservation-not-bound'
     });
+    expect(station?.headReservationSupply).toMatchObject({
+      mode: 'shadow',
+      gap: 'head-reservation-present',
+      readyDemandCount: 1,
+      claimedDemandCount: 0,
+      physicalHeadReservationVehicleId: 'SH-01',
+      physicalHeadReservationSlot: 1,
+      physicalReservationCount: 1,
+      approachingReservationCount: 0,
+      forecastReservationCount: 0
+    });
     expect(station?.demandCount).toBe(1);
     expect(station?.queueReservationCount).toBe(1);
     expect(station?.activeServiceDepth).toBe(0);
+  });
+
+  it('classifies missing physical head reservation supply when the only AMR is busy', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 2
+      }
+    }));
+    sim.addLoadForTest({
+      id: 'shadow-busy-source-load',
+      state: 'waiting',
+      nodeId: 'lift-01-inbound-buffer-03',
+      vehicleId: null,
+      weightKg: 100
+    });
+    sim.addLoadForTest({
+      id: 'shadow-busy-outbound-load',
+      state: 'stored',
+      nodeId: 'storage-r02-c08',
+      vehicleId: null,
+      weightKg: 100
+    });
+    sim.addTaskForTest({
+      id: 'shadow-busy-outbound-task',
+      kind: 'outbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r02-c08',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'shadow-busy-outbound-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleTaskForTest('SH-01', 'shadow-busy-outbound-task', false);
+
+    const state = ShuttleSimStateSchema.parse(sim.getState());
+    const station = state.traffic.shadowLedger.stationContracts.stations.find((candidate) =>
+      candidate.stationId === 'lift-01-inbound'
+    );
+
+    expect(station?.headReservationSupply).toMatchObject({
+      mode: 'shadow',
+      gap: 'fleet-busy',
+      readyDemandCount: 1,
+      claimedDemandCount: 0,
+      physicalHeadReservationVehicleId: null,
+      physicalReservationCount: 0,
+      approachingReservationCount: 0,
+      forecastReservationCount: 0,
+      dispatchableReserveCandidateCount: 0,
+      dominantCandidateReason: 'busy-task',
+      candidateBucketCounts: expect.objectContaining({
+        busy: 1
+      }),
+      candidateReasonCounts: expect.objectContaining({
+        'busy-task': 1
+      })
+    });
   });
 
   it('does not report loaded inbound delivery as station active service', () => {

@@ -234,6 +234,7 @@ function summarize(samples: Sample[], finalState: ShuttleSimState): Record<strin
   const stationEntries = samples.flatMap((sample) => sample.stationContracts.stations);
   const coordinatorEntries = stationEntries.map((station) => station.coordinator);
   const serviceTransitionEntries = stationEntries.map((station) => station.serviceTransition);
+  const headReservationSupplyEntries = stationEntries.map((station) => station.headReservationSupply);
   const ledgerEntries = samples.map((sample) => sample.stationContracts.inboundDemandLedger);
   const candidateEntries = samples.flatMap((sample) => sample.candidates);
   const releasedRouteCandidates = candidateEntries.filter((candidate) => candidate.releasedStandbyRouteLength !== null);
@@ -296,6 +297,19 @@ function summarize(samples: Sample[], finalState: ShuttleSimState): Record<strin
     averageReadyToStartServiceCount: round(average(samples.map((sample) =>
       sample.stationContracts.stations.filter((station) => station.serviceTransition.readyToStartService).length
     )), 3),
+    headReservationSupplyGapCounts: countBy(headReservationSupplyEntries, (supply) => supply.gap),
+    averagePhysicalHeadReservationCount: round(average(headReservationSupplyEntries.map((supply) =>
+      supply.physicalHeadReservationVehicleId ? 1 : 0
+    )), 3),
+    averagePhysicalReservationCount: round(average(headReservationSupplyEntries.map((supply) => supply.physicalReservationCount)), 3),
+    averageApproachingReservationCount: round(average(headReservationSupplyEntries.map((supply) => supply.approachingReservationCount)), 3),
+    averageForecastReservationCount: round(average(headReservationSupplyEntries.map((supply) => supply.forecastReservationCount)), 3),
+    headReservationSupplyBucketCounts: headReservationSupplyEntries.reduce<Record<string, number>>((accumulator, supply) => {
+      for (const [bucket, count] of Object.entries(supply.candidateBucketCounts)) {
+        accumulator[bucket] = (accumulator[bucket] ?? 0) + count;
+      }
+      return accumulator;
+    }, {}),
     coordinatorCandidateReasonCounts: coordinatorEntries.reduce<Record<string, number>>((accumulator, coordinator) => {
       for (const [reason, count] of Object.entries(coordinator.candidateReasonCounts)) {
         accumulator[reason] = (accumulator[reason] ?? 0) + count;

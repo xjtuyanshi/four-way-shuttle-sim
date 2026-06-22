@@ -235,6 +235,7 @@ type ShadowStationContractDemand = ShadowStationContractSnapshot['demands'][numb
 type ShadowStationVehicleCommitment = ShadowStationContractSnapshot['vehicleCommitments'][number];
 type ShadowStationRouteLease = ShadowStationContractSnapshot['routeLeases'][number];
 type ShadowStationServiceTransition = ShadowStationContractSnapshot['serviceTransition'];
+type ShadowStationHeadReservationSupply = ShadowStationContractSnapshot['headReservationSupply'];
 type ShadowStationContractViolation = ShadowStationContracts['violations'][number];
 type ShadowStationContractInvariantCounts = ShadowStationContracts['invariantCounts'];
 type ShadowInboundDemandLedger = ShadowStationContracts['inboundDemandLedger'];
@@ -34008,6 +34009,109 @@ export class ShuttleSimCore {
     };
   }
 
+  private calculateShadowStationHeadReservationSupply(
+    demands: ShadowStationContractDemand[],
+    vehicleCommitments: ShadowStationVehicleCommitment[],
+    targetReserveDepth: number,
+    nearCoveredDepth: number,
+    candidateReasonCounts: Record<string, number>
+  ): ShadowStationHeadReservationSupply {
+    const readyDemandCount = demands.filter((demand) => demand.status === 'ready').length;
+    const claimedDemandCount = demands.filter((demand) => demand.status === 'claimed').length;
+    const activeServiceDepth = vehicleCommitments.filter((commitment) => commitment.kind === 'activeInboundService').length;
+    const queueReservations = vehicleCommitments.filter((commitment) => commitment.kind === 'queueReservation');
+    const physicalReservations = queueReservations.filter((commitment) => commitment.currentQueueSlot !== null);
+    const approachingReservations = queueReservations.filter((commitment) =>
+      commitment.currentQueueSlot === null && commitment.targetQueueSlot !== null
+    );
+    const forecastReservations = queueReservations.filter((commitment) =>
+      commitment.currentQueueSlot === null &&
+      commitment.targetQueueSlot === null &&
+      commitment.plannedQueueSlot !== null
+    );
+    const physicalHeadReservation = [...physicalReservations].sort((left, right) =>
+      (left.currentQueueSlot ?? 99) - (right.currentQueueSlot ?? 99) ||
+      left.vehicleId.localeCompare(right.vehicleId)
+    )[0] ?? null;
+    const candidateBucketCounts = this.shadowStationHeadReservationCandidateBucketCounts(candidateReasonCounts);
+    const dominantCandidateReason = this.shadowDominantReason(candidateReasonCounts);
+    const dominantCandidateBucket = this.shadowDominantReason(candidateBucketCounts);
+    const dispatchableReserveCandidateCount = candidateReasonCounts['dispatchable-reserve'] ?? 0;
+    const hasReadyOrClaimedDemand = readyDemandCount + claimedDemandCount > 0;
+    const gap: ShadowStationHeadReservationSupply['gap'] = !hasReadyOrClaimedDemand
+      ? 'no-ready-demand'
+      : activeServiceDepth > 0
+        ? 'active-service-present'
+        : physicalHeadReservation
+          ? 'head-reservation-present'
+          : approachingReservations.length + forecastReservations.length > 0
+            ? 'reserve-in-transit'
+            : dispatchableReserveCandidateCount > 0
+              ? 'dispatchable-candidate-available'
+              : dominantCandidateBucket === 'busy'
+                ? 'fleet-busy'
+                : dominantCandidateBucket === 'routeInfeasible'
+                  ? 'route-infeasible'
+                  : dominantCandidateBucket === 'held'
+                    ? 'held-by-assignment'
+                    : dominantCandidateBucket === 'noTarget'
+                      ? 'no-open-station-target'
+                      : 'unknown';
+
+    return {
+      mode: 'shadow',
+      gap,
+      readyDemandCount,
+      claimedDemandCount,
+      targetReserveDepth,
+      nearCoveredDepth,
+      physicalHeadReservationVehicleId: physicalHeadReservation?.vehicleId ?? null,
+      physicalHeadReservationSlot: physicalHeadReservation?.currentQueueSlot ?? null,
+      physicalReservationCount: physicalReservations.length,
+      approachingReservationCount: approachingReservations.length,
+      forecastReservationCount: forecastReservations.length,
+      dispatchableReserveCandidateCount,
+      dominantCandidateReason,
+      candidateBucketCounts,
+      candidateReasonCounts
+    };
+  }
+
+  private shadowStationHeadReservationCandidateBucketCounts(
+    candidateReasonCounts: Record<string, number>
+  ): ShadowStationHeadReservationSupply['candidateBucketCounts'] {
+    const knownReasons = new Set([
+      'dispatchable-reserve',
+      'busy-task',
+      'busy-loaded',
+      'busy-moving',
+      'no-station-route',
+      'route-origin-disallowed',
+      'assignment-hold',
+      'inbound-dropoff-standby-hold',
+      'standby-reroute-not-allowed',
+      'no-open-station-target'
+    ]);
+    const sum = (...reasons: string[]): number =>
+      reasons.reduce((total, reason) => total + (candidateReasonCounts[reason] ?? 0), 0);
+    const knownCount = [...knownReasons].reduce((total, reason) => total + (candidateReasonCounts[reason] ?? 0), 0);
+    const totalCount = Object.values(candidateReasonCounts).reduce((total, count) => total + count, 0);
+    return {
+      dispatchable: candidateReasonCounts['dispatchable-reserve'] ?? 0,
+      busy: sum('busy-task', 'busy-loaded', 'busy-moving'),
+      routeInfeasible: sum('no-station-route', 'route-origin-disallowed'),
+      held: sum('assignment-hold', 'inbound-dropoff-standby-hold', 'standby-reroute-not-allowed'),
+      noTarget: candidateReasonCounts['no-open-station-target'] ?? 0,
+      unavailable: Math.max(0, totalCount - knownCount)
+    };
+  }
+
+  private shadowDominantReason<T extends string>(counts: Record<T, number>): T | null {
+    return Object.entries(counts)
+      .filter((entry): entry is [T, number] => typeof entry[0] === 'string' && Number(entry[1]) > 0)
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0] ?? null;
+  }
+
   private calculateShadowStationContractDiagnostics(): ShadowStationContracts {
     type CountKey = Exclude<keyof ShadowStationContractInvariantCounts, 'total'>;
 
@@ -34237,7 +34341,7 @@ export class ShuttleSimCore {
       const targetReserveDepth = Math.min(targetDepth, readyDemandCount);
       const queueCoverageGap = Math.max(0, targetReserveDepth - nearCoveredDepth);
       const activeServiceGap = Math.max(0, readyDemandCount - activeServiceDepth);
-      const candidateReasonCounts = queueCoverageGap > 0
+      const candidateReasonCounts = readyDemandCount + claimedDemandCount > 0
         ? this.shadowStationCoordinatorCandidateReasonCounts(stationId)
         : {};
       const dispatchableReserveCandidateCount = candidateReasonCounts['dispatchable-reserve'] ?? 0;
@@ -34259,6 +34363,13 @@ export class ShuttleSimCore {
             ? 'hold-active-service'
             : 'match-head-reservation';
       const serviceTransition = this.calculateShadowStationServiceTransition(demands, vehicleCommitments);
+      const headReservationSupply = this.calculateShadowStationHeadReservationSupply(
+        demands,
+        vehicleCommitments,
+        targetReserveDepth,
+        nearCoveredDepth,
+        candidateReasonCounts
+      );
 
       if (readyDemandCount > 0 && nearCoveredDepth === 0) {
         addViolation('demandWithoutCoverage', {
@@ -34327,6 +34438,7 @@ export class ShuttleSimCore {
           candidateReasonCounts
         },
         serviceTransition,
+        headReservationSupply,
         demands: demands.slice(0, 12),
         vehicleCommitments: vehicleCommitments.slice(0, 12),
         routeLeases
