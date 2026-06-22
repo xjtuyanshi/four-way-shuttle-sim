@@ -2745,3 +2745,54 @@ Interpretation:
 - The explicit token-based target policy now almost matches the old source-count target pressure without changing behavior.
 - This gives the next behavior cut a cleaner source: switch a narrow gate to `reserveTargetDepth` / `reserveCoverageGap` rather than using raw source-buffer counts.
 - The safer next behavior change is to issue or protect explicit bounded queue leases only when the shadow policy says `reserveCoverageGap > 0`, while preserving the current route-admission rules until the lease lifecycle proves stable.
+
+## Cut A.4: Station Queue Lease Mirror Shadow
+
+Date: 2026-06-22
+
+Change:
+
+- Added a station-kernel `queueLeases` mirror derived from current vehicle/task state.
+- The mirror records:
+  - taskless inbound queue standby AMRs as `queue-slot` leases,
+  - assigned / in-progress inbound service AMRs as `service` leases,
+  - station id, vehicle id, admission cause, service demand id, target queue node, slot index, phase, bounded route prefix, FIFO sequence, and TTL.
+- This is still diagnostic only. It does not issue leases, grant service, block movement, change routing, change task assignment, or change reserve admission.
+- The purpose is to make the future behavior cut explicit: station-owned queue admission can later consume a real `queueLease` lifecycle instead of inferring ownership from scattered route fields.
+
+Validation:
+
+```bash
+git diff --check
+pnpm --filter @four-way-shuttle/schemas typecheck
+pnpm --filter @four-way-shuttle/sim-core typecheck
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "station kernel|station-owned shadow contracts|station shadow contract sampling read-only|restores agent-refresh snapshots"
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --near-route-max-nodes 4 --out output/review/station-queue-contract-600s-after-queue-lease-mirror.json
+./node_modules/.bin/tsx scripts/diagnose-queue-reserve-efficiency.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --progress-sec 300 --outbound-full-columns 0 --out output/review/queue-reserve-efficiency-600s-after-queue-lease-mirror.json
+```
+
+Result:
+
+- Typecheck passed for schemas and sim-core.
+- Targeted station kernel / snapshot tests passed: `5 passed`.
+- Station contract 600s behavior baseline unchanged:
+  - total PPH `570`,
+  - inbound PPH `258`,
+  - physical violations `0`,
+  - final station-kernel `leaseCount = 2`.
+- Queue reserve efficiency 600s behavior baseline unchanged:
+  - total PPH `486`,
+  - inbound PPH `288`,
+  - demand outbound PPH `198`,
+  - queue reserve travel `0.804%`,
+  - waste reposition `12.13%`,
+  - physical violations `0`.
+- Example final station-kernel leases:
+  - `station-lease:lift-01-inbound:SH-05:service` at `column-top-a-c09`, slot `1`, phase `service-granted`,
+  - `station-lease:lift-02-inbound:SH-02:service` at `column-top-a-c23`, slot `1`, phase `service-granted`.
+
+Interpretation:
+
+- We can now see explicit station-owned queue/service leases in normal 3D tick runs without changing behavior.
+- This closes the shadow data gap between station demand tokens, reserve target policy, and actual AMR queue/service presence.
+- The next behavior cut should be narrow: protect or admit bounded inbound queue movement using these leases and the `reserveCoverageGap`, while keeping the old route-admission rules as a fallback until 10m / 30m / 12h evidence proves no throughput or 3D-regression risk.

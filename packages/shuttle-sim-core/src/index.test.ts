@@ -1634,6 +1634,7 @@ describe('shuttle phase 0 SimCore', () => {
     const stationContracts = state.traffic.shadowLedger.stationContracts;
     const station = stationContracts.stations.find((candidate) => candidate.stationId === 'lift-01-inbound');
     const ledger = stationContracts.inboundDemandLedger;
+    const kernel = stationContracts.stationKernel;
 
     expect(stationContracts.enabled).toBe(true);
     expect(ledger).toMatchObject({
@@ -1664,6 +1665,40 @@ describe('shuttle phase 0 SimCore', () => {
       loadState: 'waiting',
       taskState: 'assigned',
       vehicleId: 'SH-02'
+    }));
+    expect(kernel).toMatchObject({
+      schemaVersion: 'station-kernel-shadow.v1',
+      mode: 'shadow',
+      leaseCount: 2,
+      leasePhaseCounts: expect.objectContaining({
+        occupied: 1,
+        serviceGranted: 1
+      })
+    });
+    expect(kernel.stationSummaries).toContainEqual(expect.objectContaining({
+      stationId: 'lift-01-inbound',
+      leaseCount: 2
+    }));
+    expect(kernel.queueLeases).toContainEqual(expect.objectContaining({
+      id: 'station-lease:lift-01-inbound:SH-01:queue',
+      stationId: 'lift-01-inbound',
+      vehicleId: 'SH-01',
+      admissionCauseId: 'station-policy:lift-01-inbound:reserve-target',
+      targetKind: 'queue-slot',
+      targetNodeId: 'column-top-a-c09',
+      slotIndex: 1,
+      phase: 'occupied'
+    }));
+    expect(kernel.queueLeases).toContainEqual(expect.objectContaining({
+      id: 'station-lease:lift-01-inbound:SH-02:service',
+      stationId: 'lift-01-inbound',
+      vehicleId: 'SH-02',
+      admissionCauseId: 'shadow-contract-task',
+      serviceDemandId: 'station-demand:shadow-contract-task',
+      targetKind: 'queue-slot',
+      targetNodeId: 'column-top-a-c10',
+      slotIndex: 2,
+      phase: 'service-granted'
     }));
     expect(station).toMatchObject({
       stationId: 'lift-01-inbound',

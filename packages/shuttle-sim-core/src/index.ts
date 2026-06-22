@@ -34367,6 +34367,11 @@ export class ShuttleSimCore {
     return nextSeq;
   }
 
+  private nextStationLeaseFifoSeq(): number {
+    this.stationLeaseSequence += 1;
+    return this.stationLeaseSequence;
+  }
+
   private stationDemandTokenStateForTask(task: TaskStateRecord): StationDemandToken['state'] {
     if (task.state === 'failed') {
       return 'cancelled';
@@ -34411,6 +34416,146 @@ export class ShuttleSimCore {
       return 0;
     }
     return this.topLiftInboundQueueReplenishTargetDepth(stationId);
+  }
+
+  private stationKernelLeaseRouteNodeIds(vehicle: MutableVehicle, targetNodeId: string): string[] {
+    const routeCandidates = [
+      this.vehicleRouteTail(vehicle, vehicle.routeNodeIds),
+      this.vehicleRouteTail(vehicle, vehicle.plannedRouteNodeIds),
+      this.vehicleRouteTail(vehicle, vehicle.localRouteNodeIds)
+    ];
+    for (const route of routeCandidates) {
+      const targetIndex = route.indexOf(targetNodeId);
+      if (targetIndex >= 0) {
+        return route.slice(0, targetIndex + 1);
+      }
+    }
+    return vehicle.currentNodeId === targetNodeId ? [targetNodeId] : [];
+  }
+
+  private stationKernelQueueSlotLeaseTarget(
+    vehicle: MutableVehicle,
+    stationId: string
+  ): { nodeId: string; slotIndex: number; phase: Extract<StationQueueLeaseToken['phase'], 'approaching' | 'occupied'> } | null {
+    const currentSlot = this.topLiftInboundApproachQueueSlot(vehicle.currentNodeId);
+    if (currentSlot?.liftNodeId === stationId) {
+      return { nodeId: vehicle.currentNodeId, slotIndex: currentSlot.slotIndex, phase: 'occupied' };
+    }
+    const targetSlot = this.topLiftInboundApproachQueueSlot(vehicle.targetNodeId ?? '');
+    if (targetSlot?.liftNodeId === stationId && vehicle.targetNodeId) {
+      return { nodeId: vehicle.targetNodeId, slotIndex: targetSlot.slotIndex, phase: 'approaching' };
+    }
+    const plannedSlot = this.topLiftInboundApproachQueueSlot(vehicle.plannedGoalNodeId ?? '');
+    if (plannedSlot?.liftNodeId === stationId && vehicle.plannedGoalNodeId) {
+      return { nodeId: vehicle.plannedGoalNodeId, slotIndex: plannedSlot.slotIndex, phase: 'approaching' };
+    }
+    return null;
+  }
+
+  private collectStationKernelQueueLeases(existingLeases: Map<string, StationQueueLeaseToken>): StationQueueLeaseToken[] {
+    const leases: StationQueueLeaseToken[] = [];
+    const makeLease = (
+      id: string,
+      vehicle: MutableVehicle,
+      options: {
+        stationId: string;
+        admissionCauseId: string;
+        serviceDemandId: string | null;
+        targetKind: StationQueueLeaseToken['targetKind'];
+        targetNodeId: string;
+        slotIndex: number | null;
+        phase: StationQueueLeaseToken['phase'];
+      }
+    ): StationQueueLeaseToken => {
+      const existing = existingLeases.get(id);
+      const unchanged = existing &&
+        existing.stationId === options.stationId &&
+        existing.vehicleId === vehicle.id &&
+        existing.targetNodeId === options.targetNodeId &&
+        existing.phase === options.phase;
+      return {
+        id,
+        stationId: options.stationId,
+        vehicleId: vehicle.id,
+        admissionCauseId: options.admissionCauseId,
+        serviceDemandId: options.serviceDemandId,
+        targetKind: options.targetKind,
+        targetNodeId: options.targetNodeId,
+        slotIndex: options.slotIndex,
+        phase: options.phase,
+        issuedAtSec: existing?.issuedAtSec ?? this.simTimeSec,
+        expiresAtSec: round(this.simTimeSec + 60),
+        lastProgressAtSec: unchanged ? existing.lastProgressAtSec : this.simTimeSec,
+        boundedRouteNodeIds: this.stationKernelLeaseRouteNodeIds(vehicle, options.targetNodeId),
+        fifoSeq: existing?.fifoSeq ?? this.nextStationLeaseFifoSeq()
+      };
+    };
+
+    for (const vehicle of this.vehicles) {
+      if (vehicle.loaded) {
+        continue;
+      }
+
+      const task = this.taskForVehicle(vehicle);
+      const inboundTask =
+        task?.kind === 'inbound' &&
+        (task.state === 'assigned' || task.state === 'in-progress') &&
+        task.completedAtSec === null
+          ? task
+          : null;
+      const inboundStationId = inboundTask ? this.taskLiftPortNodeId(inboundTask) : null;
+      if (inboundTask && inboundStationId && this.liftPortKindForNodeId(inboundStationId) === 'inbound') {
+        const queueTarget = this.stationKernelQueueSlotLeaseTarget(vehicle, inboundStationId);
+        const targetNodeId = queueTarget?.nodeId ?? inboundTask.pickupNodeId;
+        const phase: StationQueueLeaseToken['phase'] =
+          vehicle.state === 'lifting' || inboundTask.startedAtSec !== null ? 'servicing' : 'service-granted';
+        leases.push(makeLease(`station-lease:${inboundStationId}:${vehicle.id}:service`, vehicle, {
+          stationId: inboundStationId,
+          admissionCauseId: inboundTask.id,
+          serviceDemandId: `station-demand:${inboundTask.id}`,
+          targetKind: queueTarget ? 'queue-slot' : 'bounded-approach',
+          targetNodeId,
+          slotIndex: queueTarget?.slotIndex ?? null,
+          phase
+        }));
+        continue;
+      }
+
+      if (vehicle.taskId || vehicle.localRouteReason !== 'inbound-queue-standby') {
+        continue;
+      }
+      const stationIds = new Set(
+        [
+          vehicle.currentNodeId,
+          vehicle.targetNodeId,
+          vehicle.plannedGoalNodeId
+        ]
+          .map((nodeId) => this.topLiftInboundApproachQueueSlot(nodeId ?? '')?.liftNodeId ?? null)
+          .filter((stationId): stationId is string => stationId !== null)
+      );
+      for (const stationId of stationIds) {
+        const queueTarget = this.stationKernelQueueSlotLeaseTarget(vehicle, stationId);
+        if (!queueTarget) {
+          continue;
+        }
+        leases.push(makeLease(`station-lease:${stationId}:${vehicle.id}:queue`, vehicle, {
+          stationId,
+          admissionCauseId: `station-policy:${stationId}:reserve-target`,
+          serviceDemandId: this.stationKernelReserveDemandTokens(stationId)[0]?.id ?? null,
+          targetKind: 'queue-slot',
+          targetNodeId: queueTarget.nodeId,
+          slotIndex: queueTarget.slotIndex,
+          phase: queueTarget.phase
+        }));
+      }
+    }
+
+    return leases.sort((left, right) =>
+      left.stationId.localeCompare(right.stationId) ||
+      left.fifoSeq - right.fifoSeq ||
+      left.vehicleId.localeCompare(right.vehicleId) ||
+      left.id.localeCompare(right.id)
+    );
   }
 
   private reconcileStationKernelShadowState(): void {
@@ -34478,14 +34623,8 @@ export class ShuttleSimCore {
       left.fifoSeq - right.fifoSeq ||
       left.id.localeCompare(right.id)
     );
-    this.stationQueueLeases = this.stationQueueLeases
-      .filter((lease) => this.stationDemandTokens.some((token) => token.stationId === lease.stationId))
-      .sort((left, right) =>
-        left.stationId.localeCompare(right.stationId) ||
-        left.fifoSeq - right.fifoSeq ||
-        left.vehicleId.localeCompare(right.vehicleId) ||
-        left.id.localeCompare(right.id)
-      );
+    const existingLeases = new Map(this.stationQueueLeases.map((lease) => [lease.id, lease]));
+    this.stationQueueLeases = this.collectStationKernelQueueLeases(existingLeases);
   }
 
   private calculateStationKernelDiagnostics(inboundDemandLedger: ShadowInboundDemandLedger): StationKernelDiagnostics {
