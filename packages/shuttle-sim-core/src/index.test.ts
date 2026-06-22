@@ -2081,6 +2081,79 @@ describe('shuttle phase 0 SimCore', () => {
     expect(lowerVehicle.plannedGoalNodeId).toBeNull();
   });
 
+  it('admits a short station reserve route before assigning ordinary outbound work', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 3600,
+        outboundRatePerHour: 3600,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    }));
+    sim.addLoadForTest({
+      id: 'station-admission-source',
+      state: 'waiting',
+      nodeId: 'lift-01-inbound-buffer-01',
+      vehicleId: null,
+      weightKg: 100
+    });
+    sim.addLoadForTest({
+      id: 'station-admission-outbound-load',
+      state: 'stored',
+      nodeId: 'storage-r14-c01',
+      vehicleId: null,
+      weightKg: 100
+    });
+    sim.addTaskForTest({
+      id: 'station-admission-outbound',
+      kind: 'outbound',
+      state: 'queued',
+      createdAtSec: 0,
+      assignedAtSec: null,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r14-c01',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'station-admission-outbound-load',
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', ['module-01-spine-middle']);
+
+    const internals = sim as unknown as {
+      assignQueuedTasks(dtSec: number): void;
+      tasks: Array<{ id: string; state: string; vehicleId: string | null; waitReason: string | null }>;
+      vehicles: Array<{
+        id: string;
+        taskId: string | null;
+        localRouteReason: string | null;
+        plannedGoalNodeId: string | null;
+        plannedRouteNodeIds: string[];
+      }>;
+    };
+    internals.assignQueuedTasks(0.2);
+
+    const task = internals.tasks.find((candidate) => candidate.id === 'station-admission-outbound')!;
+    const vehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+
+    expect(task.state).toBe('queued');
+    expect(task.vehicleId).toBeNull();
+    expect(task.waitReason).toBe('outbound-reserved-for-inbound');
+    expect(vehicle.taskId).toBeNull();
+    expect(vehicle.localRouteReason).toBe('inbound-queue-standby');
+    expect(vehicle.plannedGoalNodeId).toBe('column-top-a-c09');
+    expect(vehicle.plannedRouteNodeIds).toEqual([
+      'module-01-spine-middle',
+      'module-01-spine-top-b',
+      'column-top-b-c08',
+      'column-top-b-c09',
+      'column-top-a-c09'
+    ]);
+  });
+
   it('does not let inbound work steal an en-route inbound queue reserve before it reaches the queue', () => {
     const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
       vehicles: { count: 2 },

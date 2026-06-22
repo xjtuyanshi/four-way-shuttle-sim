@@ -2184,3 +2184,87 @@ Updated next step:
   - do not preempt already-assigned outbound work repeatedly,
   - do not globally reduce outbound capacity,
   - instead, at outbound assignment time, check the specific candidate vehicle against the station reserve ledger and hold only that assignment when the same vehicle can satisfy a near, station-specific reserve lease.
+
+## Station Reserve Admission Gate Before Outbound Assignment
+
+Date: 2026-06-22
+
+Change:
+
+- Added `admitVehicleToStationReserveBeforeOutboundAssignment(...)`.
+- During queued task assignment, when an ordinary outbound task is about to take a candidate AMR:
+  - if a station has reserve coverage below required depth,
+  - and that same AMR has a short station-specific route to a formal inbound reserve queue node,
+  - the AMR is installed as `localRouteReason='inbound-queue-standby'`,
+  - and the outbound task remains queued with wait reason `outbound-reserved-for-inbound`.
+- This is source-of-truth admission before outbound assignment, not post-assignment preemption.
+- Added `topLiftInboundStationReserveAdmissionCoverageDepth(...)` so source admission counts:
+  - active inbound queue coverage,
+  - current queue reservations,
+  - target queue reservations,
+  - and planned / forecast queue reservations.
+- Added a regression test:
+  - `admits a short station reserve route before assigning ordinary outbound work`.
+
+Why this cut:
+
+- The rejected preemption experiment showed that useful AMRs existed but were already consumed by outbound assignments.
+- Preempting those assignments after the fact caused churn.
+- A clean contract must decide before assignment whether a candidate AMR is station reserve or outbound work.
+
+Validation:
+
+```bash
+pnpm --filter @four-way-shuttle/sim-core typecheck
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "admits a short station reserve route before assigning ordinary outbound work|does not send a taskless mixed-flow shuttle on a long standby tour while queued work is waiting|clears an outbound dropoff directly onto bottom-b and holds away from the lift|extends outbound clearance to an inbound queue standby when inbound demand exists|does not send an outbound dock clearance shuttle back through the dock face to reach standby|routes a lower-side outbound finisher to the inbound queue before mixed-flow pickup|protects taskless shuttles for inbound queue reserve before ordinary outbound work|does not let outbound work steal a demanded inbound queue standby reserve|sends taskless inbound queue standbys to the nearest available yellow queue point first"
+./node_modules/.bin/tsx scripts/diagnose-idle-reserve-pool.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/idle-reserve-pool-600s-after-reserve-admission-gate.json
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/station-queue-contract-600s-after-reserve-admission-gate.json
+./node_modules/.bin/tsx scripts/diagnose-assignment-admission.ts --duration-sec 600 --dt-sec 0.2 --out output/review/assignment-admission-600s-after-reserve-admission-gate.json
+./node_modules/.bin/tsx scripts/diagnose-idle-reserve-pool.ts --duration-sec 1800 --dt-sec 0.2 --sample-sec 60 --progress-sec 600 --out output/review/idle-reserve-pool-30m-after-reserve-admission-gate.json
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 1800 --dt-sec 0.2 --sample-sec 60 --progress-sec 600 --out output/review/station-queue-contract-30m-after-reserve-admission-gate.json
+```
+
+600s result versus `743708d`:
+
+- total PPH improved from `552` to `570`.
+- inbound PPH improved from `228` to `258`.
+- physical violations stayed `0`.
+- fleet-busy improved from `61` to `53`.
+- routeInfeasible improved from `14` to `12`.
+- total assignments stayed controlled:
+  - `100` before,
+  - `102` after,
+  - unlike rejected preemption, which created `195` assignments in 600s.
+- outbound assignments stayed controlled:
+  - `60` before,
+  - `57` after.
+
+30m result versus `743708d`:
+
+- total PPH improved from `534` to `540`.
+- inbound PPH improved from `186` to `196`.
+- demand outbound PPH stayed `38`.
+- physical violations stayed `0`.
+- lightweight event count:
+  - `inbound-queue-reserve-before-outbound-assignment` occurred `1` time,
+  - `task-assigned:nearest-available-agent-refresh` occurred `277` times,
+  - so this cut did not create preemption-style churn.
+
+Decision:
+
+- Keep this source cut.
+- It is aligned with station-owned admission:
+  - one AMR is classified as station reserve before outbound consumes it,
+  - outbound work waits instead of being assigned and later revoked,
+  - and the 30m window improves without physical violations.
+- This still does not complete reserve-pool formation:
+  - zero-reserve-during-head-gap remains `100%` in the 30m idle sample,
+  - average reserve-eligible vehicle count remains `0`,
+  - and the next cut needs to make forecast / reserve-in-transit become near physical head reservation faster.
+
+Updated next step:
+
+- Convert station reserve forecast into usable head reservation:
+  - reduce the lag between planned reserve and physical queue coverage,
+  - focus on routes that already have `localRouteReason='inbound-queue-standby'`,
+  - and validate against lower zero-reserve head-gap samples, not just PPH.

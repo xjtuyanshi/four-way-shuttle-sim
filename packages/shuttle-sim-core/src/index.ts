@@ -56,6 +56,7 @@ const INBOUND_DROPOFF_STANDBY_GRACE_SEC = 0.8;
 const OUTBOUND_STORAGE_ROUTE_UNAVAILABLE_RELEASE_SEC = 120;
 const OUTBOUND_STORAGE_ROUTE_UNAVAILABLE_REASSIGN_HOLD_SEC = 45;
 const TOP_LIFT_PROTECTED_STANDBY_REROUTE_MAX_NODE_COUNT = 10;
+const TOP_LIFT_STATION_RESERVE_ADMISSION_MAX_NODE_COUNT = 8;
 
 type PriorityQueueEntry = {
   nodeId: string;
@@ -7502,6 +7503,11 @@ export class ShuttleSimCore {
         this.recordQueuedTaskWait(task, this.inboundTaskHasEarlierPickupTask(task) ? 'inbound-lift-fifo-wait' : 'route-unavailable', dtSec);
         continue;
       }
+      if (task.kind === 'outbound' && this.admitVehicleToStationReserveBeforeOutboundAssignment(assignment.vehicle)) {
+        availableVehicleIds.delete(assignment.vehicle.id);
+        this.recordQueuedTaskWait(task, 'outbound-reserved-for-inbound', dtSec);
+        continue;
+      }
       if (this.stageVehicleToInboundQueueBeforeAssignment(assignment.vehicle, task, assignment.route)) {
         availableVehicleIds.delete(assignment.vehicle.id);
         this.recordQueuedTaskWait(task, 'inbound-queue-replenish-wait', dtSec);
@@ -7519,6 +7525,98 @@ export class ShuttleSimCore {
       availableVehicleIds.delete(assignment.vehicle.id);
     }
     this.dispatchTasklessInboundQueueStandbys();
+  }
+
+  private admitVehicleToStationReserveBeforeOutboundAssignment(vehicle: MutableVehicle): boolean {
+    const route = this.stationOwnedReserveAdmissionRouteBeforeOutboundAssignment(vehicle);
+    if (!route) {
+      return false;
+    }
+    this.installTasklessPostDropoffRoute(
+      vehicle,
+      route,
+      'inbound-queue-reserve-before-outbound-assignment',
+      'inbound-queue-standby'
+    );
+    return true;
+  }
+
+  private stationOwnedReserveAdmissionRouteBeforeOutboundAssignment(vehicle: MutableVehicle): string[] | null {
+    if (
+      !this.mixedTopLiftFlowEnabled() ||
+      vehicle.taskId ||
+      vehicle.loaded ||
+      vehicle.currentEdgeId !== null ||
+      vehicle.legRemainingM > 0 ||
+      vehicle.phaseRemainingSec > 0 ||
+      this.assignmentHoldActive(vehicle) ||
+      this.inboundDropoffStandbyHoldActive(vehicle) ||
+      !this.tasklessInboundQueueStandbyRerouteAllowed(vehicle)
+    ) {
+      return null;
+    }
+    const candidates = this.inboundLiftNodes()
+      .filter((lift) =>
+        this.topLiftInboundStationReserveAdmissionCoverageDepth(lift.id) <
+        this.topLiftInboundQueueReserveRequiredDepth(lift.id)
+      )
+      .map((lift) => {
+        const route = this.routeToInboundQueueStandby(vehicle, vehicle.currentNodeId, { liftNodeId: lift.id });
+        return route && this.stationOwnedReserveAdmissionRouteAllowed(route)
+          ? { liftNodeId: lift.id, route }
+          : null;
+      })
+      .filter((candidate): candidate is { liftNodeId: string; route: string[] } => candidate !== null)
+      .sort((left, right) =>
+        left.route.length - right.route.length ||
+        left.liftNodeId.localeCompare(right.liftNodeId)
+      );
+    const candidate = candidates[0] ?? null;
+    if (!candidate) {
+      return null;
+    }
+    const nextNodeId = candidate.route[1] ?? null;
+    const nextBlock = nextNodeId && this.collisionAvoidanceEnabled()
+      ? this.agentRefreshEnabled()
+        ? this.agentRefreshMoveBlocker(vehicle, nextNodeId, candidate.route)
+        : this.agentMinimalEnabled()
+          ? this.agentMinimalMoveBlocker(vehicle, nextNodeId)
+          : this.agentMoveBlocker(vehicle, nextNodeId)
+      : null;
+    return nextBlock ? null : candidate.route;
+  }
+
+  private stationOwnedReserveAdmissionRouteAllowed(routeNodeIds: string[]): boolean {
+    if (
+      routeNodeIds.length < 2 ||
+      routeNodeIds.length > TOP_LIFT_STATION_RESERVE_ADMISSION_MAX_NODE_COUNT ||
+      !this.topLiftInboundReserveQueueSlot(routeNodeIds.at(-1) ?? '')
+    ) {
+      return false;
+    }
+    const rankByLevel: Record<TopLiftAisleLevel, number> = {
+      'bottom-b': 0,
+      'bottom-a': 1,
+      middle: 2,
+      'top-b': 3,
+      'top-a': 4
+    };
+    let previousRank = -1;
+    for (const nodeId of routeNodeIds) {
+      if (this.isStorageNode(nodeId) || nodeId.includes('inbound') || nodeId.includes('outbound')) {
+        return false;
+      }
+      const level = topLiftAisleLevel(nodeId);
+      if (!level) {
+        return false;
+      }
+      const rank = rankByLevel[level];
+      if (rank < previousRank) {
+        return false;
+      }
+      previousRank = rank;
+    }
+    return true;
   }
 
   private bestAvailableVehicleForTaskAvoidingUnsafeDropoffReentry(
@@ -12055,6 +12153,39 @@ export class ShuttleSimCore {
 
   private topLiftInboundQueueCoveredDepth(liftNodeId: string): number {
     return this.topLiftInboundQueueStandbyDepth(liftNodeId) + this.topLiftInboundActiveEmptyQueueDepth(liftNodeId);
+  }
+
+  private topLiftInboundStationReserveAdmissionCoverageDepth(liftNodeId: string): number {
+    const vehicleIds = new Set<string>();
+    for (const vehicle of this.vehicles) {
+      if (vehicle.loaded) {
+        continue;
+      }
+      const task = this.taskForVehicle(vehicle);
+      if (
+        task?.kind === 'inbound' &&
+        this.taskLiftPortNodeId(task) === liftNodeId &&
+        (task.state === 'assigned' || task.state === 'in-progress') &&
+        this.topLiftInboundVehicleContributesQueueCoverage(vehicle, liftNodeId)
+      ) {
+        vehicleIds.add(vehicle.id);
+        continue;
+      }
+      if (vehicle.taskId || vehicle.localRouteReason !== 'inbound-queue-standby') {
+        continue;
+      }
+      const hasStationQueueLease = [
+        vehicle.currentNodeId,
+        vehicle.targetNodeId,
+        vehicle.plannedGoalNodeId
+      ].some((nodeId) =>
+        this.topLiftInboundApproachQueueSlot(nodeId ?? '')?.liftNodeId === liftNodeId
+      );
+      if (hasStationQueueLease) {
+        vehicleIds.add(vehicle.id);
+      }
+    }
+    return vehicleIds.size;
   }
 
   private topLiftInboundQueueStandbyDepth(liftNodeId: string): number {
