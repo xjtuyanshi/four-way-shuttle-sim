@@ -7710,6 +7710,44 @@ export class ShuttleSimCore {
     }
   }
 
+  private releaseStationKernelQueueLeasesForRouteReset(vehicle: MutableVehicle, reason: string): void {
+    const leases = this.stationQueueLeases.filter((lease) =>
+      lease.vehicleId === vehicle.id &&
+      lease.targetKind === 'queue-slot' &&
+      lease.phase !== 'revoking'
+    );
+    if (leases.length === 0) {
+      return;
+    }
+
+    this.stationQueueLeases = this.stationQueueLeases.filter((lease) => !leases.some((released) => released.id === lease.id));
+    for (const lease of leases) {
+      this.logEvent(
+        'station-queue-lease-transition',
+        vehicle.id,
+        null,
+        null,
+        lease.targetNodeId,
+        vehicle.currentNodeId,
+        reason,
+        this.vehiclePosition(vehicle),
+        {
+          leaseId: lease.id,
+          stationId: lease.stationId,
+          serviceDemandId: lease.serviceDemandId,
+          admissionCauseId: lease.admissionCauseId,
+          previousPhase: lease.phase,
+          targetNodeId: lease.targetNodeId,
+          slotIndex: lease.slotIndex,
+          nextTaskKind: null,
+          nextStationId: null,
+          resetNodeId: vehicle.currentNodeId,
+          ageSec: round(this.simTimeSec - lease.issuedAtSec)
+        }
+      );
+    }
+  }
+
   private stationOwnedReserveAdmissionRouteAllowed(routeNodeIds: string[]): boolean {
     if (
       routeNodeIds.length < 2 ||
@@ -8529,6 +8567,7 @@ export class ShuttleSimCore {
   }
 
   private resetNavigationAtCurrentNode(vehicle: MutableVehicle): void {
+    this.releaseStationKernelQueueLeasesForRouteReset(vehicle, 'route-reset');
     vehicle.routeNodeIds = [vehicle.currentNodeId];
     vehicle.routeIndex = 0;
     vehicle.targetNodeId = null;

@@ -2984,3 +2984,62 @@ Interpretation:
 - Next source cut should either:
   - convert those remaining route-abandonment paths to explicit release events, or
   - use `stationQueueLeases` as the single pre-outbound reserve coverage read path and then run a 12h physical tick to test whether the current lifecycle is stable enough before the broader 24h / 3D visual review.
+
+## Cut B.4: Route Reset Queue Lease Release Events
+
+Date: 2026-06-22
+
+Behavior / diagnostics change:
+
+- Added an explicit station queue lease transition event when a vehicle's route/navigation is reset while it owns a station `queue-slot` lease.
+- Event type remains `station-queue-lease-transition`.
+- New transition reason: `route-reset`.
+- The event includes:
+  - `leaseId`,
+  - `stationId`,
+  - `serviceDemandId`,
+  - `admissionCauseId`,
+  - previous lease phase,
+  - target node / slot,
+  - reset node,
+  - lease age.
+- This is attached to `resetNavigationAtCurrentNode(...)`, not to `getState()` or station diagnostics, so read-only inspection remains side-effect-free.
+- This cut is still deliberately narrow. Manual route mutation paths that do not call `resetNavigationAtCurrentNode(...)` may still need explicit release events later.
+
+Validation:
+
+```bash
+git diff --check
+pnpm --filter @four-way-shuttle/schemas typecheck
+pnpm --filter @four-way-shuttle/sim-core typecheck
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "admits a short station reserve route before assigning ordinary outbound work|logs a station queue lease release when a reserve route is reset before service|does not admit a station reserve route before outbound assignment without station kernel demand|station kernel|station-owned shadow contracts|station shadow contract sampling read-only|restores agent-refresh snapshots"
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --near-route-max-nodes 4 --out output/review/station-queue-contract-600s-after-route-reset-release-events.json
+./node_modules/.bin/tsx scripts/diagnose-queue-reserve-efficiency.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --progress-sec 300 --outbound-full-columns 0 --out output/review/queue-reserve-efficiency-600s-after-route-reset-release-events.json
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 1800 --dt-sec 0.2 --sample-sec 60 --progress-sec 600 --near-route-max-nodes 4 --out output/review/station-queue-contract-30m-after-route-reset-release-events.json
+./node_modules/.bin/tsx scripts/diagnose-queue-reserve-efficiency.ts --duration-sec 1800 --dt-sec 0.2 --sample-sec 60 --progress-sec 600 --outbound-full-columns 0 --out output/review/queue-reserve-efficiency-30m-after-route-reset-release-events.json
+```
+
+Result:
+
+- Typecheck passed for schemas and sim-core.
+- Targeted station / lease tests passed: `8 passed`.
+- 600s station contract unchanged vs Cut B.3:
+  - before: total PPH `570`, inbound PPH `258`, physical violations `0`,
+  - after: total PPH `570`, inbound PPH `258`, physical violations `0`.
+- 600s queue reserve efficiency unchanged vs Cut B.3:
+  - before: total PPH `486`, inbound PPH `288`, demand outbound PPH `198`, queue reserve travel `0.804%`, waste reposition `12.13%`, physical violations `0`,
+  - after: total PPH `486`, inbound PPH `288`, demand outbound PPH `198`, queue reserve travel `0.804%`, waste reposition `12.13%`, physical violations `0`.
+- 30m station contract unchanged vs Cut B.3:
+  - before: total PPH `540`, inbound PPH `196`, demand outbound PPH `38`, physical violations `0`,
+  - after: total PPH `540`, inbound PPH `196`, demand outbound PPH `38`, physical violations `0`.
+- 30m queue reserve efficiency unchanged vs Cut B.3:
+  - before: total PPH `492`, inbound PPH `268`, demand outbound PPH `224`, queue reserve travel `0.844%`, waste reposition `10.129%`, physical violations `0`,
+  - after: total PPH `492`, inbound PPH `268`, demand outbound PPH `224`, queue reserve travel `0.844%`, waste reposition `10.129%`, physical violations `0`.
+
+Interpretation:
+
+- The lease lifecycle now has explicit events for the two most important release paths so far:
+  - queue reserve to same-station inbound service,
+  - queue reserve route reset before service.
+- This improves auditability without changing the validated 600s / 30m behavior.
+- The next meaningful validation step is a 12h physical tick with AMR 10-minute task matrix and event-log summaries. If it stays clean, move to the requested 24h + 3D visual review rather than continuing to add small lifecycle hooks indefinitely.

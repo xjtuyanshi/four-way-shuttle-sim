@@ -2417,6 +2417,91 @@ describe('shuttle phase 0 SimCore', () => {
     expect(internals.stationOwnedReserveAdmissionRouteBeforeOutboundAssignment(vehicle)).toBeNull();
   });
 
+  it('logs a station queue lease release when a reserve route is reset before service', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 3600,
+        outboundRatePerHour: 3600,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    }));
+    sim.addLoadForTest({
+      id: 'station-reset-source',
+      state: 'waiting',
+      nodeId: 'lift-01-inbound-buffer-01',
+      vehicleId: null,
+      weightKg: 100
+    });
+    sim.addLoadForTest({
+      id: 'station-reset-outbound-load',
+      state: 'stored',
+      nodeId: 'storage-r14-c01',
+      vehicleId: null,
+      weightKg: 100
+    });
+    sim.addTaskForTest({
+      id: 'station-reset-outbound',
+      kind: 'outbound',
+      state: 'queued',
+      createdAtSec: 0,
+      assignedAtSec: null,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r14-c01',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'station-reset-outbound-load',
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', ['module-01-spine-middle']);
+
+    const internals = sim as unknown as {
+      assignQueuedTasks(dtSec: number): void;
+      resetNavigationAtCurrentNode(vehicle: unknown): void;
+      vehicles: Array<{
+        id: string;
+        localRouteReason: string | null;
+        plannedGoalNodeId: string | null;
+      }>;
+    };
+    const vehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    internals.assignQueuedTasks(0.2);
+
+    expect(vehicle.localRouteReason).toBe('inbound-queue-standby');
+    expect(vehicle.plannedGoalNodeId).toBe('column-top-a-c09');
+    expect(ShuttleSimStateSchema.parse(sim.getState()).traffic.shadowLedger.stationContracts.stationKernel.queueLeases).toContainEqual(expect.objectContaining({
+      id: 'station-lease:lift-01-inbound:SH-01:queue',
+      admissionCauseId: 'inbound-queue-reserve-before-outbound-assignment'
+    }));
+
+    internals.resetNavigationAtCurrentNode(vehicle);
+
+    expect(sim.getEventLog()).toContainEqual(expect.objectContaining({
+      eventType: 'station-queue-lease-transition',
+      vehicleId: 'SH-01',
+      taskId: null,
+      loadId: null,
+      reason: 'route-reset',
+      details: expect.objectContaining({
+        leaseId: 'station-lease:lift-01-inbound:SH-01:queue',
+        stationId: 'lift-01-inbound',
+        serviceDemandId: 'station-arrival:station-reset-source',
+        admissionCauseId: 'inbound-queue-reserve-before-outbound-assignment',
+        previousPhase: 'approaching',
+        nextTaskKind: null,
+        nextStationId: null,
+        resetNodeId: 'module-01-spine-middle'
+      })
+    }));
+    expect(ShuttleSimStateSchema.parse(sim.getState()).traffic.shadowLedger.stationContracts.stationKernel.queueLeases).not.toContainEqual(expect.objectContaining({
+      id: 'station-lease:lift-01-inbound:SH-01:queue'
+    }));
+  });
+
   it('does not let inbound work steal an en-route inbound queue reserve before it reaches the queue', () => {
     const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
       vehicles: { count: 2 },
