@@ -2393,3 +2393,54 @@ Decision:
 - The issue is not that outbound assignment is stealing an available station-owned reserve candidate in this 600s window.
 - The issue is that by the time head-gap is visible, the system has no routeable reserve candidate left.
 - Next source cut should create demand-aware queue coverage earlier, not add another outbound gate.
+
+## Demand-Aware Station Reserve Dispatch Rejected
+
+Date: 2026-06-22
+
+Experiment:
+
+- Tried to dispatch taskless vehicles onto a station-owned inbound queue reserve route when there is concrete source-buffer inbound demand.
+- Kept the existing guard that forbids pre-staging when there is no concrete inbound work.
+- Added a route path that could admit short middle-spine routes into `column-top-a-c09` style queue points.
+
+Validation:
+
+```bash
+git diff --check
+pnpm --filter @four-way-shuttle/sim-core typecheck
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "uses a station-owned short route to reserve a demanded inbound queue from the middle spine|does not pre-stage taskless mixed-flow shuttles without concrete inbound work|admits a short station reserve route before assigning ordinary outbound work|does not send a taskless mixed-flow shuttle on a long standby tour while queued work is waiting|sends taskless inbound queue standbys to the nearest available yellow queue point first|holds taskless inbound queue standby vehicles instead of shuffling them between queue points"
+./node_modules/.bin/tsx scripts/diagnose-idle-reserve-pool.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/idle-reserve-pool-600s-after-demand-aware-station-owned-dispatch.json
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/station-queue-contract-600s-after-demand-aware-station-owned-dispatch.json
+./node_modules/.bin/tsx scripts/diagnose-assignment-admission.ts --duration-sec 600 --dt-sec 0.2 --out output/review/assignment-admission-600s-after-demand-aware-station-owned-dispatch.json
+./node_modules/.bin/tsx scripts/diagnose-queue-reserve-efficiency.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --progress-sec 300 --outbound-full-columns 0 --out output/review/queue-reserve-efficiency-600s-after-demand-aware-station-owned-dispatch.json
+```
+
+Result:
+
+- Typecheck passed.
+- The targeted 6-test reserve/queue regression set passed.
+- The behavior diagnostics regressed:
+  - station-owned diagnostic window:
+    - previous total PPH `570`, inbound PPH `258`, physical violations `0`,
+    - after experiment total PPH `552`, inbound PPH `228`, physical violations `0`.
+  - assignment-admission:
+    - `outboundWhileReserveEligible` regressed from `0` to `1`,
+    - `outboundAssignedReserveEligible` regressed from `0` to `1`.
+  - queue-reserve efficiency scenario:
+    - average covered depth only moved from `0.817` to `0.833`,
+    - total PPH dropped from `486` to `444`,
+    - inbound PPH dropped from `288` to `270`,
+    - demand outbound PPH dropped from `198` to `174`,
+    - `farActiveInboundRouteSamples` increased from `62` to `65`.
+
+Decision:
+
+- Rejected and reverted.
+- The experiment did not create useful near-station reserve coverage. It mostly added more taskless reserve travel while leaving `averageStandbyDepth` at `0`.
+- This confirms the root problem is not solved by sending more taskless vehicles toward the queue after visible source demand.
+- The next source cut should be narrower:
+  - model the queue reserve as an explicit station-owned lease with TTL and FIFO,
+  - admit only vehicles that can enter a physical queue slot or a bounded near-station approach window,
+  - avoid route-long reserve travel from middle/bottom/storage unless that lease can be fulfilled within the near window,
+  - keep diagnostics accountable to PPH and reserve-eligible outbound steal counts before committing.
