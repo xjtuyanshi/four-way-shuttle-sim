@@ -1044,3 +1044,58 @@ Next step:
   - release it on pickup / service transition,
   - keep exact node occupancy separate from station queue slot lease,
   - keep far route and middle/spine planned-route ownership unchanged until station leases prove which station owns the contested segment.
+
+## Rejected Source Cut: Runtime Queue Slot Lease Lifecycle
+
+Date: 2026-06-22
+
+Experiment:
+
+- Added a runtime `stationQueueSlotLeases` map.
+- Wrote leases on inbound task assignment and taskless inbound-queue standby dispatch.
+- Released leases when inbound pickup started and when taskless routes were cleared.
+- Connected station lease ownership into open queue slot count and standby-node availability.
+
+Hypothesis:
+
+- A station-owned queue slot lease lifecycle would prevent duplicate queue-slot ownership before the physical queue becomes visibly blocked, while preserving exact node occupancy as a separate concept.
+
+Validation:
+
+```bash
+pnpm --filter @four-way-shuttle/sim-core exec tsc --noEmit
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "runtime station queue slot lease|reports station-owned shadow contracts|reports duplicate station route leases|allows projected inbound queue vehicles|keeps upstream inbound queue slots available|lets real inbound work override far taskless standby queue claims|holds taskless inbound queue standby vehicles|compresses a taskless inbound queue standby forward|treats same-lift inbound queue vehicles|keeps a later same-lift inbound queue task|uses the next yellow queue slot|uses the tail projected queue slot|does not let a detached storage detour reserve every projected inbound queue slot" --reporter=dot
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --sample-sec 10 --dt-sec 0.2 --out output/review/station-queue-lease-lifecycle-source-diagnosis-600s.json
+./node_modules/.bin/tsx scripts/run-physical-24h-amr-audit.ts --hours 0.5 --out output/review/station-queue-lease-lifecycle-source-0p5h-audit.json --checkpoint-dir output/review/station-queue-lease-lifecycle-source-0p5h-checkpoints --audit-every-sec 30 --quiet-critical
+```
+
+Results:
+
+- Targeted tests passed: `15 passed` before the soft-standby adjustment, `14 passed` after narrowing the test pattern.
+- 600s diagnosis:
+  - File: `output/review/station-queue-lease-lifecycle-source-diagnosis-600s.json`
+  - Total PPH `516`, inbound `204`, duplicate route lease `0`, physical violations `0`.
+  - Station invariant total `2`, from `demandWithoutCoverage=2`.
+- 30m physical audit:
+  - File: `output/review/station-queue-lease-lifecycle-source-0p5h-audit.json`
+  - Total PPH `490`, inbound `178`, outbound `312`.
+  - AMR anomalies `0`, critical anomalies `0`.
+- Softening taskless standby leases did not improve the 30m result:
+  - File: `output/review/station-queue-lease-lifecycle-soft-standby-0p5h-audit.json`
+  - Total PPH `490`, inbound `178`, outbound `312`.
+
+Decision:
+
+- Rejected and reverted as behavior.
+- The lifecycle concept is still correct, but this source cut coupled queue leases into open-slot / standby availability too early and throttled inbound replenishment.
+- Compared with the accepted read-cut baseline (`508 / 200 / 308` at 30m), this regressed total PPH by `18` and inbound PPH by `22`.
+
+Updated next step:
+
+- Keep the accepted runtime read view.
+- Do not let taskless standby leases reduce open queue slot count.
+- The next source cut should lease only station-admitted active inbound assignments first, then expose a shadow metric that compares:
+  - active assignment lease count,
+  - physical queue occupancy,
+  - taskless standby soft reserves,
+  before any of those counts are allowed to block replenishment.
