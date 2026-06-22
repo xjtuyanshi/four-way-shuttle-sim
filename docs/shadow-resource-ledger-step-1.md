@@ -1150,3 +1150,11 @@ Updated next step:
 
 - Try a source cut that only creates controlling leases for active inbound assignments already admitted to the station queue.
 - Keep taskless standby reserves soft until the 30m and then 12h audits show they can safely control only duplicate standby, not inbound replenishment.
+
+Observed split-metric signal:
+
+- In the 600s diagnosis, ready demand was persistently higher than near-station AMR coverage:
+  - `lift-01-inbound`: average ready demand `2.426`, average active assignment queue lease `0.754`, average physical queue slot lease `0.213`, average soft standby reserve `0.049`.
+  - `lift-02-inbound`: average ready demand `2.541`, average active assignment queue lease `0.656`, average physical queue slot lease `0.180`, average soft standby reserve `0.049`.
+- There are repeated samples where ready demand is `3-4` while `nearCoveredDepth=0`, `tasklessStandbySoftReserveCount=0`, and `physicalQueueSlotLeaseCount=0`.
+- This supports a different next source cut: station admission should pull a near-field AMR earlier when ready demand is high, rather than making existing standby leases harder.
