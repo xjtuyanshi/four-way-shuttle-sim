@@ -1725,3 +1725,58 @@ Updated next step:
   - classify available vehicles by top-lane reserve eligibility versus lower-level outbound suitability,
   - then reserve only vehicles that have a valid short inbound queue route and would otherwise be consumed by outbound work.
 - The next source cut should operate on the available vehicle pool, not after outbound assignment selection.
+
+## Available Vehicle Pool Admission Audit
+
+Date: 2026-06-22
+
+Change:
+
+- Extended `scripts/diagnose-assignment-admission.ts` with pre-step available vehicle pool diagnostics.
+- For every assignment, the script now records:
+  - available vehicle count,
+  - reserve-eligible available vehicle count,
+  - short reserve-eligible vehicle count (`<=8` nodes),
+  - top-lane reserve-eligible vehicle count,
+  - shortest reserve route length,
+  - whether the assigned outbound vehicle itself was reserve-eligible.
+- This remains script-only diagnostics. No source-of-truth dispatch behavior changed.
+
+Validation:
+
+```bash
+./node_modules/.bin/tsx scripts/diagnose-assignment-admission.ts --duration-sec 600 --dt-sec 0.2 --out output/review/assignment-admission-available-pool-600s.json
+```
+
+Results:
+
+- 600s assignment admission diagnosis:
+  - total assignments `96`.
+  - inbound assignments `38`.
+  - outbound assignments `58`.
+  - outbound assignments while a station had a head-reservation gap `34`.
+  - outbound assignments while a station had a fleet-busy head-reservation gap `34`.
+  - outbound assignments while any available vehicle was reserve-eligible `0`.
+  - outbound assignments where the assigned vehicle was reserve-eligible `0`.
+  - average pre-assignment available vehicle count for outbound assignments `1.552`.
+  - average pre-assignment reserve-eligible vehicle count for outbound assignments `0`.
+  - average pre-assignment top-lane reserve-eligible vehicle count for outbound assignments `0`.
+  - shortest reserve route length for outbound assignments `null`.
+  - outbound-while-head-gap route patterns still point to bottom/storage flows, not top-lane reserve routes.
+  - final 600s behavior stayed at total PPH `516`, inbound `210`, physical violations `0`.
+
+Decision:
+
+- Do not implement the available-pool admission source cut yet.
+- Even though outbound assignments frequently occur while stations lack physical head reserve, the available pool at those moments does not contain a valid reserve-capable vehicle.
+- A rule that simply blocks outbound assignment when a head gap exists would idle lower-level/storage vehicles without producing a physical inbound head reservation.
+
+Updated next step:
+
+- Move the investigation one step earlier again: idle / post-completion vehicle placement.
+- The next audit should answer why available vehicles are not reserve-eligible:
+  - are they parked in storage/lower-level nodes,
+  - are they held by post-dropoff / standby timers,
+  - are they missing a top-lane return path,
+  - or is the system failing to maintain a minimum top-lane reserve pool before demand becomes urgent?
+- The next valid source cut is likely not assignment admission; it is idle positioning / reserve-pool maintenance.

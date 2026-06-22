@@ -11,6 +11,44 @@ import {
 
 type SimWithEventLog = ShuttleSimCore & {
   eventLog: EventLogEntry[];
+  assignmentHoldActive(vehicle: ShuttleSimState['vehicles'][number]): boolean;
+  inboundDropoffStandbyHoldActive(vehicle: ShuttleSimState['vehicles'][number]): boolean;
+  tasklessInboundQueueStandbyRerouteAllowed(vehicle: ShuttleSimState['vehicles'][number]): boolean;
+  routeToInboundQueueStandby(
+    vehicle: ShuttleSimState['vehicles'][number],
+    fromNodeId?: string,
+    options?: { allowTaskedVehicle?: boolean; liftNodeId?: string }
+  ): string[] | null;
+  tasklessInboundQueueStandbyRouteOriginAllowed(routeNodeIds: string[]): boolean;
+};
+
+type ReserveEligibleVehicle = {
+  vehicleId: string;
+  stationId: string;
+  currentNodeId: string;
+  routeLength: number;
+  routeLevelPattern: string;
+  topLane: boolean;
+};
+
+type PreAdmissionContext = {
+  stationDemandCount: number;
+  readyDemandCount: number;
+  claimedDemandCount: number;
+  physicalHeadReservationCount: number;
+  queueReservationCount: number;
+  activeServiceDepth: number;
+  headGapCount: number;
+  fleetBusyGapCount: number;
+  gapCounts: Record<string, number>;
+  headGapStationIds: string[];
+  availableVehicleCount: number;
+  reserveEligibleVehicleCount: number;
+  shortReserveEligibleVehicleCount: number;
+  topLaneReserveEligibleVehicleCount: number;
+  reserveEligibleVehicleIds: string[];
+  shortestReserveRouteLength: number | null;
+  reserveEligibleVehicles: ReserveEligibleVehicle[];
 };
 
 type AssignmentAdmissionRecord = {
@@ -35,6 +73,14 @@ type AssignmentAdmissionRecord = {
   preFleetBusyGapCount: number;
   preGapCounts: Record<string, number>;
   preHeadGapStationIds: string[];
+  preAvailableVehicleCount: number;
+  preReserveEligibleVehicleCount: number;
+  preShortReserveEligibleVehicleCount: number;
+  preTopLaneReserveEligibleVehicleCount: number;
+  preReserveEligibleVehicleIds: string[];
+  preShortestReserveRouteLength: number | null;
+  assignedVehicleWasReserveEligible: boolean;
+  assignedVehicleReserveRouteLength: number | null;
   wouldReserveInsteadOfOutbound: boolean;
 };
 
@@ -72,6 +118,7 @@ eventCursor = sim.eventLog.length;
 
 while (sim.getClock().simTimeSec < durationSec - 1e-9 && sim.getClock().status === 'running') {
   const preState = sim.getState();
+  const preContext = admissionContext(preState);
   const stepSec = Math.min(dtSec, durationSec - sim.getClock().simTimeSec);
   if (stepSec <= 1e-9 || !Number.isFinite(stepSec)) {
     break;
@@ -87,7 +134,7 @@ while (sim.getClock().simTimeSec < durationSec - 1e-9 && sim.getClock().status =
       continue;
     }
     const task = preTasksById.get(event.taskId) ?? postTasksById.get(event.taskId) ?? null;
-    assignmentRecords.push(recordAssignmentAdmission(event, task, preState));
+    assignmentRecords.push(recordAssignmentAdmission(event, task, preContext));
   }
 
   if (progressSec > 0 && postState.simTimeSec + 1e-9 >= nextProgressSec) {
@@ -121,19 +168,14 @@ console.log(JSON.stringify({ outputPath, summary }, null, 2));
 function recordAssignmentAdmission(
   event: EventLogEntry,
   task: TaskStateRecord | null,
-  preState: ShuttleSimState
+  preContext: PreAdmissionContext
 ): AssignmentAdmissionRecord {
-  const stations = preState.traffic.shadowLedger.stationContracts.stations;
-  const headGapStations = stations.filter((station) =>
-    station.headReservationSupply.gap === 'fleet-busy' ||
-    station.headReservationSupply.gap === 'route-infeasible' ||
-    station.headReservationSupply.gap === 'held-by-assignment' ||
-    station.headReservationSupply.gap === 'dispatchable-candidate-available' ||
-    station.serviceTransition.gap === 'waiting-for-head-reservation'
-  );
   const route = typeof event.details.route === 'string' ? event.details.route.split('>').filter(Boolean) : [];
   const taskKind = task?.kind ?? 'unknown';
-  const wouldReserveInsteadOfOutbound = taskKind === 'outbound' && headGapStations.length > 0;
+  const assignedReserveEligibility = preContext.reserveEligibleVehicles
+    .filter((entry) => entry.vehicleId === event.vehicleId)
+    .sort((left, right) => left.routeLength - right.routeLength || left.stationId.localeCompare(right.stationId))[0] ?? null;
+  const wouldReserveInsteadOfOutbound = taskKind === 'outbound' && preContext.reserveEligibleVehicleCount > 0;
   return {
     timeSec: event.timeSec,
     vehicleId: event.vehicleId,
@@ -146,35 +188,124 @@ function recordAssignmentAdmission(
     reason: event.reason,
     routeLength: route.length > 0 ? route.length : null,
     routeLevelPattern: route.length > 0 ? routeLevelPattern(route) : null,
-    preStationDemandCount: sum(stations.map((station) => station.demandCount)),
-    preReadyDemandCount: sum(stations.map((station) => station.readyDemandCount)),
-    preClaimedDemandCount: sum(stations.map((station) => station.claimedDemandCount)),
-    prePhysicalHeadReservationCount: sum(stations.map((station) => station.headReservationSupply.physicalHeadReservationVehicleId ? 1 : 0)),
-    preQueueReservationCount: sum(stations.map((station) => station.queueReservationCount)),
-    preActiveServiceDepth: sum(stations.map((station) => station.activeServiceDepth)),
-    preHeadGapCount: headGapStations.length,
-    preFleetBusyGapCount: headGapStations.filter((station) => station.headReservationSupply.gap === 'fleet-busy').length,
-    preGapCounts: countBy(headGapStations, (station) => station.headReservationSupply.gap),
-    preHeadGapStationIds: headGapStations.map((station) => station.stationId).sort(),
+    preStationDemandCount: preContext.stationDemandCount,
+    preReadyDemandCount: preContext.readyDemandCount,
+    preClaimedDemandCount: preContext.claimedDemandCount,
+    prePhysicalHeadReservationCount: preContext.physicalHeadReservationCount,
+    preQueueReservationCount: preContext.queueReservationCount,
+    preActiveServiceDepth: preContext.activeServiceDepth,
+    preHeadGapCount: preContext.headGapCount,
+    preFleetBusyGapCount: preContext.fleetBusyGapCount,
+    preGapCounts: preContext.gapCounts,
+    preHeadGapStationIds: preContext.headGapStationIds,
+    preAvailableVehicleCount: preContext.availableVehicleCount,
+    preReserveEligibleVehicleCount: preContext.reserveEligibleVehicleCount,
+    preShortReserveEligibleVehicleCount: preContext.shortReserveEligibleVehicleCount,
+    preTopLaneReserveEligibleVehicleCount: preContext.topLaneReserveEligibleVehicleCount,
+    preReserveEligibleVehicleIds: preContext.reserveEligibleVehicleIds,
+    preShortestReserveRouteLength: preContext.shortestReserveRouteLength,
+    assignedVehicleWasReserveEligible: assignedReserveEligibility !== null,
+    assignedVehicleReserveRouteLength: assignedReserveEligibility?.routeLength ?? null,
     wouldReserveInsteadOfOutbound
+  };
+}
+
+function admissionContext(state: ShuttleSimState): PreAdmissionContext {
+  const stations = state.traffic.shadowLedger.stationContracts.stations;
+  const headGapStations = stations.filter((station) =>
+    station.headReservationSupply.gap === 'fleet-busy' ||
+    station.headReservationSupply.gap === 'route-infeasible' ||
+    station.headReservationSupply.gap === 'held-by-assignment' ||
+    station.headReservationSupply.gap === 'dispatchable-candidate-available' ||
+    station.serviceTransition.gap === 'waiting-for-head-reservation'
+  );
+  const availableVehicles = state.vehicles.filter((vehicle) =>
+    !vehicle.taskId &&
+    !vehicle.loaded &&
+    vehicle.currentEdgeId === null &&
+    vehicle.legRemainingM <= 0 &&
+    vehicle.phaseRemainingSec <= 0 &&
+    !sim.assignmentHoldActive(vehicle) &&
+    !sim.inboundDropoffStandbyHoldActive(vehicle) &&
+    sim.tasklessInboundQueueStandbyRerouteAllowed(vehicle)
+  );
+  const reserveEligibleVehicles = availableVehicles
+    .flatMap((vehicle) => {
+      return headGapStations.map((station) => {
+        const route = sim.routeToInboundQueueStandby(vehicle, vehicle.currentNodeId, { liftNodeId: station.stationId });
+        if (!route || route.length <= 1 || !sim.tasklessInboundQueueStandbyRouteOriginAllowed(route)) {
+          return null;
+        }
+        const level = nodeLevel(vehicle.currentNodeId);
+        return {
+          vehicleId: vehicle.id,
+          stationId: station.stationId,
+          currentNodeId: vehicle.currentNodeId,
+          routeLength: route.length,
+          routeLevelPattern: routeLevelPattern(route),
+          topLane: level === 'top-a' || level === 'top-b'
+        };
+      });
+    })
+    .filter((entry): entry is ReserveEligibleVehicle => entry !== null)
+    .sort((left, right) =>
+      left.routeLength - right.routeLength ||
+      left.vehicleId.localeCompare(right.vehicleId) ||
+      left.stationId.localeCompare(right.stationId)
+    );
+  const reserveEligibleVehicleIds = [...new Set(reserveEligibleVehicles.map((entry) => entry.vehicleId))].sort();
+  const shortReserveEligibleVehicleIds = new Set(
+    reserveEligibleVehicles.filter((entry) => entry.routeLength <= 8).map((entry) => entry.vehicleId)
+  );
+  const topLaneReserveEligibleVehicleIds = new Set(
+    reserveEligibleVehicles.filter((entry) => entry.topLane).map((entry) => entry.vehicleId)
+  );
+  return {
+    stationDemandCount: sum(stations.map((station) => station.demandCount)),
+    readyDemandCount: sum(stations.map((station) => station.readyDemandCount)),
+    claimedDemandCount: sum(stations.map((station) => station.claimedDemandCount)),
+    physicalHeadReservationCount: sum(stations.map((station) => station.headReservationSupply.physicalHeadReservationVehicleId ? 1 : 0)),
+    queueReservationCount: sum(stations.map((station) => station.queueReservationCount)),
+    activeServiceDepth: sum(stations.map((station) => station.activeServiceDepth)),
+    headGapCount: headGapStations.length,
+    fleetBusyGapCount: headGapStations.filter((station) => station.headReservationSupply.gap === 'fleet-busy').length,
+    gapCounts: countBy(headGapStations, (station) => station.headReservationSupply.gap),
+    headGapStationIds: headGapStations.map((station) => station.stationId).sort(),
+    availableVehicleCount: availableVehicles.length,
+    reserveEligibleVehicleCount: reserveEligibleVehicleIds.length,
+    shortReserveEligibleVehicleCount: shortReserveEligibleVehicleIds.size,
+    topLaneReserveEligibleVehicleCount: topLaneReserveEligibleVehicleIds.size,
+    reserveEligibleVehicleIds,
+    shortestReserveRouteLength: reserveEligibleVehicles[0]?.routeLength ?? null,
+    reserveEligibleVehicles
   };
 }
 
 function summarize(records: AssignmentAdmissionRecord[], finalState: ShuttleSimState): Record<string, unknown> {
   const outboundRecords = records.filter((record) => record.taskKind === 'outbound');
   const inboundRecords = records.filter((record) => record.taskKind === 'inbound');
+  const outboundHeadGapRecords = outboundRecords.filter((record) => record.preHeadGapCount > 0);
   const outboundWouldReserve = outboundRecords.filter((record) => record.wouldReserveInsteadOfOutbound);
+  const outboundAssignedReserveEligible = outboundRecords.filter((record) => record.assignedVehicleWasReserveEligible);
   return {
     totalAssignments: records.length,
     inboundAssignments: inboundRecords.length,
     outboundAssignments: outboundRecords.length,
-    outboundWhileHeadGap: outboundWouldReserve.length,
-    outboundWhileFleetBusyGap: outboundWouldReserve.filter((record) => record.preFleetBusyGapCount > 0).length,
-    outboundWhileHeadGapPct: round(outboundWouldReserve.length / Math.max(1, outboundRecords.length), 4),
+    outboundWhileHeadGap: outboundHeadGapRecords.length,
+    outboundWhileFleetBusyGap: outboundHeadGapRecords.filter((record) => record.preFleetBusyGapCount > 0).length,
+    outboundWhileReserveEligible: outboundWouldReserve.length,
+    outboundAssignedReserveEligible: outboundAssignedReserveEligible.length,
+    outboundWhileReserveEligiblePct: round(outboundWouldReserve.length / Math.max(1, outboundRecords.length), 4),
+    outboundAssignedReserveEligiblePct: round(outboundAssignedReserveEligible.length / Math.max(1, outboundRecords.length), 4),
     averagePreReadyDemandForOutbound: round(average(outboundRecords.map((record) => record.preReadyDemandCount)), 3),
     averagePreHeadGapCountForOutbound: round(average(outboundRecords.map((record) => record.preHeadGapCount)), 3),
-    outboundWhileHeadGapRoutePatterns: countBy(outboundWouldReserve, (record) => record.routeLevelPattern ?? 'unknown'),
-    outboundWhileHeadGapStationCounts: outboundWouldReserve.reduce<Record<string, number>>((accumulator, record) => {
+    averagePreAvailableVehicleCountForOutbound: round(average(outboundRecords.map((record) => record.preAvailableVehicleCount)), 3),
+    averagePreReserveEligibleVehicleCountForOutbound: round(average(outboundRecords.map((record) => record.preReserveEligibleVehicleCount)), 3),
+    averagePreTopLaneReserveEligibleVehicleCountForOutbound: round(average(outboundRecords.map((record) => record.preTopLaneReserveEligibleVehicleCount)), 3),
+    shortestReserveRouteLengthForOutbound: minNullable(outboundRecords.map((record) => record.preShortestReserveRouteLength)),
+    outboundAssignedReserveEligibleRoutePatterns: countBy(outboundAssignedReserveEligible, (record) => record.routeLevelPattern ?? 'unknown'),
+    outboundWhileHeadGapRoutePatterns: countBy(outboundHeadGapRecords, (record) => record.routeLevelPattern ?? 'unknown'),
+    outboundWhileHeadGapStationCounts: outboundHeadGapRecords.reduce<Record<string, number>>((accumulator, record) => {
       for (const stationId of record.preHeadGapStationIds) {
         accumulator[stationId] = (accumulator[stationId] ?? 0) + 1;
       }
@@ -193,6 +324,11 @@ function summarize(records: AssignmentAdmissionRecord[], finalState: ShuttleSimS
       physicalViolations: finalState.traffic.physicalViolationCount
     }
   };
+}
+
+function minNullable(values: Array<number | null>): number | null {
+  const numericValues = values.filter((value): value is number => value !== null);
+  return numericValues.length > 0 ? Math.min(...numericValues) : null;
 }
 
 function liftNodeIdForTask(task: TaskStateRecord): string | null {
