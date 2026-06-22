@@ -7668,6 +7668,48 @@ export class ShuttleSimCore {
     return Math.max(0, this.stationKernelReserveTargetDepth(stationId) - this.stationKernelQueueLeaseCoverageDepth(stationId));
   }
 
+  private releaseStationKernelQueueLeasesForTaskAssignment(vehicle: MutableVehicle, task: TaskStateRecord): void {
+    const leases = this.stationQueueLeases.filter((lease) =>
+      lease.vehicleId === vehicle.id &&
+      lease.targetKind === 'queue-slot' &&
+      lease.phase !== 'revoking'
+    );
+    if (leases.length === 0) {
+      return;
+    }
+
+    const nextStationId = task.kind === 'inbound' ? this.taskLiftPortNodeId(task) : null;
+    this.stationQueueLeases = this.stationQueueLeases.filter((lease) => !leases.some((released) => released.id === lease.id));
+    for (const lease of leases) {
+      const reason =
+        task.kind === 'inbound' && nextStationId === lease.stationId
+          ? 'service-granted'
+          : 'released-to-task-assignment';
+      this.logEvent(
+        'station-queue-lease-transition',
+        vehicle.id,
+        task.id,
+        task.loadId,
+        lease.targetNodeId,
+        task.kind === 'inbound' ? task.pickupNodeId : task.dropoffNodeId,
+        reason,
+        this.vehiclePosition(vehicle),
+        {
+          leaseId: lease.id,
+          stationId: lease.stationId,
+          serviceDemandId: lease.serviceDemandId,
+          admissionCauseId: lease.admissionCauseId,
+          previousPhase: lease.phase,
+          targetNodeId: lease.targetNodeId,
+          slotIndex: lease.slotIndex,
+          nextTaskKind: task.kind,
+          nextStationId,
+          ageSec: round(this.simTimeSec - lease.issuedAtSec)
+        }
+      );
+    }
+  }
+
   private stationOwnedReserveAdmissionRouteAllowed(routeNodeIds: string[]): boolean {
     if (
       routeNodeIds.length < 2 ||
@@ -8364,6 +8406,7 @@ export class ShuttleSimCore {
     if (!vehicle.taskId) {
       this.clearTasklessRouteReservations(vehicle);
     }
+    this.releaseStationKernelQueueLeasesForTaskAssignment(vehicle, task);
     const agentMinimal = this.agentMinimalEnabled();
     const agentRefresh = this.agentRefreshEnabled();
     const agentSimple = this.agentSimpleEnabled();

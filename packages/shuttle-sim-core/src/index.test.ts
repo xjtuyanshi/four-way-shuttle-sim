@@ -2285,6 +2285,7 @@ describe('shuttle phase 0 SimCore', () => {
     sim.setVehicleRouteForTest('SH-01', ['module-01-spine-middle']);
 
     const internals = sim as unknown as {
+      assignTaskToVehicle(vehicle: unknown, task: unknown, route: string[]): void;
       assignQueuedTasks(dtSec: number): void;
       tasks: Array<{ id: string; state: string; vehicleId: string | null; waitReason: string | null }>;
       vehicles: Array<{
@@ -2338,6 +2339,53 @@ describe('shuttle phase 0 SimCore', () => {
       stationId: 'lift-01-inbound',
       leaseCount: 1,
       reserveCoverageGap: 1
+    }));
+
+    sim.addTaskForTest({
+      id: 'station-admission-inbound',
+      kind: 'inbound',
+      state: 'queued',
+      createdAtSec: 0,
+      assignedAtSec: null,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r02-c08',
+      loadId: 'station-admission-source',
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: null
+    });
+    const inboundTask = internals.tasks.find((candidate) => candidate.id === 'station-admission-inbound')!;
+    internals.assignTaskToVehicle(vehicle, inboundTask, vehicle.plannedRouteNodeIds);
+
+    expect(sim.getEventLog()).toContainEqual(expect.objectContaining({
+      eventType: 'station-queue-lease-transition',
+      vehicleId: 'SH-01',
+      taskId: 'station-admission-inbound',
+      loadId: 'station-admission-source',
+      reason: 'service-granted',
+      details: expect.objectContaining({
+        leaseId: 'station-lease:lift-01-inbound:SH-01:queue',
+        stationId: 'lift-01-inbound',
+        serviceDemandId: 'station-arrival:station-admission-source',
+        admissionCauseId: 'inbound-queue-reserve-before-outbound-assignment',
+        previousPhase: 'approaching',
+        nextTaskKind: 'inbound',
+        nextStationId: 'lift-01-inbound'
+      })
+    }));
+    const afterServiceKernel = ShuttleSimStateSchema.parse(sim.getState()).traffic.shadowLedger.stationContracts.stationKernel;
+    expect(afterServiceKernel.queueLeases).not.toContainEqual(expect.objectContaining({
+      id: 'station-lease:lift-01-inbound:SH-01:queue'
+    }));
+    expect(afterServiceKernel.queueLeases).toContainEqual(expect.objectContaining({
+      id: 'station-lease:lift-01-inbound:SH-01:service',
+      stationId: 'lift-01-inbound',
+      vehicleId: 'SH-01',
+      admissionCauseId: 'station-admission-inbound',
+      serviceDemandId: 'station-demand:station-admission-inbound',
+      phase: 'service-granted'
     }));
   });
 

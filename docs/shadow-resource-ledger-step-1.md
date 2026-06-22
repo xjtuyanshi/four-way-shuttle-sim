@@ -2917,3 +2917,70 @@ Interpretation:
   - add explicit lease release / transition reasons,
   - use the lease table as the single read path for pre-outbound reserve coverage,
   - then run a 12h physical tick before deciding whether to proceed to 24h + 3D visual review.
+
+## Cut B.3: Queue Lease Transition Events
+
+Date: 2026-06-22
+
+Behavior / diagnostics change:
+
+- Added an explicit queue lease transition event when a vehicle with an active station `queue-slot` lease is assigned to a task.
+- Event type: `station-queue-lease-transition`.
+- Transition reasons:
+  - `service-granted` when the next task is an inbound task for the same station,
+  - `released-to-task-assignment` when the lease is released for any other task assignment path.
+- The event includes:
+  - `leaseId`,
+  - `stationId`,
+  - `serviceDemandId`,
+  - `admissionCauseId`,
+  - previous lease phase,
+  - target node / slot,
+  - next task kind / station,
+  - lease age.
+- The release happens at the real assignment point, not during `getState()` or diagnostic reads, so read-only state inspection does not create events.
+
+Validation:
+
+```bash
+git diff --check
+pnpm --filter @four-way-shuttle/schemas typecheck
+pnpm --filter @four-way-shuttle/sim-core typecheck
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "admits a short station reserve route before assigning ordinary outbound work|does not admit a station reserve route before outbound assignment without station kernel demand|station kernel|station-owned shadow contracts|station shadow contract sampling read-only|restores agent-refresh snapshots"
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --near-route-max-nodes 4 --out output/review/station-queue-contract-600s-after-lease-transition-events.json
+./node_modules/.bin/tsx scripts/diagnose-queue-reserve-efficiency.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --progress-sec 300 --outbound-full-columns 0 --out output/review/queue-reserve-efficiency-600s-after-lease-transition-events.json
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 1800 --dt-sec 0.2 --sample-sec 60 --progress-sec 600 --near-route-max-nodes 4 --out output/review/station-queue-contract-30m-after-lease-transition-events.json
+./node_modules/.bin/tsx scripts/diagnose-queue-reserve-efficiency.ts --duration-sec 1800 --dt-sec 0.2 --sample-sec 60 --progress-sec 600 --outbound-full-columns 0 --out output/review/queue-reserve-efficiency-30m-after-lease-transition-events.json
+```
+
+Additional event-log check:
+
+```bash
+./node_modules/.bin/tsx -e "import { ShuttleSimCore, createInboundOutboundDemoScenario } from './packages/shuttle-sim-core/src/index.ts'; const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({ vehicles: { count: 8 }, taskGeneration: { inboundRatePerHour: 3600, outboundRatePerHour: 3600, inboundOutboundMix: 0.5, initialOutboundFullColumns: 0, maxTasks: 200 } })); sim.start(); sim.advanceByInPlace(600); const events = sim.getEventLog().filter((event) => event.eventType === 'station-queue-lease-transition'); console.log(JSON.stringify({ count: events.length, byReason: events.reduce((acc, event) => { const key = event.reason ?? 'null'; acc[key] = (acc[key] ?? 0) + 1; return acc; }, {}) }, null, 2));"
+```
+
+Result:
+
+- Typecheck passed for schemas and sim-core.
+- Targeted station / lease tests passed: `7 passed`.
+- 600s station contract unchanged vs Cut B.2:
+  - before: total PPH `570`, inbound PPH `258`, physical violations `0`,
+  - after: total PPH `570`, inbound PPH `258`, physical violations `0`.
+- 600s queue reserve efficiency unchanged vs Cut B.2:
+  - before: total PPH `486`, inbound PPH `288`, demand outbound PPH `198`, queue reserve travel `0.804%`, waste reposition `12.13%`, physical violations `0`,
+  - after: total PPH `486`, inbound PPH `288`, demand outbound PPH `198`, queue reserve travel `0.804%`, waste reposition `12.13%`, physical violations `0`.
+- 30m station contract unchanged vs Cut B.2:
+  - before: total PPH `540`, inbound PPH `196`, demand outbound PPH `38`, physical violations `0`,
+  - after: total PPH `540`, inbound PPH `196`, demand outbound PPH `38`, physical violations `0`.
+- 30m queue reserve efficiency unchanged vs Cut B.2:
+  - before: total PPH `492`, inbound PPH `268`, demand outbound PPH `224`, queue reserve travel `0.844%`, waste reposition `10.129%`, physical violations `0`,
+  - after: total PPH `492`, inbound PPH `268`, demand outbound PPH `224`, queue reserve travel `0.844%`, waste reposition `10.129%`, physical violations `0`.
+- The 600s event-log check captured `6` station queue lease transition events, all with reason `service-granted`.
+
+Interpretation:
+
+- The queue lease lifecycle is now auditable at the actual assignment transition point.
+- This does not yet make every lease release explicit; route abandonment / reset paths can still disappear through reconcile if they never become task assignments.
+- Next source cut should either:
+  - convert those remaining route-abandonment paths to explicit release events, or
+  - use `stationQueueLeases` as the single pre-outbound reserve coverage read path and then run a 12h physical tick to test whether the current lifecycle is stable enough before the broader 24h / 3D visual review.
