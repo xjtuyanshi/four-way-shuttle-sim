@@ -1314,3 +1314,67 @@ Decision:
 - Accepted as shadow-only semantics.
 - This does not fix queue coverage by itself, but it makes the station contract truthful: loaded delivery work is no longer reported as inbound station service.
 - The next source cut should use this cleaner station signal to decide when the coordinator lacks near-field AMR resources.
+
+## Shadow Station Coordinator Admission Metrics
+
+Date: 2026-06-22
+
+Change:
+
+- Added a shadow-only `coordinator` block to each inbound station contract snapshot.
+- The coordinator records:
+  - `decision`
+  - `targetReserveDepth`
+  - `queueCoverageGap`
+  - `activeServiceGap`
+  - `stationNeedsReservation`
+  - `eligibleTasklessVehicleCount`
+  - `dispatchableReserveCandidateCount`
+  - `candidateReasonCounts`
+- Added a diagnostic-only `liftNodeId` option to `routeToInboundQueueStandby(...)` and `topLiftInboundQueueStandbyTargetNodeId(...)` so analysis can ask whether a vehicle can reach a specific station queue. Normal runtime calls do not pass this option.
+- Extended `scripts/diagnose-station-queue-contract.ts` with coordinator decision and candidate summaries.
+
+Reason:
+
+- The previous accepted shadow refinement proved that station demand is often uncovered, but it did not explain whether the missing replenishment was caused by lack of ready demand, lack of candidate AMRs, route infeasibility, hold timers, or busy fleet allocation.
+- This is still shadow mode: it does not change task assignment, routing, collision avoidance, queue admission, or vehicle movement.
+
+Validation:
+
+```bash
+pnpm --filter @four-way-shuttle/schemas exec tsc --noEmit
+pnpm --filter @four-way-shuttle/sim-core exec tsc --noEmit
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "station-owned shadow contracts|does not report loaded inbound delivery|reports duplicate station route leases|keeps station shadow contract sampling" --reporter=dot
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --sample-sec 10 --dt-sec 0.2 --out output/review/station-shadow-coordinator-diagnosis-600s.json
+./node_modules/.bin/tsx scripts/run-physical-24h-amr-audit.ts --hours 0.5 --out output/review/station-shadow-coordinator-0p5h-audit.json --checkpoint-dir output/review/station-shadow-coordinator-0p5h-checkpoints --audit-every-sec 30 --quiet-critical
+```
+
+Results:
+
+- Typecheck passed for schemas and sim-core.
+- Targeted station tests passed: `4 passed`, `460 skipped`.
+- 600s station diagnosis:
+  - total PPH `516`, inbound `210`, physical violations `0`.
+  - average coordinator queue coverage gap `1.328`.
+  - average coordinator active service gap `1.959`.
+  - average dispatchable reserve candidate count `0`.
+  - coordinator decisions: `wait-for-reserve-candidate=102`, `hold-active-service=18`, `no-ready-demand=2`.
+  - coordinator candidate reasons: `busy-task=651`, `busy-moving=117`, `no-station-route=27`, `assignment-hold=12`, `inbound-dropoff-standby-hold=8`, `no-open-station-target=1`.
+- 30m physical audit:
+  - total PPH `508`, inbound `200`, outbound `308`.
+  - AMR anomalies `0`, critical anomalies `0`.
+  - physical violations `0`.
+
+Decision:
+
+- Accepted as shadow-only coordinator instrumentation.
+- It is behavior-equivalent to the accepted 30m baseline while making the station-owned admission gap explicit.
+- The important finding is that uncovered ready station demand is not currently waiting on a large pool of ignored idle AMRs. During uncovered samples the coordinator sees no dispatchable station-specific reserve candidate; the fleet is mostly busy or moving, with a smaller amount of route infeasibility / hold time.
+
+Updated next step:
+
+- Do not add another local queue hard guard.
+- The next source cut should move matching ownership earlier:
+  - keep `InboundDemand` separate from concrete task binding,
+  - let the coordinator atomically convert the head station reservation plus ready demand into `activeInboundService`,
+  - and only then experiment with bounded outbound throttling or near/far reservation policy.

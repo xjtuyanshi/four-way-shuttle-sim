@@ -647,6 +647,24 @@ export const ShadowStationRouteLeaseSchema = z.object({
   routeNodeIds: z.array(z.string()).default([])
 });
 
+export const ShadowStationCoordinatorSchema = z.object({
+  mode: z.literal('shadow').default('shadow'),
+  decision: z.enum([
+    'no-ready-demand',
+    'pull-queue-reserve',
+    'wait-for-reserve-candidate',
+    'match-head-reservation',
+    'hold-active-service'
+  ]),
+  targetReserveDepth: z.number().int().nonnegative(),
+  queueCoverageGap: z.number().int().nonnegative(),
+  activeServiceGap: z.number().int().nonnegative(),
+  stationNeedsReservation: z.boolean(),
+  eligibleTasklessVehicleCount: z.number().int().nonnegative(),
+  dispatchableReserveCandidateCount: z.number().int().nonnegative(),
+  candidateReasonCounts: z.record(z.number().int().nonnegative()).default({})
+});
+
 export const ShadowStationContractSnapshotSchema = z.object({
   stationId: z.string(),
   kind: z.literal('inbound'),
@@ -665,6 +683,16 @@ export const ShadowStationContractSnapshotSchema = z.object({
   tasklessStandbySoftReserveCount: z.number().int().nonnegative().default(0),
   physicalQueueSlotLeaseCount: z.number().int().nonnegative().default(0),
   routeLeaseCount: z.number().int().nonnegative().default(0),
+  coordinator: ShadowStationCoordinatorSchema.default({
+    decision: 'no-ready-demand',
+    targetReserveDepth: 0,
+    queueCoverageGap: 0,
+    activeServiceGap: 0,
+    stationNeedsReservation: false,
+    eligibleTasklessVehicleCount: 0,
+    dispatchableReserveCandidateCount: 0,
+    candidateReasonCounts: {}
+  }),
   demands: z.array(ShadowStationContractDemandSchema).default([]),
   vehicleCommitments: z.array(ShadowStationVehicleCommitmentSchema).default([]),
   routeLeases: z.array(ShadowStationRouteLeaseSchema).default([])

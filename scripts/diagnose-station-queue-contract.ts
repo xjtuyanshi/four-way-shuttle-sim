@@ -13,9 +13,9 @@ type InternalSim = ShuttleSimCore & {
   assignmentHoldActive(vehicle: VehicleState): boolean;
   inboundDropoffStandbyHoldActive(vehicle: VehicleState): boolean;
   tasklessInboundQueueStandbyRerouteAllowed(vehicle: VehicleState): boolean;
-  routeToInboundQueueStandby(vehicle: VehicleState, fromNodeId?: string, options?: { allowTaskedVehicle?: boolean }): string[] | null;
+  routeToInboundQueueStandby(vehicle: VehicleState, fromNodeId?: string, options?: { allowTaskedVehicle?: boolean; liftNodeId?: string }): string[] | null;
   tasklessInboundQueueStandbyRouteOriginAllowed(routeNodeIds: string[]): boolean;
-  topLiftInboundQueueStandbyTargetNodeId(vehicle: VehicleState, fromNodeId?: string, options?: { allowTaskedVehicle?: boolean }): string | null;
+  topLiftInboundQueueStandbyTargetNodeId(vehicle: VehicleState, fromNodeId?: string, options?: { allowTaskedVehicle?: boolean; liftNodeId?: string }): string | null;
   topLiftInboundApproachQueueSlot(nodeId: string): { liftNodeId: string; slotIndex: number } | null;
   taskLiftPortNodeId(task: TaskStateRecord): string | null;
   topLiftInboundVehicleContributesQueueCoverage(vehicle: VehicleState, liftNodeId: string): boolean;
@@ -232,6 +232,7 @@ function candidate(
 
 function summarize(samples: Sample[], finalState: ShuttleSimState): Record<string, unknown> {
   const stationEntries = samples.flatMap((sample) => sample.stationContracts.stations);
+  const coordinatorEntries = stationEntries.map((station) => station.coordinator);
   const candidateEntries = samples.flatMap((sample) => sample.candidates);
   const releasedRouteCandidates = candidateEntries.filter((candidate) => candidate.releasedStandbyRouteLength !== null);
   const releasedOriginAllowed = releasedRouteCandidates.filter((candidate) => candidate.releasedStandbyRouteOriginAllowed);
@@ -279,6 +280,16 @@ function summarize(samples: Sample[], finalState: ShuttleSimState): Record<strin
     averageActiveServiceDepth: round(average(stationEntries.map((station) => station.activeServiceDepth)), 3),
     averageActiveAssignmentQueueLeaseCount: round(average(stationEntries.map((station) => station.activeAssignmentQueueLeaseCount)), 3),
     averageFarForecastDepth: round(average(stationEntries.map((station) => station.farForecastDepth)), 3),
+    coordinatorDecisionCounts: countBy(coordinatorEntries, (coordinator) => coordinator.decision),
+    averageCoordinatorQueueCoverageGap: round(average(coordinatorEntries.map((coordinator) => coordinator.queueCoverageGap)), 3),
+    averageCoordinatorActiveServiceGap: round(average(coordinatorEntries.map((coordinator) => coordinator.activeServiceGap)), 3),
+    averageCoordinatorDispatchableReserveCandidateCount: round(average(coordinatorEntries.map((coordinator) => coordinator.dispatchableReserveCandidateCount)), 3),
+    coordinatorCandidateReasonCounts: coordinatorEntries.reduce<Record<string, number>>((accumulator, coordinator) => {
+      for (const [reason, count] of Object.entries(coordinator.candidateReasonCounts)) {
+        accumulator[reason] = (accumulator[reason] ?? 0) + count;
+      }
+      return accumulator;
+    }, {}),
     finalKpis: {
       inboundPph: finalState.kpis.inboundPph,
       demandOutboundPph: finalState.kpis.demandOutboundPph,

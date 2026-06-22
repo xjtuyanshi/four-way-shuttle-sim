@@ -11766,7 +11766,7 @@ export class ShuttleSimCore {
   private routeToInboundQueueStandby(
     vehicle: MutableVehicle,
     fromNodeId = vehicle.currentNodeId,
-    options: { allowTaskedVehicle?: boolean } = {}
+    options: { allowTaskedVehicle?: boolean; liftNodeId?: string } = {}
   ): string[] | null {
     const targetNodeId = this.topLiftInboundQueueStandbyTargetNodeId(vehicle, fromNodeId, options);
     if (!targetNodeId) {
@@ -11911,7 +11911,7 @@ export class ShuttleSimCore {
   private topLiftInboundQueueStandbyTargetNodeId(
     vehicle: MutableVehicle,
     fromNodeId = vehicle.currentNodeId,
-    options: { allowTaskedVehicle?: boolean } = {}
+    options: { allowTaskedVehicle?: boolean; liftNodeId?: string } = {}
   ): string | null {
     if (!this.mixedTopLiftFlowEnabled() || vehicle.loaded || (!options.allowTaskedVehicle && vehicle.taskId)) {
       return null;
@@ -11927,21 +11927,23 @@ export class ShuttleSimCore {
       return null;
     }
     const vehicleOffset = (this.vehicleOrdinal(vehicle.id) - 1) % inboundLifts.length;
-    const liftOrder = inboundLifts
-      .map((lift, index) => ({
-        lift,
-        depth: this.topLiftInboundQueueCoveredDepth(lift.id),
-        demand: this.topLiftInboundQueueReserveDemand(lift.id),
-        requiredDepth: this.topLiftInboundQueueReserveRequiredDepth(lift.id),
-        offsetDistance: (index - vehicleOffset + inboundLifts.length) % inboundLifts.length
-      }))
-      .sort((left, right) =>
-        right.demand - left.demand ||
-        left.depth - right.depth ||
-        left.offsetDistance - right.offsetDistance ||
-        left.lift.id.localeCompare(right.lift.id)
-      )
-      .map(({ lift }) => lift);
+    const liftOrder = options.liftNodeId
+      ? inboundLifts.filter((lift) => lift.id === options.liftNodeId)
+      : inboundLifts
+          .map((lift, index) => ({
+            lift,
+            depth: this.topLiftInboundQueueCoveredDepth(lift.id),
+            demand: this.topLiftInboundQueueReserveDemand(lift.id),
+            requiredDepth: this.topLiftInboundQueueReserveRequiredDepth(lift.id),
+            offsetDistance: (index - vehicleOffset + inboundLifts.length) % inboundLifts.length
+          }))
+          .sort((left, right) =>
+            right.demand - left.demand ||
+            left.depth - right.depth ||
+            left.offsetDistance - right.offsetDistance ||
+            left.lift.id.localeCompare(right.lift.id)
+          )
+          .map(({ lift }) => lift);
     for (const lift of liftOrder) {
       if (this.topLiftInboundQueueCoveredDepth(lift.id) >= this.topLiftInboundQueueReserveRequiredDepth(lift.id)) {
         continue;
@@ -12018,6 +12020,48 @@ export class ShuttleSimCore {
       null,
       { includeTasklessStandbyPlannedGoal: true }
     ) === null;
+  }
+
+  private shadowStationCoordinatorCandidateReason(vehicle: MutableVehicle, liftNodeId: string): string {
+    if (vehicle.taskId) {
+      return 'busy-task';
+    }
+    if (vehicle.loaded) {
+      return 'busy-loaded';
+    }
+    if (vehicle.currentEdgeId || vehicle.legRemainingM > 0 || vehicle.phaseRemainingSec > 0) {
+      return 'busy-moving';
+    }
+    if (this.assignmentHoldActive(vehicle)) {
+      return 'assignment-hold';
+    }
+    if (this.inboundDropoffStandbyHoldActive(vehicle)) {
+      return 'inbound-dropoff-standby-hold';
+    }
+    if (!this.tasklessInboundQueueStandbyRerouteAllowed(vehicle)) {
+      return 'standby-reroute-not-allowed';
+    }
+    const targetNodeId = this.topLiftInboundQueueStandbyTargetNodeId(vehicle, vehicle.currentNodeId, { liftNodeId });
+    if (!targetNodeId) {
+      return 'no-open-station-target';
+    }
+    const route = this.routeToInboundQueueStandby(vehicle, vehicle.currentNodeId, { liftNodeId });
+    if (!route || route.length <= 1) {
+      return 'no-station-route';
+    }
+    if (!this.tasklessInboundQueueStandbyRouteOriginAllowed(route)) {
+      return 'route-origin-disallowed';
+    }
+    return 'dispatchable-reserve';
+  }
+
+  private shadowStationCoordinatorCandidateReasonCounts(liftNodeId: string): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const vehicle of this.vehicles) {
+      const reason = this.shadowStationCoordinatorCandidateReason(vehicle, liftNodeId);
+      counts[reason] = (counts[reason] ?? 0) + 1;
+    }
+    return Object.fromEntries(Object.entries(counts).sort(([left], [right]) => left.localeCompare(right)));
   }
 
   private holdTasklessInboundQueueStandby(vehicle: MutableVehicle, nodeId: string): boolean {
@@ -34031,6 +34075,30 @@ export class ShuttleSimCore {
       const readyDemandCount = demands.filter((demand) => demand.status === 'ready').length;
       const claimedDemandCount = demands.filter((demand) => demand.status === 'claimed').length;
       const physicalDepth = physicalQueueOccupants.size;
+      const targetReserveDepth = Math.min(targetDepth, readyDemandCount);
+      const queueCoverageGap = Math.max(0, targetReserveDepth - nearCoveredDepth);
+      const activeServiceGap = Math.max(0, readyDemandCount - activeServiceDepth);
+      const candidateReasonCounts = queueCoverageGap > 0
+        ? this.shadowStationCoordinatorCandidateReasonCounts(stationId)
+        : {};
+      const dispatchableReserveCandidateCount = candidateReasonCounts['dispatchable-reserve'] ?? 0;
+      const eligibleTasklessVehicleCount = Object.entries(candidateReasonCounts)
+        .filter(([reason]) =>
+          reason === 'dispatchable-reserve' ||
+          reason === 'no-open-station-target' ||
+          reason === 'no-station-route' ||
+          reason === 'route-origin-disallowed'
+        )
+        .reduce((sum, [, count]) => sum + count, 0);
+      const coordinatorDecision = readyDemandCount === 0
+        ? 'no-ready-demand'
+        : queueCoverageGap > 0
+          ? dispatchableReserveCandidateCount > 0
+            ? 'pull-queue-reserve'
+            : 'wait-for-reserve-candidate'
+          : activeServiceDepth > 0
+            ? 'hold-active-service'
+            : 'match-head-reservation';
 
       if (readyDemandCount > 0 && nearCoveredDepth === 0) {
         addViolation('demandWithoutCoverage', {
@@ -34087,6 +34155,17 @@ export class ShuttleSimCore {
         tasklessStandbySoftReserveCount,
         physicalQueueSlotLeaseCount,
         routeLeaseCount: routeLeases.length,
+        coordinator: {
+          mode: 'shadow',
+          decision: coordinatorDecision,
+          targetReserveDepth,
+          queueCoverageGap,
+          activeServiceGap,
+          stationNeedsReservation: queueCoverageGap > 0,
+          eligibleTasklessVehicleCount,
+          dispatchableReserveCandidateCount,
+          candidateReasonCounts
+        },
         demands: demands.slice(0, 12),
         vehicleCommitments: vehicleCommitments.slice(0, 12),
         routeLeases

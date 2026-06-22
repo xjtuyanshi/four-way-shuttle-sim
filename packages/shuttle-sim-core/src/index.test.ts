@@ -1645,7 +1645,14 @@ describe('shuttle phase 0 SimCore', () => {
       nearCoveredDepth: 2,
       activeAssignmentQueueLeaseCount: 1,
       tasklessStandbySoftReserveCount: 1,
-      physicalQueueSlotLeaseCount: 2
+      physicalQueueSlotLeaseCount: 2,
+      coordinator: {
+        mode: 'shadow',
+        decision: 'no-ready-demand',
+        targetReserveDepth: 0,
+        queueCoverageGap: 0,
+        stationNeedsReservation: false
+      }
     });
     expect(station?.demands).toContainEqual(expect.objectContaining({
       kind: 'source-load',
