@@ -825,3 +825,50 @@ Next step:
   - physical queue slot occupancy and AMR reservation are separate but reconciled by station invariants.
   - active inbound service must correspond to real station demand.
 - Run 10m A/B first, compare against this smoke and the latest accepted baseline before attempting 30m/24h.
+
+## Station Queue Candidate Diagnosis
+
+Date: 2026-06-22
+
+Diagnostic added:
+
+- Script: `scripts/diagnose-station-queue-contract.ts`
+- Output: `output/review/station-queue-contract-diagnosis-600s.json`
+- Purpose: identify why available AMRs do not remain as station-owned inbound queue reservations.
+
+Command:
+
+```bash
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --sample-sec 10 --dt-sec 0.2 --progress-sec 0 --initial-fill-policy zone-balanced-50 --out output/review/station-queue-contract-diagnosis-600s.json
+```
+
+600s result:
+
+- Samples: `61`
+- Candidate blocker totals:
+  - `busy-task`: `388`
+  - `busy-moving`: `64`
+  - `no-standby-route`: `26`
+  - `no-station-target`: `8`
+  - `route-origin-disallowed`: `2`
+- Average ready demand per station sample: `2.484`
+- Average near covered depth: `0.598`
+- Average station queue reservation count: `0.049`
+- Final station invariant total: `1`
+- Final PPH: total `516`, inbound `210`, outbound-demand `0`
+- Physical violations: `0`
+- Deadlocks/livelocks: `0 / 0`
+
+Finding:
+
+- Queue reserve failure is not primarily caused by `route-origin-disallowed`; that only appears twice in this 600s sample.
+- The dominant reason is `busy-task`: AMRs are consumed as assigned tasks before the station can preserve a FIFO queue resource.
+- At `0s`, each inbound lift starts with too many queue occupants (`physicalDepth=3`, target `2`), but once inbound work begins, queueReservation quickly collapses to `0` while ready demand stays high.
+
+Decision:
+
+- A local path guard is the wrong next cut.
+- The first source-of-truth behavior change should be at task assignment / station ownership:
+  - station may consume a physically leading queue shuttle for active service.
+  - station must retain or replenish bounded queue reservations instead of converting every nearby AMR into an active inbound task.
+  - outbound and unrelated inbound work must not steal station-owned reserve depth while ready inbound demand exists.
