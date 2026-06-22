@@ -872,3 +872,24 @@ Decision:
   - station may consume a physically leading queue shuttle for active service.
   - station must retain or replenish bounded queue reservations instead of converting every nearby AMR into an active inbound task.
   - outbound and unrelated inbound work must not steal station-owned reserve depth while ready inbound demand exists.
+
+Rejected source experiments:
+
+- Experiment A: protect the full required reserve depth in `topLiftInboundQueueResourcesForTask` once a station had an active inbound task.
+  - Output: `output/review/station-queue-contract-source-step1-600s.json`
+  - Average queue reservation count improved from `0.049` to `0.172`.
+  - Inbound PPH regressed from `210` to `186`.
+  - Final station invariant total worsened to `2`.
+  - Decision: rejected. It created some queue reserve signal but starved inbound service too aggressively.
+- Experiment B: protect only one queue AMR while a station had active inbound service.
+  - Output: `output/review/station-queue-contract-source-step1b-600s.json`
+  - Average queue reservation count was `0.131`.
+  - Inbound PPH regressed further to `168`; total PPH regressed to `498`.
+  - Final station invariant total stayed `2`.
+  - Decision: rejected and reverted. Holding the last queue AMR in the resource selector is still the wrong abstraction.
+
+Updated next step:
+
+- Move the source-of-truth cut one level earlier: station-owned active WIP and demand admission.
+- The station should decide how many inbound tasks may be active versus how many AMRs must remain as queue reservations before `bestAvailableVehicleForTask()` sees the vehicles.
+- Keep queue resource selection FIFO, but do not solve station ownership by hiding queue vehicles locally inside `topLiftInboundQueueResourcesForTask()`.
