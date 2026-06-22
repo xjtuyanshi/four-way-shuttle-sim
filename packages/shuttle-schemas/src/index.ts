@@ -652,6 +652,74 @@ export const ShadowInboundDemandLedgerSchema = z.object({
   entries: z.array(ShadowInboundDemandLedgerEntrySchema).default([])
 });
 
+export const StationKernelDemandStatusCountsSchema = z.object({
+  announced: z.number().int().nonnegative().default(0),
+  ready: z.number().int().nonnegative().default(0),
+  claimed: z.number().int().nonnegative().default(0),
+  servicing: z.number().int().nonnegative().default(0),
+  picked: z.number().int().nonnegative().default(0),
+  cancelled: z.number().int().nonnegative().default(0)
+});
+
+export const StationKernelLeasePhaseCountsSchema = z.object({
+  approaching: z.number().int().nonnegative().default(0),
+  occupied: z.number().int().nonnegative().default(0),
+  serviceGranted: z.number().int().nonnegative().default(0),
+  servicing: z.number().int().nonnegative().default(0),
+  revoking: z.number().int().nonnegative().default(0)
+});
+
+export const StationKernelDemandTokenSchema = z.object({
+  id: z.string(),
+  stationId: z.string(),
+  fifoSeq: z.number().int().nonnegative(),
+  source: z.enum(['inbound-task', 'arrival-intent']),
+  taskId: z.string().nullable(),
+  loadId: z.string().nullable(),
+  readyAtSec: z.number().nonnegative(),
+  state: z.enum(['announced', 'ready', 'claimed', 'servicing', 'picked', 'cancelled'])
+});
+
+export const StationKernelQueueLeaseSchema = z.object({
+  id: z.string(),
+  stationId: z.string(),
+  vehicleId: z.string(),
+  admissionCauseId: z.string(),
+  serviceDemandId: z.string().nullable(),
+  targetKind: z.enum(['queue-slot', 'bounded-approach']),
+  targetNodeId: z.string(),
+  slotIndex: z.number().int().positive().nullable(),
+  phase: z.enum(['approaching', 'occupied', 'service-granted', 'servicing', 'revoking']),
+  issuedAtSec: z.number().nonnegative(),
+  expiresAtSec: z.number().nonnegative(),
+  lastProgressAtSec: z.number().nonnegative(),
+  boundedRouteNodeIds: z.array(z.string()).default([]),
+  fifoSeq: z.number().int().nonnegative()
+});
+
+export const StationKernelStationSummarySchema = z.object({
+  stationId: z.string(),
+  sourceBufferOccupancy: z.number().int().nonnegative(),
+  activeDemandTokenCount: z.number().int().nonnegative(),
+  readyDemandTokenCount: z.number().int().nonnegative(),
+  claimedDemandTokenCount: z.number().int().nonnegative(),
+  servicingDemandTokenCount: z.number().int().nonnegative(),
+  leaseCount: z.number().int().nonnegative(),
+  sourceOnlyReadyShadowCount: z.number().int().nonnegative().default(0)
+});
+
+export const StationKernelDiagnosticsSchema = z.object({
+  schemaVersion: z.literal('station-kernel-shadow.v1').default('station-kernel-shadow.v1'),
+  mode: z.literal('shadow').default('shadow'),
+  demandTokenCount: z.number().int().nonnegative().default(0),
+  leaseCount: z.number().int().nonnegative().default(0),
+  demandStatusCounts: StationKernelDemandStatusCountsSchema.default({}),
+  leasePhaseCounts: StationKernelLeasePhaseCountsSchema.default({}),
+  stationSummaries: z.array(StationKernelStationSummarySchema).default([]),
+  demandTokens: z.array(StationKernelDemandTokenSchema).default([]),
+  queueLeases: z.array(StationKernelQueueLeaseSchema).default([])
+});
+
 export const ShadowStationVehicleCommitmentSchema = z.object({
   vehicleId: z.string(),
   kind: z.enum(['queueReservation', 'activeInboundService']),
@@ -840,6 +908,7 @@ export const ShadowStationContractDiagnosticsSchema = z.object({
   invariantCounts: ShadowStationContractInvariantCountsSchema.default({}),
   stations: z.array(ShadowStationContractSnapshotSchema).default([]),
   inboundDemandLedger: ShadowInboundDemandLedgerSchema.default({}),
+  stationKernel: StationKernelDiagnosticsSchema.default({}),
   violations: z.array(ShadowStationContractViolationSchema).default([])
 });
 

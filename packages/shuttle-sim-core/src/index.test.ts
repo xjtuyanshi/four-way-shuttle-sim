@@ -1739,6 +1739,107 @@ describe('shuttle phase 0 SimCore', () => {
     }));
   });
 
+  it('station kernel separates source supply from true inbound task demand', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    }));
+    sim.addLoadForTest({
+      id: 'station-kernel-source-only',
+      state: 'waiting',
+      nodeId: 'lift-01-inbound-buffer-03',
+      vehicleId: null,
+      weightKg: 100
+    });
+
+    const stationContracts = ShuttleSimStateSchema.parse(sim.getState()).traffic.shadowLedger.stationContracts;
+    const kernel = stationContracts.stationKernel;
+    const station = kernel.stationSummaries.find((candidate) => candidate.stationId === 'lift-01-inbound');
+
+    expect(stationContracts.inboundDemandLedger.entryCount).toBe(1);
+    expect(stationContracts.inboundDemandLedger.statusCounts.ready).toBe(1);
+    expect(kernel).toMatchObject({
+      schemaVersion: 'station-kernel-shadow.v1',
+      mode: 'shadow',
+      demandTokenCount: 0,
+      leaseCount: 0
+    });
+    expect(station).toMatchObject({
+      stationId: 'lift-01-inbound',
+      sourceBufferOccupancy: 1,
+      sourceOnlyReadyShadowCount: 1,
+      activeDemandTokenCount: 0,
+      readyDemandTokenCount: 0
+    });
+  });
+
+  it('station kernel tracks true inbound task demand through snapshot restore', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({
+      id: 'station-kernel-task-load',
+      state: 'waiting',
+      nodeId: 'lift-01-inbound-buffer-03',
+      vehicleId: null,
+      weightKg: 100
+    });
+    sim.addTaskForTest({
+      id: 'station-kernel-task',
+      kind: 'inbound',
+      state: 'queued',
+      createdAtSec: 0,
+      assignedAtSec: null,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r02-c08',
+      loadId: 'station-kernel-task-load',
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: null
+    });
+
+    const before = ShuttleSimStateSchema.parse(sim.getState()).traffic.shadowLedger.stationContracts.stationKernel;
+    const snapshot = sim.createSnapshot();
+    const replay = new ShuttleSimCore(scenario);
+    const restored = ShuttleSimStateSchema.parse(replay.restoreSnapshot(snapshot)).traffic.shadowLedger.stationContracts.stationKernel;
+
+    expect(before).toMatchObject({
+      demandTokenCount: 1,
+      leaseCount: 0,
+      demandStatusCounts: expect.objectContaining({
+        ready: 1,
+        claimed: 0,
+        servicing: 0
+      })
+    });
+    expect(before.demandTokens).toContainEqual(expect.objectContaining({
+      id: 'station-demand:station-kernel-task',
+      stationId: 'lift-01-inbound',
+      source: 'inbound-task',
+      taskId: 'station-kernel-task',
+      loadId: 'station-kernel-task-load',
+      state: 'ready'
+    }));
+    expect(snapshot.stationDemandTokens).toEqual(before.demandTokens);
+    expect(restored).toEqual(before);
+  });
+
   it('previews unbound head reservation service transitions without mutating dispatch', () => {
     const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
       vehicles: { count: 1 },

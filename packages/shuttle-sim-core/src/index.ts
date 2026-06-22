@@ -242,6 +242,9 @@ type ShadowStationContractViolation = ShadowStationContracts['violations'][numbe
 type ShadowStationContractInvariantCounts = ShadowStationContracts['invariantCounts'];
 type ShadowInboundDemandLedger = ShadowStationContracts['inboundDemandLedger'];
 type ShadowInboundDemandLedgerEntry = ShadowInboundDemandLedger['entries'][number];
+type StationKernelDiagnostics = ShadowStationContracts['stationKernel'];
+type StationDemandToken = StationKernelDiagnostics['demandTokens'][number];
+type StationQueueLeaseToken = StationKernelDiagnostics['queueLeases'][number];
 
 type StationQueueSlotLease = {
   liftNodeId: string;
@@ -273,6 +276,10 @@ export type ShuttleEngineSnapshotV1 = {
   eventSequence: number;
   taskSequence: number;
   sourceLoadSequence: number;
+  stationLeaseSequence: number;
+  stationDemandSequenceByStation: Array<[string, number]>;
+  stationDemandTokens: StationDemandToken[];
+  stationQueueLeases: StationQueueLeaseToken[];
   nextInboundSec: number | null;
   nextOutboundSec: number | null;
   vehicles: MutableVehicle[];
@@ -2593,6 +2600,10 @@ export class ShuttleSimCore {
   private eventSequence = 0;
   private taskSequence = 0;
   private sourceLoadSequence = 0;
+  private stationLeaseSequence = 0;
+  private stationDemandSequenceByStation = new Map<string, number>();
+  private stationDemandTokens: StationDemandToken[] = [];
+  private stationQueueLeases: StationQueueLeaseToken[] = [];
   private nextInboundSec = 0;
   private nextOutboundSec = 0;
   private completedTaskCycleTimes: number[] = [];
@@ -2675,6 +2686,10 @@ export class ShuttleSimCore {
     this.eventSequence = 0;
     this.taskSequence = 0;
     this.sourceLoadSequence = 0;
+    this.stationLeaseSequence = 0;
+    this.stationDemandSequenceByStation = new Map();
+    this.stationDemandTokens = [];
+    this.stationQueueLeases = [];
     this.completedTaskCycleTimes = [];
     this.completedTaskWaitTimes = [];
     this.completedInbound = 0;
@@ -2770,6 +2785,7 @@ export class ShuttleSimCore {
     this.primeTopLiftOutboundFullColumns();
     this.refreshTopLiftColumnFlowModes();
     this.primeInboundSourceBacklog();
+    this.reconcileStationKernelShadowState();
     return this.getState();
   }
 
@@ -2887,6 +2903,7 @@ export class ShuttleSimCore {
 
     this.replenishInboundSourceBuffers();
     this.generateDueTasks(stepSec);
+    this.reconcileStationKernelShadowState();
     this.assignQueuedTasks(stepSec);
     this.advanceVehicles(stepSec);
     this.updateConflictSessions();
@@ -2894,6 +2911,7 @@ export class ShuttleSimCore {
     // Keep this post-advance refill: vehicles can consume inbound source slots during the tick,
     // and moving it changes deterministic event/state hashes.
     this.replenishInboundSourceBuffers();
+    this.reconcileStationKernelShadowState();
     this.updateLiftPortUtilization(stepSec);
     this.updateDeadlockSmokeCounters();
 
@@ -2935,6 +2953,7 @@ export class ShuttleSimCore {
   }
 
   getState(): ShuttleSimState {
+    this.reconcileStationKernelShadowState();
     this.diagnosticReadOnlyDepth += 1;
     try {
       return {
@@ -2986,6 +3005,7 @@ export class ShuttleSimCore {
   }
 
   createSnapshot(): ShuttleEngineSnapshotV1 {
+    this.reconcileStationKernelShadowState();
     const debugState = this.getDebugState();
     const snapshotWithoutHash: Omit<ShuttleEngineSnapshotV1, 'stateHash'> = {
       schemaVersion: 'shuttle.engineSnapshot.v1',
@@ -2997,6 +3017,11 @@ export class ShuttleSimCore {
       eventSequence: this.eventSequence,
       taskSequence: this.taskSequence,
       sourceLoadSequence: this.sourceLoadSequence,
+      stationLeaseSequence: this.stationLeaseSequence,
+      stationDemandSequenceByStation: [...this.stationDemandSequenceByStation.entries()]
+        .sort(([left], [right]) => left.localeCompare(right)),
+      stationDemandTokens: structuredClone(this.stationDemandTokens),
+      stationQueueLeases: structuredClone(this.stationQueueLeases),
       nextInboundSec: Number.isFinite(this.nextInboundSec) ? this.nextInboundSec : null,
       nextOutboundSec: Number.isFinite(this.nextOutboundSec) ? this.nextOutboundSec : null,
       vehicles: structuredClone(this.vehicles),
@@ -3048,6 +3073,10 @@ export class ShuttleSimCore {
     this.eventSequence = snapshot.eventSequence;
     this.taskSequence = snapshot.taskSequence;
     this.sourceLoadSequence = snapshot.sourceLoadSequence;
+    this.stationLeaseSequence = snapshot.stationLeaseSequence ?? 0;
+    this.stationDemandSequenceByStation = new Map(snapshot.stationDemandSequenceByStation ?? []);
+    this.stationDemandTokens = structuredClone(snapshot.stationDemandTokens ?? []);
+    this.stationQueueLeases = structuredClone(snapshot.stationQueueLeases ?? []);
     this.nextInboundSec = snapshot.nextInboundSec ?? Infinity;
     this.nextOutboundSec = snapshot.nextOutboundSec ?? Infinity;
     this.vehicles = structuredClone(snapshot.vehicles).map((vehicle) => ({
@@ -3085,6 +3114,7 @@ export class ShuttleSimCore {
     this.error = snapshot.error;
     this.traffic = new TrafficControllerV2(this.scenario);
     this.rebuildGraphNeighbors();
+    this.reconcileStationKernelShadowState();
     return this.getState();
   }
 
@@ -34296,6 +34326,178 @@ export class ShuttleSimCore {
       .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0] ?? null;
   }
 
+  private emptyStationKernelDemandStatusCounts(): StationKernelDiagnostics['demandStatusCounts'] {
+    return {
+      announced: 0,
+      ready: 0,
+      claimed: 0,
+      servicing: 0,
+      picked: 0,
+      cancelled: 0
+    };
+  }
+
+  private emptyStationKernelLeasePhaseCounts(): StationKernelDiagnostics['leasePhaseCounts'] {
+    return {
+      approaching: 0,
+      occupied: 0,
+      serviceGranted: 0,
+      servicing: 0,
+      revoking: 0
+    };
+  }
+
+  private emptyStationKernelDiagnostics(): StationKernelDiagnostics {
+    return {
+      schemaVersion: 'station-kernel-shadow.v1',
+      mode: 'shadow',
+      demandTokenCount: 0,
+      leaseCount: 0,
+      demandStatusCounts: this.emptyStationKernelDemandStatusCounts(),
+      leasePhaseCounts: this.emptyStationKernelLeasePhaseCounts(),
+      stationSummaries: [],
+      demandTokens: [],
+      queueLeases: []
+    };
+  }
+
+  private nextStationDemandFifoSeq(stationId: string): number {
+    const nextSeq = (this.stationDemandSequenceByStation.get(stationId) ?? 0) + 1;
+    this.stationDemandSequenceByStation.set(stationId, nextSeq);
+    return nextSeq;
+  }
+
+  private stationDemandTokenStateForTask(task: TaskStateRecord): StationDemandToken['state'] {
+    if (task.state === 'failed') {
+      return 'cancelled';
+    }
+    if (task.state === 'completed') {
+      return 'picked';
+    }
+
+    const load = this.loadById(task.loadId);
+    if (load?.state === 'carried' || load?.vehicleId !== null) {
+      return 'picked';
+    }
+
+    const vehicle = task.vehicleId ? this.vehicles.find((candidate) => candidate.id === task.vehicleId) ?? null : null;
+    if (vehicle?.state === 'lifting' || task.startedAtSec !== null) {
+      return 'servicing';
+    }
+    if (task.state === 'queued') {
+      return 'ready';
+    }
+    return task.vehicleId ? 'claimed' : 'announced';
+  }
+
+  private reconcileStationKernelShadowState(): void {
+    if (this.diagnosticReadOnlyDepth > 0) {
+      return;
+    }
+    if (!this.topLiftColumnLayoutEnabled()) {
+      this.stationDemandTokens = [];
+      this.stationQueueLeases = [];
+      return;
+    }
+
+    const existingTokens = new Map(this.stationDemandTokens.map((token) => [token.id, token]));
+    const tokens: StationDemandToken[] = [];
+    for (const task of this.tasks) {
+      if (
+        task.kind !== 'inbound' ||
+        !(task.state === 'queued' || task.state === 'assigned' || task.state === 'in-progress')
+      ) {
+        continue;
+      }
+      const stationId = this.taskLiftPortNodeId(task);
+      if (!stationId) {
+        continue;
+      }
+      const tokenId = `station-demand:${task.id}`;
+      const existing = existingTokens.get(tokenId);
+      tokens.push({
+        id: tokenId,
+        stationId,
+        fifoSeq: existing?.fifoSeq ?? this.nextStationDemandFifoSeq(stationId),
+        source: 'inbound-task',
+        taskId: task.id,
+        loadId: task.loadId,
+        readyAtSec: existing?.readyAtSec ?? task.createdAtSec,
+        state: this.stationDemandTokenStateForTask(task)
+      });
+    }
+
+    this.stationDemandTokens = tokens.sort((left, right) =>
+      left.stationId.localeCompare(right.stationId) ||
+      left.fifoSeq - right.fifoSeq ||
+      left.id.localeCompare(right.id)
+    );
+    this.stationQueueLeases = this.stationQueueLeases
+      .filter((lease) => this.stationDemandTokens.some((token) => token.stationId === lease.stationId))
+      .sort((left, right) =>
+        left.stationId.localeCompare(right.stationId) ||
+        left.fifoSeq - right.fifoSeq ||
+        left.vehicleId.localeCompare(right.vehicleId) ||
+        left.id.localeCompare(right.id)
+      );
+  }
+
+  private calculateStationKernelDiagnostics(inboundDemandLedger: ShadowInboundDemandLedger): StationKernelDiagnostics {
+    if (!this.topLiftColumnLayoutEnabled()) {
+      return this.emptyStationKernelDiagnostics();
+    }
+
+    const demandStatusCounts = this.emptyStationKernelDemandStatusCounts();
+    for (const token of this.stationDemandTokens) {
+      demandStatusCounts[token.state] += 1;
+    }
+
+    const leasePhaseCounts = this.emptyStationKernelLeasePhaseCounts();
+    for (const lease of this.stationQueueLeases) {
+      if (lease.phase === 'service-granted') {
+        leasePhaseCounts.serviceGranted += 1;
+      } else {
+        leasePhaseCounts[lease.phase] += 1;
+      }
+    }
+
+    const stationSummaries = this.inboundLiftNodes()
+      .map((liftNode): StationKernelDiagnostics['stationSummaries'][number] => {
+        const stationId = liftNode.id;
+        const stationTokens = this.stationDemandTokens.filter((token) => token.stationId === stationId);
+        const stationLeases = this.stationQueueLeases.filter((lease) => lease.stationId === stationId);
+        const activeDemandTokens = stationTokens.filter((token) => token.state !== 'picked' && token.state !== 'cancelled');
+        const sourceOnlyReadyShadowCount = inboundDemandLedger.entries.filter((entry) =>
+          entry.stationId === stationId &&
+          entry.source === 'source-buffer' &&
+          entry.status === 'ready'
+        ).length;
+        return {
+          stationId,
+          sourceBufferOccupancy: this.inboundLiftWaitingSourceLoads(stationId).length,
+          activeDemandTokenCount: activeDemandTokens.length,
+          readyDemandTokenCount: stationTokens.filter((token) => token.state === 'ready').length,
+          claimedDemandTokenCount: stationTokens.filter((token) => token.state === 'claimed').length,
+          servicingDemandTokenCount: stationTokens.filter((token) => token.state === 'servicing').length,
+          leaseCount: stationLeases.length,
+          sourceOnlyReadyShadowCount
+        };
+      })
+      .sort((left, right) => left.stationId.localeCompare(right.stationId));
+
+    return {
+      schemaVersion: 'station-kernel-shadow.v1',
+      mode: 'shadow',
+      demandTokenCount: this.stationDemandTokens.length,
+      leaseCount: this.stationQueueLeases.length,
+      demandStatusCounts,
+      leasePhaseCounts,
+      stationSummaries,
+      demandTokens: this.stationDemandTokens.slice(0, 160),
+      queueLeases: this.stationQueueLeases.slice(0, 160)
+    };
+  }
+
   private calculateShadowStationContractDiagnostics(): ShadowStationContracts {
     type CountKey = Exclude<keyof ShadowStationContractInvariantCounts, 'total'>;
 
@@ -34327,12 +34529,14 @@ export class ShuttleSimCore {
         invariantCounts,
         stations: [],
         inboundDemandLedger: this.emptyShadowInboundDemandLedger(),
+        stationKernel: this.emptyStationKernelDiagnostics(),
         violations: []
       };
     }
 
     const inboundDemandLedgerEntries = this.shadowInboundDemandLedgerEntries();
     const inboundDemandLedger = this.calculateShadowInboundDemandLedger(inboundDemandLedgerEntries);
+    const stationKernel = this.calculateStationKernelDiagnostics(inboundDemandLedger);
     const commitmentStationIdsByVehicle = new Map<string, Set<string>>();
     const stationSnapshots: ShadowStationContractSnapshot[] = this.inboundLiftNodes().map((liftNode) => {
       const stationId = liftNode.id;
@@ -34679,6 +34883,7 @@ export class ShuttleSimCore {
       invariantCounts,
       stations: stationSnapshots,
       inboundDemandLedger,
+      stationKernel,
       violations
     };
   }

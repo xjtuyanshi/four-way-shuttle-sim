@@ -2496,3 +2496,56 @@ Interpretation:
   - immediate top-a/top-b approach target,
   - FIFO/TTL ownership,
   - no middle/bottom/storage admission unless it first becomes a bounded near-station candidate.
+
+## Cut A: Station Kernel Shadow State
+
+Date: 2026-06-22
+
+Change:
+
+- Added a non-controlling station kernel shadow model under `traffic.shadowLedger.stationContracts.stationKernel`.
+- Added explicit shadow demand tokens for true inbound task demand.
+- Added station kernel state to reset, step reconciliation, snapshot, restore, and deterministic hash coverage.
+- Added source/demand separation in station summaries:
+  - `sourceBufferOccupancy` is physical/source supply waiting at the lift buffer.
+  - `sourceOnlyReadyShadowCount` is legacy shadow source-buffer readiness without a task.
+  - `activeDemandTokenCount` / `readyDemandTokenCount` / `claimedDemandTokenCount` / `servicingDemandTokenCount` are true task demand.
+- Kept `queueLeases` empty in this cut. This is intentional: existing route fields are still diagnostics only, not authoritative station-owned leases.
+
+Validation:
+
+```bash
+git diff --check
+pnpm --filter @four-way-shuttle/schemas typecheck
+pnpm --filter @four-way-shuttle/sim-core typecheck
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "station kernel|station shadow contract sampling read-only|restores agent-refresh snapshots"
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --near-route-max-nodes 4 --out output/review/station-queue-contract-600s-after-station-kernel-shadow.json
+./node_modules/.bin/tsx scripts/diagnose-queue-reserve-efficiency.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --progress-sec 300 --outbound-full-columns 0 --out output/review/queue-reserve-efficiency-600s-after-station-kernel-shadow.json
+```
+
+Result:
+
+- Typecheck passed for schemas and sim-core.
+- Targeted station kernel / snapshot tests passed: `4 passed`.
+- Station contract 600s behavior baseline unchanged:
+  - total PPH `570`,
+  - inbound PPH `258`,
+  - physical violations `0`,
+  - final inbound demand ledger: ready `6`, claimed `2`, entry count `8`.
+- Queue reserve efficiency 600s behavior baseline unchanged:
+  - total PPH `486`,
+  - inbound PPH `288`,
+  - demand outbound PPH `198`,
+  - queue reserve travel `0.804%`,
+  - waste reposition `12.13%`,
+  - physical violations `0`.
+
+Interpretation:
+
+- This cut establishes the source-of-truth boundary without changing routing or assignment behavior.
+- It proves the system can now distinguish "there is source supply near the lift" from "there is true inbound station demand".
+- The next behavior-changing cut should use this kernel as the only legal source for station queue lease admission:
+  - ready inbound demand token exists,
+  - taskless AMR is already at a bounded top-level handoff candidate,
+  - route to queue/approach is at most the near-station limit,
+  - queue lease has FIFO/TTL and is protected before ordinary outbound assignment.
