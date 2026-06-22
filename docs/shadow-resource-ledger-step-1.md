@@ -2444,3 +2444,55 @@ Decision:
   - admit only vehicles that can enter a physical queue slot or a bounded near-station approach window,
   - avoid route-long reserve travel from middle/bottom/storage unless that lease can be fulfilled within the near window,
   - keep diagnostics accountable to PPH and reserve-eligible outbound steal counts before committing.
+
+## Bounded Near-Station Reserve Diagnostic
+
+Date: 2026-06-22
+
+Change:
+
+- Extended `scripts/diagnose-station-queue-contract.ts` with a shadow-only bounded near-station route quality check.
+- Added `--near-route-max-nodes`, defaulted in validation to `4`.
+- A bounded near-station route must:
+  - have at least 2 nodes and at most `nearRouteMaxNodes`,
+  - stay on top-a/top-b yellow queue approach nodes,
+  - avoid storage, inbound lift internals, outbound lift internals, middle, bottom-a, and bottom-b.
+
+Validation:
+
+```bash
+git diff --check
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 60 --dt-sec 0.2 --sample-sec 10 --near-route-max-nodes 4 --out output/review/station-queue-contract-60s-bounded-near-station-smoke.json
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --near-route-max-nodes 4 --progress-sec 300 --out output/review/station-queue-contract-600s-bounded-near-station.json
+```
+
+600s result:
+
+- Final KPIs stayed at the current source baseline:
+  - total PPH `570`,
+  - inbound PPH `258`,
+  - physical violations `0`.
+- `dispatchableReserveRouteQuality.total = 0`.
+- `dispatchableReserveRouteQuality.boundedNearStation = 0`.
+- `stationReleaseOpportunitySummary.totalStationGaps = 56`.
+- `stationReleaseOpportunitySummary.withStationSpecificReleaseRoute = 0`.
+- `stationReleaseOpportunitySummary.withBoundedNearStationRoute = 0`.
+- `releasedStandbyRouteSummary.total = 16`, but:
+  - `originAllowed = 0`,
+  - `boundedNearStation = 0`,
+  - route patterns were long cross-level paths:
+    - `bottom-a>middle>top-b>top-a`: `11`,
+    - `bottom-b>bottom-a>middle>top-b>top-a`: `2`,
+    - `middle>top-b>top-a`: `2`,
+    - `storage>middle>top-b>top-a`: `1`.
+
+Interpretation:
+
+- In the current 600s window, the station has no true near-station reserve candidate when head reservation is missing.
+- The previously observed "releaseable" routes are not queue resources; they are long relocation paths from lower/middle/storage areas.
+- The next behavior-changing cut should not dispatch long reserve travel.
+- The correct source boundary is a station-owned bounded lease:
+  - physical queue slot,
+  - immediate top-a/top-b approach target,
+  - FIFO/TTL ownership,
+  - no middle/bottom/storage admission unless it first becomes a bounded near-station candidate.

@@ -40,10 +40,12 @@ type CandidateRecord = {
   releasedStandbyRouteEndNodeId: string | null;
   releasedStandbyRouteEndSlot: string | null;
   releasedStandbyRouteOriginAllowed: boolean | null;
+  releasedStandbyRouteBoundedNearStation: boolean | null;
   releasedStandbyRouteLevelPattern: string | null;
   routeLength: number | null;
   routeEndNodeId: string | null;
   routeEndSlot: string | null;
+  routeBoundedNearStation: boolean | null;
   routeLevelPattern: string | null;
 };
 
@@ -56,8 +58,11 @@ type StationReleaseOpportunity = {
   releasedStandbyRouteCount: number;
   releasedOriginAllowedCount: number;
   releasedOriginAllowedLengthLe8Count: number;
+  releasedBoundedNearStationRouteCount: number;
   shortestReleasedOriginAllowedLength: number | null;
   shortestReleasedOriginAllowedVehicleId: string | null;
+  shortestReleasedBoundedNearStationRouteLength: number | null;
+  shortestReleasedBoundedNearStationVehicleId: string | null;
 };
 
 type Sample = {
@@ -72,6 +77,7 @@ const durationSec = numberArg('--duration-sec', 600);
 const sampleSec = numberArg('--sample-sec', 10);
 const dtSec = numberArg('--dt-sec', 0.2);
 const progressSec = numberArg('--progress-sec', 0);
+const nearRouteMaxNodes = integerArg('--near-route-max-nodes', 4);
 const outputPath = resolve(stringArg('--out') ?? `output/review/station-queue-contract-diagnosis-${Date.now()}.json`);
 
 mkdirSync(dirname(outputPath), { recursive: true });
@@ -132,7 +138,7 @@ const report = {
   schemaVersion: 'shuttle.stationQueueContractDiagnosis.v1',
   scenarioId: scenario.id,
   scenarioHash: hashScenario(scenario),
-  config: { durationSec, sampleSec, dtSec },
+  config: { durationSec, sampleSec, dtSec, nearRouteMaxNodes },
   summary,
   final: {
     simTimeSec: finalState.simTimeSec,
@@ -200,6 +206,16 @@ function diagnoseReleaseOpportunities(
         })
         .filter((entry): entry is { vehicleId: string; length: number } => entry !== null)
         .sort((left, right) => left.length - right.length || left.vehicleId.localeCompare(right.vehicleId));
+      const boundedNearStationRoutes = releasedRoutes.filter((entry) => {
+        const vehicle = stationaryEmptyOutboundVehicles.find((candidate) => candidate.id === entry.vehicleId);
+        const route = vehicle
+          ? internals.routeToInboundQueueStandby(vehicle, vehicle.currentNodeId, {
+              allowTaskedVehicle: true,
+              liftNodeId: station.stationId
+            })
+          : null;
+        return boundedNearStationRoute(route);
+      });
       return {
         stationId: station.stationId,
         timeSec: round(state.simTimeSec),
@@ -209,8 +225,11 @@ function diagnoseReleaseOpportunities(
         releasedStandbyRouteCount: releasedRoutes.length,
         releasedOriginAllowedCount: releasedRoutes.length,
         releasedOriginAllowedLengthLe8Count: releasedRoutes.filter((route) => route.length <= 8).length,
+        releasedBoundedNearStationRouteCount: boundedNearStationRoutes.length,
         shortestReleasedOriginAllowedLength: releasedRoutes[0]?.length ?? null,
-        shortestReleasedOriginAllowedVehicleId: releasedRoutes[0]?.vehicleId ?? null
+        shortestReleasedOriginAllowedVehicleId: releasedRoutes[0]?.vehicleId ?? null,
+        shortestReleasedBoundedNearStationRouteLength: boundedNearStationRoutes[0]?.length ?? null,
+        shortestReleasedBoundedNearStationVehicleId: boundedNearStationRoutes[0]?.vehicleId ?? null
       };
     });
 }
@@ -297,10 +316,12 @@ function candidate(
     releasedStandbyRouteOriginAllowed: releasedStandbyRoute
       ? internals.tasklessInboundQueueStandbyRouteOriginAllowed(releasedStandbyRoute)
       : null,
+    releasedStandbyRouteBoundedNearStation: boundedNearStationRoute(releasedStandbyRoute),
     releasedStandbyRouteLevelPattern: releasedStandbyRoute ? routeLevelPattern(releasedStandbyRoute) : null,
     routeLength: route?.length ?? null,
     routeEndNodeId,
     routeEndSlot: routeEndSlot ? `${routeEndSlot.liftNodeId}:s${routeEndSlot.slotIndex}` : null,
+    routeBoundedNearStation: boundedNearStationRoute(route),
     routeLevelPattern: route ? routeLevelPattern(route) : null
   };
 }
@@ -315,6 +336,9 @@ function summarize(samples: Sample[], finalState: ShuttleSimState): Record<strin
   const releaseOpportunityEntries = samples.flatMap((sample) => sample.releaseOpportunities);
   const releasedRouteCandidates = candidateEntries.filter((candidate) => candidate.releasedStandbyRouteLength !== null);
   const releasedOriginAllowed = releasedRouteCandidates.filter((candidate) => candidate.releasedStandbyRouteOriginAllowed);
+  const releasedBoundedNearStation = releasedRouteCandidates.filter((candidate) => candidate.releasedStandbyRouteBoundedNearStation);
+  const dispatchableRouteCandidates = candidateEntries.filter((candidate) => candidate.reason === 'dispatchable-reserve');
+  const dispatchableBoundedNearStation = dispatchableRouteCandidates.filter((candidate) => candidate.routeBoundedNearStation);
   const noStationTargetWithUncoveredReadyDemand = samples.reduce((count, sample) => {
     const hasUncoveredReadyDemand = sample.stationContracts.stations.some((station) =>
       station.readyDemandCount > 0 && station.nearCoveredDepth < station.targetDepth
@@ -348,18 +372,32 @@ function summarize(samples: Sample[], finalState: ShuttleSimState): Record<strin
       originAllowedLengthLe8: releasedOriginAllowed.filter((candidate) =>
         (candidate.releasedStandbyRouteLength ?? Number.POSITIVE_INFINITY) <= 8
       ).length,
+      boundedNearStation: releasedBoundedNearStation.length,
       byLength: countBy(releasedRouteCandidates, (candidate) => String(candidate.releasedStandbyRouteLength)),
       byLevelPattern: countBy(releasedRouteCandidates, (candidate) => candidate.releasedStandbyRouteLevelPattern ?? 'none')
+    },
+    dispatchableReserveRouteQuality: {
+      total: dispatchableRouteCandidates.length,
+      boundedNearStation: dispatchableBoundedNearStation.length,
+      boundedNearStationPct: round(dispatchableBoundedNearStation.length / Math.max(1, dispatchableRouteCandidates.length), 4),
+      byLength: countBy(dispatchableRouteCandidates, (candidate) => String(candidate.routeLength)),
+      byLevelPattern: countBy(dispatchableRouteCandidates, (candidate) => candidate.routeLevelPattern ?? 'none')
     },
     stationReleaseOpportunitySummary: {
       totalStationGaps: releaseOpportunityEntries.length,
       withStationSpecificReleaseRoute: releaseOpportunityEntries.filter((entry) => entry.releasedOriginAllowedCount > 0).length,
       withShortStationSpecificReleaseRouteLe8: releaseOpportunityEntries.filter((entry) => entry.releasedOriginAllowedLengthLe8Count > 0).length,
+      withBoundedNearStationRoute: releaseOpportunityEntries.filter((entry) => entry.releasedBoundedNearStationRouteCount > 0).length,
       shortestReleasedOriginAllowedLength: minNullable(releaseOpportunityEntries.map((entry) => entry.shortestReleasedOriginAllowedLength)),
+      shortestReleasedBoundedNearStationRouteLength: minNullable(releaseOpportunityEntries.map((entry) => entry.shortestReleasedBoundedNearStationRouteLength)),
       bySupplyGap: countBy(releaseOpportunityEntries, (entry) => entry.supplyGap),
       byShortestLength: countBy(
         releaseOpportunityEntries.filter((entry) => entry.shortestReleasedOriginAllowedLength !== null),
         (entry) => String(entry.shortestReleasedOriginAllowedLength)
+      ),
+      byShortestBoundedNearStationLength: countBy(
+        releaseOpportunityEntries.filter((entry) => entry.shortestReleasedBoundedNearStationRouteLength !== null),
+        (entry) => String(entry.shortestReleasedBoundedNearStationRouteLength)
       ),
       averageEmptyOutboundAssignments: round(average(releaseOpportunityEntries.map((entry) => entry.emptyOutboundAssignments)), 3),
       averageStationaryEmptyOutboundAssignments: round(average(releaseOpportunityEntries.map((entry) => entry.stationaryEmptyOutboundAssignments)), 3)
@@ -423,6 +461,22 @@ function routeLevelPattern(routeNodeIds: string[]): string {
   return levels
     .filter((level, index) => index === 0 || level !== levels[index - 1])
     .join('>');
+}
+
+function boundedNearStationRoute(routeNodeIds: string[] | null | undefined): boolean | null {
+  if (!routeNodeIds) {
+    return null;
+  }
+  if (routeNodeIds.length < 2 || routeNodeIds.length > nearRouteMaxNodes) {
+    return false;
+  }
+  return routeNodeIds.every((nodeId) => {
+    if (nodeId.startsWith('storage-') || nodeId.includes('inbound') || nodeId.includes('outbound')) {
+      return false;
+    }
+    const level = nodeLevel(nodeId);
+    return level === 'top-a' || level === 'top-b';
+  });
 }
 
 function nodeLevel(nodeId: string): string {
