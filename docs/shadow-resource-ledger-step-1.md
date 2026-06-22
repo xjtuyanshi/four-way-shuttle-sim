@@ -1378,3 +1378,44 @@ Updated next step:
   - keep `InboundDemand` separate from concrete task binding,
   - let the coordinator atomically convert the head station reservation plus ready demand into `activeInboundService`,
   - and only then experiment with bounded outbound throttling or near/far reservation policy.
+
+## Rejected Source Cut: Reservation Before Service Binding Without Demand Ledger
+
+Date: 2026-06-22
+
+Experiment:
+
+- Tried to keep vehicles moving to inbound queue as taskless `queueReservation` instead of binding the queued inbound task while the AMR was still remote.
+- Added a service transition attempt at the physical queue slot so a parked queue reservation could bind a queued inbound demand only after reaching the station.
+
+Hypothesis:
+
+- This would align with the station coordinator model by avoiding premature `activeInboundService` for remote vehicles.
+
+Validation:
+
+```bash
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --sample-sec 10 --dt-sec 0.2 --out output/review/station-reservation-before-service-source-diagnosis-600s.json
+```
+
+Results:
+
+- 600s diagnosis:
+  - total PPH dropped from the accepted shadow-coordinator baseline `516` to `450`.
+  - inbound PPH dropped from `210` to `126`.
+  - average near covered depth dropped from `0.598` to `0.246`.
+  - average ready demand rose from `2.484` to `3.016`.
+  - average active service depth dropped from `0.557` to `0.189`.
+  - station invariant total worsened from `1` to `2`.
+
+Decision:
+
+- Rejected and reverted.
+- This reproduces the Pro review warning: delaying concrete task binding without a separate authoritative `InboundDemand` / source-lift pipeline starves the lift service path.
+- The source cut cannot be just "make queue routes taskless." It must first introduce a real demand ledger that can keep the lift/source pipeline alive while separating AMR reservation from concrete task binding.
+
+Updated next step:
+
+- Add a shadow `InboundDemand` ledger that is not merely inferred from task binding.
+- Prove the demand ledger can explain waiting source loads, queued tasks, claimed loads, and completed loads without changing behavior.
+- Only after that, retry the reservation-to-service source transition.
