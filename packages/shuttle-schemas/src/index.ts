@@ -618,6 +618,40 @@ export const ShadowStationContractDemandSchema = z.object({
   nodeId: z.string().nullable()
 });
 
+export const ShadowInboundDemandLedgerEntrySchema = z.object({
+  id: z.string(),
+  stationId: z.string(),
+  status: z.enum(['announced', 'ready', 'claimed', 'completed']),
+  source: z.enum(['source-buffer', 'task', 'source-and-task']),
+  loadId: z.string().nullable(),
+  taskId: z.string().nullable(),
+  nodeId: z.string().nullable(),
+  loadState: z.string().nullable(),
+  taskState: TaskStateSchema.nullable(),
+  vehicleId: z.string().nullable()
+});
+
+export const ShadowInboundDemandLedgerStatusCountsSchema = z.object({
+  announced: z.number().int().nonnegative().default(0),
+  ready: z.number().int().nonnegative().default(0),
+  claimed: z.number().int().nonnegative().default(0),
+  completed: z.number().int().nonnegative().default(0)
+});
+
+export const ShadowInboundDemandLedgerStationSummarySchema = z.object({
+  stationId: z.string(),
+  total: z.number().int().nonnegative(),
+  statusCounts: ShadowInboundDemandLedgerStatusCountsSchema.default({})
+});
+
+export const ShadowInboundDemandLedgerSchema = z.object({
+  schemaVersion: z.literal('shadow-inbound-demand-ledger.v1').default('shadow-inbound-demand-ledger.v1'),
+  entryCount: z.number().int().nonnegative().default(0),
+  statusCounts: ShadowInboundDemandLedgerStatusCountsSchema.default({}),
+  stationSummaries: z.array(ShadowInboundDemandLedgerStationSummarySchema).default([]),
+  entries: z.array(ShadowInboundDemandLedgerEntrySchema).default([])
+});
+
 export const ShadowStationVehicleCommitmentSchema = z.object({
   vehicleId: z.string(),
   kind: z.enum(['queueReservation', 'activeInboundService']),
@@ -722,6 +756,7 @@ export const ShadowStationContractDiagnosticsSchema = z.object({
   stationCount: z.number().int().nonnegative().default(0),
   invariantCounts: ShadowStationContractInvariantCountsSchema.default({}),
   stations: z.array(ShadowStationContractSnapshotSchema).default([]),
+  inboundDemandLedger: ShadowInboundDemandLedgerSchema.default({}),
   violations: z.array(ShadowStationContractViolationSchema).default([])
 });
 

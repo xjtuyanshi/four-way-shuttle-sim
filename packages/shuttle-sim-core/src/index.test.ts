@@ -1633,8 +1633,38 @@ describe('shuttle phase 0 SimCore', () => {
     const state = ShuttleSimStateSchema.parse(sim.getState());
     const stationContracts = state.traffic.shadowLedger.stationContracts;
     const station = stationContracts.stations.find((candidate) => candidate.stationId === 'lift-01-inbound');
+    const ledger = stationContracts.inboundDemandLedger;
 
     expect(stationContracts.enabled).toBe(true);
+    expect(ledger).toMatchObject({
+      schemaVersion: 'shadow-inbound-demand-ledger.v1',
+      entryCount: 1,
+      statusCounts: {
+        announced: 0,
+        ready: 0,
+        claimed: 1,
+        completed: 0
+      }
+    });
+    expect(ledger.stationSummaries).toContainEqual(expect.objectContaining({
+      stationId: 'lift-01-inbound',
+      total: 1,
+      statusCounts: expect.objectContaining({
+        claimed: 1
+      })
+    }));
+    expect(ledger.entries).toContainEqual(expect.objectContaining({
+      id: 'load:shadow-contract-load',
+      stationId: 'lift-01-inbound',
+      status: 'claimed',
+      source: 'source-and-task',
+      loadId: 'shadow-contract-load',
+      taskId: 'shadow-contract-task',
+      nodeId: 'lift-01-inbound-buffer-03',
+      loadState: 'waiting',
+      taskState: 'assigned',
+      vehicleId: 'SH-02'
+    }));
     expect(station).toMatchObject({
       stationId: 'lift-01-inbound',
       demandCount: 1,
@@ -1724,10 +1754,31 @@ describe('shuttle phase 0 SimCore', () => {
     sim.setVehicleTaskForTest('SH-01', 'shadow-delivery-task', true);
 
     const state = ShuttleSimStateSchema.parse(sim.getState());
-    const station = state.traffic.shadowLedger.stationContracts.stations.find((candidate) =>
+    const stationContracts = state.traffic.shadowLedger.stationContracts;
+    const station = stationContracts.stations.find((candidate) =>
       candidate.stationId === 'lift-01-inbound'
     );
 
+    expect(stationContracts.inboundDemandLedger).toMatchObject({
+      entryCount: 1,
+      statusCounts: {
+        announced: 0,
+        ready: 0,
+        claimed: 0,
+        completed: 1
+      }
+    });
+    expect(stationContracts.inboundDemandLedger.entries).toContainEqual(expect.objectContaining({
+      id: 'task:shadow-delivery-task',
+      stationId: 'lift-01-inbound',
+      status: 'completed',
+      source: 'task',
+      loadId: 'shadow-delivery-load',
+      taskId: 'shadow-delivery-task',
+      loadState: 'carried',
+      taskState: 'in-progress',
+      vehicleId: 'SH-01'
+    }));
     expect(station).toMatchObject({
       demandCount: 0,
       claimedDemandCount: 0,

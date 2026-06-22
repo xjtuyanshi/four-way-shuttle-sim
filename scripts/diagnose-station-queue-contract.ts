@@ -233,6 +233,7 @@ function candidate(
 function summarize(samples: Sample[], finalState: ShuttleSimState): Record<string, unknown> {
   const stationEntries = samples.flatMap((sample) => sample.stationContracts.stations);
   const coordinatorEntries = stationEntries.map((station) => station.coordinator);
+  const ledgerEntries = samples.map((sample) => sample.stationContracts.inboundDemandLedger);
   const candidateEntries = samples.flatMap((sample) => sample.candidates);
   const releasedRouteCandidates = candidateEntries.filter((candidate) => candidate.releasedStandbyRouteLength !== null);
   const releasedOriginAllowed = releasedRouteCandidates.filter((candidate) => candidate.releasedStandbyRouteOriginAllowed);
@@ -273,6 +274,12 @@ function summarize(samples: Sample[], finalState: ShuttleSimState): Record<strin
       byLevelPattern: countBy(releasedRouteCandidates, (candidate) => candidate.releasedStandbyRouteLevelPattern ?? 'none')
     },
     stationInvariantCounts: finalState.traffic.shadowLedger.stationContracts.invariantCounts,
+    finalInboundDemandLedgerStatusCounts: finalState.traffic.shadowLedger.stationContracts.inboundDemandLedger.statusCounts,
+    finalInboundDemandLedgerEntryCount: finalState.traffic.shadowLedger.stationContracts.inboundDemandLedger.entryCount,
+    averageInboundDemandLedgerEntryCount: round(average(ledgerEntries.map((ledger) => ledger.entryCount)), 3),
+    averageInboundDemandLedgerReadyCount: round(average(ledgerEntries.map((ledger) => ledger.statusCounts.ready)), 3),
+    averageInboundDemandLedgerClaimedCount: round(average(ledgerEntries.map((ledger) => ledger.statusCounts.claimed)), 3),
+    averageInboundDemandLedgerCompletedCount: round(average(ledgerEntries.map((ledger) => ledger.statusCounts.completed)), 3),
     averageQueueReservationCount: round(average(stationEntries.map((station) => station.queueReservationCount)), 3),
     averageNearCoveredDepth: round(average(stationEntries.map((station) => station.nearCoveredDepth)), 3),
     averageReadyDemandCount: round(average(stationEntries.map((station) => station.readyDemandCount)), 3),

@@ -236,6 +236,8 @@ type ShadowStationVehicleCommitment = ShadowStationContractSnapshot['vehicleComm
 type ShadowStationRouteLease = ShadowStationContractSnapshot['routeLeases'][number];
 type ShadowStationContractViolation = ShadowStationContracts['violations'][number];
 type ShadowStationContractInvariantCounts = ShadowStationContracts['invariantCounts'];
+type ShadowInboundDemandLedger = ShadowStationContracts['inboundDemandLedger'];
+type ShadowInboundDemandLedgerEntry = ShadowInboundDemandLedger['entries'][number];
 
 type StationQueueSlotLease = {
   liftNodeId: string;
@@ -33816,6 +33818,147 @@ export class ShuttleSimCore {
     };
   }
 
+  private emptyShadowInboundDemandStatusCounts(): ShadowInboundDemandLedger['statusCounts'] {
+    return {
+      announced: 0,
+      ready: 0,
+      claimed: 0,
+      completed: 0
+    };
+  }
+
+  private emptyShadowInboundDemandLedger(): ShadowInboundDemandLedger {
+    return {
+      schemaVersion: 'shadow-inbound-demand-ledger.v1',
+      entryCount: 0,
+      statusCounts: this.emptyShadowInboundDemandStatusCounts(),
+      stationSummaries: [],
+      entries: []
+    };
+  }
+
+  private shadowInboundDemandStatusForTask(
+    task: TaskStateRecord,
+    load: LoadStateRecord | null
+  ): ShadowInboundDemandLedgerEntry['status'] | null {
+    if (task.kind !== 'inbound' || task.state === 'failed' || task.state === 'completed') {
+      return null;
+    }
+    if (
+      load?.state === 'carried' ||
+      load?.vehicleId !== null
+    ) {
+      return 'completed';
+    }
+    return task.state === 'queued' ? 'ready' : 'claimed';
+  }
+
+  private shadowInboundDemandLedgerEntries(): ShadowInboundDemandLedgerEntry[] {
+    if (!this.topLiftColumnLayoutEnabled()) {
+      return [];
+    }
+
+    const activeInboundTasks = this.tasks.filter((task) =>
+      task.kind === 'inbound' &&
+      (task.state === 'queued' || task.state === 'assigned' || task.state === 'in-progress')
+    );
+    const tasksByLoadId = new Map(activeInboundTasks.map((task) => [task.loadId, task]));
+    const loadsById = new Map(this.loads.map((load) => [load.id, load]));
+    const entries: ShadowInboundDemandLedgerEntry[] = [];
+    const coveredLoadIds = new Set<string>();
+
+    for (const liftNode of this.inboundLiftNodes()) {
+      const stationId = liftNode.id;
+      const frontSourceNodeId = this.inboundSourceFrontBufferNodeId(stationId);
+      for (const load of this.inboundLiftWaitingSourceLoads(stationId)) {
+        const task = tasksByLoadId.get(load.id) ?? null;
+        const taskStatus = task ? this.shadowInboundDemandStatusForTask(task, load) : null;
+        const status: ShadowInboundDemandLedgerEntry['status'] = taskStatus ??
+          (load.nodeId === frontSourceNodeId ? 'ready' : 'announced');
+        coveredLoadIds.add(load.id);
+        entries.push({
+          id: `load:${load.id}`,
+          stationId,
+          status,
+          source: task ? 'source-and-task' : 'source-buffer',
+          loadId: load.id,
+          taskId: task?.id ?? null,
+          nodeId: load.nodeId,
+          loadState: load.state,
+          taskState: task?.state ?? null,
+          vehicleId: task?.vehicleId ?? load.vehicleId
+        });
+      }
+    }
+
+    for (const task of activeInboundTasks) {
+      if (coveredLoadIds.has(task.loadId)) {
+        continue;
+      }
+      const stationId = this.taskLiftPortNodeId(task);
+      if (!stationId) {
+        continue;
+      }
+      const load = loadsById.get(task.loadId) ?? null;
+      const status = this.shadowInboundDemandStatusForTask(task, load);
+      if (!status) {
+        continue;
+      }
+      entries.push({
+        id: `task:${task.id}`,
+        stationId,
+        status,
+        source: 'task',
+        loadId: task.loadId,
+        taskId: task.id,
+        nodeId: task.pickupNodeId,
+        loadState: load?.state ?? null,
+        taskState: task.state,
+        vehicleId: task.vehicleId
+      });
+    }
+
+    return entries.sort((left, right) =>
+      left.stationId.localeCompare(right.stationId) ||
+      this.shadowInboundDemandStatusRank(left.status) - this.shadowInboundDemandStatusRank(right.status) ||
+      (left.taskId ?? '').localeCompare(right.taskId ?? '') ||
+      (left.loadId ?? '').localeCompare(right.loadId ?? '') ||
+      left.id.localeCompare(right.id)
+    );
+  }
+
+  private shadowInboundDemandStatusRank(status: ShadowInboundDemandLedgerEntry['status']): number {
+    return status === 'announced' ? 0 :
+      status === 'ready' ? 1 :
+      status === 'claimed' ? 2 :
+      3;
+  }
+
+  private calculateShadowInboundDemandLedger(entries: ShadowInboundDemandLedgerEntry[]): ShadowInboundDemandLedger {
+    const statusCounts = this.emptyShadowInboundDemandStatusCounts();
+    const stationCounts = new Map<string, ShadowInboundDemandLedger['stationSummaries'][number]>();
+
+    for (const entry of entries) {
+      statusCounts[entry.status] += 1;
+      const stationSummary = stationCounts.get(entry.stationId) ?? {
+        stationId: entry.stationId,
+        total: 0,
+        statusCounts: this.emptyShadowInboundDemandStatusCounts()
+      };
+      stationSummary.total += 1;
+      stationSummary.statusCounts[entry.status] += 1;
+      stationCounts.set(entry.stationId, stationSummary);
+    }
+
+    return {
+      schemaVersion: 'shadow-inbound-demand-ledger.v1',
+      entryCount: entries.length,
+      statusCounts,
+      stationSummaries: [...stationCounts.values()].sort((left, right) => left.stationId.localeCompare(right.stationId)),
+      entries: entries.slice(0, 160)
+    };
+  }
+
   private calculateShadowStationContractDiagnostics(): ShadowStationContracts {
     type CountKey = Exclude<keyof ShadowStationContractInvariantCounts, 'total'>;
 
@@ -33846,67 +33989,34 @@ export class ShuttleSimCore {
         stationCount: 0,
         invariantCounts,
         stations: [],
+        inboundDemandLedger: this.emptyShadowInboundDemandLedger(),
         violations: []
       };
     }
 
-    const activeInboundTasks = this.tasks.filter((task) =>
-      task.kind === 'inbound' &&
-      (task.state === 'queued' || task.state === 'assigned' || task.state === 'in-progress')
-    );
+    const inboundDemandLedgerEntries = this.shadowInboundDemandLedgerEntries();
+    const inboundDemandLedger = this.calculateShadowInboundDemandLedger(inboundDemandLedgerEntries);
     const commitmentStationIdsByVehicle = new Map<string, Set<string>>();
     const stationSnapshots: ShadowStationContractSnapshot[] = this.inboundLiftNodes().map((liftNode) => {
       const stationId = liftNode.id;
       const sourceLoads = this.inboundLiftWaitingSourceLoads(stationId);
-      const stationTasks = activeInboundTasks.filter((task) => this.taskLiftPortNodeId(task) === stationId);
-      const tasksByLoadId = new Map(stationTasks.map((task) => [task.loadId, task]));
-      const demandsById = new Map<string, ShadowStationContractDemand>();
-      const frontSourceNodeId = this.inboundSourceFrontBufferNodeId(stationId);
-
-      for (const load of sourceLoads) {
-        const task = tasksByLoadId.get(load.id) ?? null;
-        const status: ShadowStationContractDemand['status'] = task
-          ? task.state === 'queued'
-            ? 'ready'
-            : 'claimed'
-          : load.nodeId === frontSourceNodeId
-            ? 'ready'
-            : 'announced';
-        demandsById.set(`load:${load.id}`, {
-          id: `load:${load.id}`,
-          kind: 'source-load',
-          status,
+      const demands = inboundDemandLedgerEntries
+        .filter((entry) => entry.stationId === stationId && entry.status !== 'completed')
+        .map((entry): ShadowStationContractDemand => ({
+          id: entry.id,
+          kind: entry.source === 'task' ? 'inbound-task' : 'source-load',
+          status: entry.status,
           stationId,
-          loadId: load.id,
-          taskId: task?.id ?? null,
-          nodeId: load.nodeId
-        });
-      }
-
-      for (const task of stationTasks) {
-        if (demandsById.has(`load:${task.loadId}`)) {
-          continue;
-        }
-        if (task.state !== 'queued') {
-          continue;
-        }
-        demandsById.set(`task:${task.id}`, {
-          id: `task:${task.id}`,
-          kind: 'inbound-task',
-          status: task.state === 'queued' ? 'ready' : 'claimed',
-          stationId,
-          loadId: task.loadId,
-          taskId: task.id,
-          nodeId: task.pickupNodeId
-        });
-      }
-
-      const demands = [...demandsById.values()].sort((left, right) =>
-        left.status.localeCompare(right.status) ||
-        (left.taskId ?? '').localeCompare(right.taskId ?? '') ||
-        (left.loadId ?? '').localeCompare(right.loadId ?? '') ||
-        left.id.localeCompare(right.id)
-      );
+          loadId: entry.loadId,
+          taskId: entry.taskId,
+          nodeId: entry.nodeId
+        }))
+        .sort((left, right) =>
+          this.shadowInboundDemandStatusRank(left.status) - this.shadowInboundDemandStatusRank(right.status) ||
+          (left.taskId ?? '').localeCompare(right.taskId ?? '') ||
+          (left.loadId ?? '').localeCompare(right.loadId ?? '') ||
+          left.id.localeCompare(right.id)
+        );
 
       const vehicleCommitments: ShadowStationVehicleCommitment[] = [];
       const routeLeases: ShadowStationRouteLease[] = [];
@@ -34221,6 +34331,7 @@ export class ShuttleSimCore {
       stationCount: stationSnapshots.length,
       invariantCounts,
       stations: stationSnapshots,
+      inboundDemandLedger,
       violations
     };
   }

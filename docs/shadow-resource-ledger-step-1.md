@@ -1419,3 +1419,60 @@ Updated next step:
 - Add a shadow `InboundDemand` ledger that is not merely inferred from task binding.
 - Prove the demand ledger can explain waiting source loads, queued tasks, claimed loads, and completed loads without changing behavior.
 - Only after that, retry the reservation-to-service source transition.
+
+## Shadow InboundDemand Ledger
+
+Date: 2026-06-22
+
+Change:
+
+- Added a shadow-only `inboundDemandLedger` block under `traffic.shadowLedger.stationContracts`.
+- Added ledger entries for station/source-side inbound demand with:
+  - `announced`: source load exists but is not yet at the front pickup position,
+  - `ready`: source load or queued inbound task is ready for station service,
+  - `claimed`: a vehicle/task has claimed the source-side demand but has not picked it yet,
+  - `completed`: the station/source-side demand has been picked up, even if the full inbound storage delivery task is still in progress.
+- Rewired station contract `demands` to be derived from this ledger instead of locally rebuilding source-load and task demand inside every station snapshot.
+- Extended `scripts/diagnose-station-queue-contract.ts` with final and average inbound ledger counts.
+
+Reason:
+
+- The rejected source cut showed that keeping AMRs taskless until arrival starves the lift unless there is a separate authoritative source-side demand pipeline.
+- This is the shadow proof for that pipeline. It separates "lift/source demand still needs pickup" from "loaded inbound delivery is still driving to storage."
+- This remains diagnostic-only: it does not change task assignment, queue admission, routing, collision avoidance, vehicle motion, or source buffer replenishment.
+
+Validation:
+
+```bash
+pnpm --filter @four-way-shuttle/schemas exec tsc --noEmit
+pnpm --filter @four-way-shuttle/sim-core exec tsc --noEmit
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "station-owned shadow contracts|does not report loaded inbound delivery|reports duplicate station route leases|keeps station shadow contract sampling" --reporter=dot
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --sample-sec 10 --dt-sec 0.2 --out output/review/station-shadow-inbound-demand-ledger-diagnosis-600s.json
+./node_modules/.bin/tsx scripts/run-physical-24h-amr-audit.ts --hours 0.5 --out output/review/station-shadow-inbound-demand-ledger-0p5h-audit.json --checkpoint-dir output/review/station-shadow-inbound-demand-ledger-0p5h-checkpoints --audit-every-sec 30 --quiet-critical
+```
+
+Results:
+
+- Typecheck passed for schemas and sim-core.
+- Targeted station tests passed: `4 passed`, `460 skipped`.
+- 600s station diagnosis:
+  - total PPH `516`, inbound `210`, physical violations `0`.
+  - station invariant total `1`, same as the accepted shadow-coordinator baseline.
+  - final inbound ledger counts: `ready=5`, `claimed=3`, `completed=0`.
+  - average inbound ledger counts: entry `8.967`, ready `4.967`, claimed `1.426`, completed `1.098`.
+  - coordinator decisions remained `wait-for-reserve-candidate=102`, `hold-active-service=18`, `no-ready-demand=2`.
+- 30m physical audit:
+  - total PPH `508`, inbound `200`, outbound `308`.
+  - AMR anomalies `0`, critical anomalies `0`.
+
+Decision:
+
+- Accepted as shadow-only demand ledger instrumentation.
+- The 600s and 30m behavior stays equivalent to the accepted baseline, while the state now exposes which inbound source demands are ready, claimed, or already picked.
+- This proves the diagnostic model can represent station/source demand independently from loaded delivery WIP.
+
+Updated next step:
+
+- Retry the reservation-to-service source transition using this ledger as the source of truth in shadow comparison first.
+- The coordinator should convert only a head station reservation plus a ready/claimed ledger demand into `activeInboundService`.
+- Do not change 3D motion behavior until the shadow comparison shows which current implicit decision would change and why.
