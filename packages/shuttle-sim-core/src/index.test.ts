@@ -1680,6 +1680,61 @@ describe('shuttle phase 0 SimCore', () => {
     }));
   });
 
+  it('does not report loaded inbound delivery as station active service', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    }));
+    sim.addLoadForTest({
+      id: 'shadow-delivery-load',
+      state: 'carried',
+      nodeId: null,
+      vehicleId: 'SH-01',
+      weightKg: 100
+    });
+    sim.addTaskForTest({
+      id: 'shadow-delivery-task',
+      kind: 'inbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r02-c08',
+      loadId: 'shadow-delivery-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', ['module-01-spine-middle', 'column-middle-c08', 'storage-r02-c08']);
+    sim.setVehicleTaskForTest('SH-01', 'shadow-delivery-task', true);
+
+    const state = ShuttleSimStateSchema.parse(sim.getState());
+    const station = state.traffic.shadowLedger.stationContracts.stations.find((candidate) =>
+      candidate.stationId === 'lift-01-inbound'
+    );
+
+    expect(station).toMatchObject({
+      demandCount: 0,
+      claimedDemandCount: 0,
+      activeServiceDepth: 0,
+      activeAssignmentQueueLeaseCount: 0,
+      queueReservationCount: 0,
+      physicalQueueSlotLeaseCount: 0
+    });
+    expect(station?.vehicleCommitments).not.toContainEqual(expect.objectContaining({
+      vehicleId: 'SH-01',
+      kind: 'activeInboundService'
+    }));
+  });
+
   it('reports duplicate station route leases before they become physical queue conflicts', () => {
     const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
       vehicles: { count: 2 },

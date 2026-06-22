@@ -1252,3 +1252,65 @@ Decision:
 - It did not improve inbound versus the accepted 30m baseline (`508 / 200 / 308`) and slightly reduced total/outbound.
 - The evidence shows this is not a useful local preemption rule: legal near-field outbound-to-inbound opportunities are too rare under the current route-origin rules.
 - Next source work should focus on station admission / queue ownership earlier in the lifecycle, not on stealing already-assigned outbound tasks after the fleet is committed.
+
+## Accepted Shadow Refinement: Active Service Scope
+
+Date: 2026-06-22
+
+Problem:
+
+- Station shadow contracts were counting any assigned or in-progress inbound task for the lift as `activeInboundService`.
+- That mixed two different states:
+  - an AMR still occupying or approaching the inbound queue / pickup point,
+  - and an AMR that already picked the load and is delivering it to storage.
+- The latter is no longer station service and should not make the station look covered.
+
+Change:
+
+- Demand accounting now keeps task-only station demand only for queued inbound tasks whose source load is not currently represented in the station source buffer.
+- `activeInboundService` now requires:
+  - inbound task assigned or in-progress for the station,
+  - vehicle not loaded,
+  - and the vehicle is at, targeting, or planning the station queue/pickup area.
+- Added regression coverage: `does not report loaded inbound delivery as station active service`.
+- Extended station queue diagnosis summary with:
+  - busy task kind counts,
+  - busy inbound queue coverage counts,
+  - hypothetical released outbound standby route summary,
+  - average claimed demand,
+  - average active service depth,
+  - average active assignment queue lease count,
+  - average far forecast depth.
+
+Validation:
+
+```bash
+pnpm --filter @four-way-shuttle/sim-core exec tsc --noEmit
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "reports station-owned shadow contracts|does not report loaded inbound delivery|reports duplicate station route leases|keeps station shadow contract sampling" --reporter=dot
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --sample-sec 10 --dt-sec 0.2 --out output/review/station-contract-active-service-scope-summary-600s.json
+./node_modules/.bin/tsx scripts/run-physical-24h-amr-audit.ts --hours 0.5 --out output/review/station-contract-active-service-scope-0p5h-audit.json --checkpoint-dir output/review/station-contract-active-service-scope-0p5h-checkpoints --audit-every-sec 30 --quiet-critical
+```
+
+Results:
+
+- Typecheck: passed.
+- Targeted tests: `4 passed`, `460 skipped`.
+- 600s station diagnosis:
+  - total PPH `516`, inbound `210`, duplicate route lease `0`, physical violations `0`.
+  - Average ready demand `2.484`.
+  - Average claimed demand `0.713`.
+  - Average active service depth `0.557`.
+  - Average active assignment queue lease count `0.549`.
+  - Average far forecast depth `0.279`.
+  - Busy task split: inbound `154`, outbound `234`.
+  - Busy inbound coverage split: queue-covered `66`, not-queue-covered `88`.
+- Before this refinement, the same 600s diagnosis reported average claimed demand `1.262`, average active service depth `1.262`, average active assignment queue lease count `0.705`, and average far forecast depth `0.434`.
+- 30m physical audit:
+  - total PPH `508`, inbound `200`, outbound `308`.
+  - AMR anomalies `0`, critical anomalies `0`.
+
+Decision:
+
+- Accepted as shadow-only semantics.
+- This does not fix queue coverage by itself, but it makes the station contract truthful: loaded delivery work is no longer reported as inbound station service.
+- The next source cut should use this cleaner station signal to decide when the coordinator lacks near-field AMR resources.

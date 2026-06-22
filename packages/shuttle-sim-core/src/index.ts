@@ -33843,6 +33843,9 @@ export class ShuttleSimCore {
         if (demandsById.has(`load:${task.loadId}`)) {
           continue;
         }
+        if (task.state !== 'queued') {
+          continue;
+        }
         demandsById.set(`task:${task.id}`, {
           id: `task:${task.id}`,
           kind: 'inbound-task',
@@ -33876,10 +33879,19 @@ export class ShuttleSimCore {
         }
 
         const task = this.taskForVehicle(vehicle);
-        const activeInboundService =
+        const inboundTaskAtStation =
           task?.kind === 'inbound' &&
           this.taskLiftPortNodeId(task) === stationId &&
-          (task.state === 'assigned' || task.state === 'in-progress');
+          (task.state === 'assigned' || task.state === 'in-progress') &&
+          !vehicle.loaded &&
+          (
+            this.topLiftInboundVehicleContributesQueueCoverage(vehicle, stationId) ||
+            vehicle.currentNodeId === task.pickupNodeId ||
+            vehicle.targetNodeId === task.pickupNodeId ||
+            vehicle.plannedGoalNodeId === task.pickupNodeId
+          );
+        const activeInboundService =
+          inboundTaskAtStation;
         const queueReservation =
           !activeInboundService &&
           !vehicle.loaded &&

@@ -33,13 +33,17 @@ type CandidateRecord = {
   taskState: string | null;
   taskLiftNodeId: string | null;
   contributesInboundQueueCoverage: boolean | null;
+  standbyTargetNodeId: string | null;
+  standbyTargetSlot: string | null;
   releasedStandbyRouteLength: number | null;
   releasedStandbyRouteEndNodeId: string | null;
   releasedStandbyRouteEndSlot: string | null;
   releasedStandbyRouteOriginAllowed: boolean | null;
+  releasedStandbyRouteLevelPattern: string | null;
   routeLength: number | null;
   routeEndNodeId: string | null;
   routeEndSlot: string | null;
+  routeLevelPattern: string | null;
 };
 
 type Sample = {
@@ -141,45 +145,49 @@ function sampleState(state: ShuttleSimState): Sample {
 
 function diagnoseCandidate(vehicle: VehicleState, tasksById: Map<string, TaskStateRecord>): CandidateRecord {
   if (vehicle.taskId) {
-    return candidate(vehicle, 'busy-task', null, tasksById);
+    return candidate(vehicle, 'busy-task', null, null, tasksById);
   }
   if (vehicle.loaded) {
-    return candidate(vehicle, 'busy-loaded', null, tasksById);
+    return candidate(vehicle, 'busy-loaded', null, null, tasksById);
   }
   if (vehicle.currentEdgeId || vehicle.legRemainingM > 0 || vehicle.phaseRemainingSec > 0) {
-    return candidate(vehicle, 'busy-moving', null, tasksById);
+    return candidate(vehicle, 'busy-moving', null, null, tasksById);
   }
   if (internals.assignmentHoldActive(vehicle)) {
-    return candidate(vehicle, 'assignment-hold', null, tasksById);
+    return candidate(vehicle, 'assignment-hold', null, null, tasksById);
   }
   if (internals.inboundDropoffStandbyHoldActive(vehicle)) {
-    return candidate(vehicle, 'inbound-dropoff-standby-hold', null, tasksById);
+    return candidate(vehicle, 'inbound-dropoff-standby-hold', null, null, tasksById);
   }
   if (!internals.tasklessInboundQueueStandbyRerouteAllowed(vehicle)) {
-    return candidate(vehicle, 'standby-reroute-not-allowed', null, tasksById);
+    return candidate(vehicle, 'standby-reroute-not-allowed', null, null, tasksById);
   }
   const targetNodeId = internals.topLiftInboundQueueStandbyTargetNodeId(vehicle);
   if (!targetNodeId) {
-    return candidate(vehicle, 'no-station-target', null, tasksById);
+    return candidate(vehicle, 'no-station-target', null, null, tasksById);
   }
   const route = internals.routeToInboundQueueStandby(vehicle);
   if (!route || route.length <= 1) {
-    return candidate(vehicle, 'no-standby-route', route, tasksById);
+    return candidate(vehicle, 'no-standby-route', targetNodeId, route, tasksById);
   }
   if (!internals.tasklessInboundQueueStandbyRouteOriginAllowed(route)) {
-    return candidate(vehicle, 'route-origin-disallowed', route, tasksById);
+    return candidate(vehicle, 'route-origin-disallowed', targetNodeId, route, tasksById);
   }
-  return candidate(vehicle, 'dispatchable-reserve', route, tasksById);
+  return candidate(vehicle, 'dispatchable-reserve', targetNodeId, route, tasksById);
 }
 
 function candidate(
   vehicle: VehicleState,
   reason: string,
+  standbyTargetNodeId: string | null,
   route: string[] | null,
   tasksById: Map<string, TaskStateRecord>
 ): CandidateRecord {
   const routeEndNodeId = route?.at(-1) ?? null;
   const routeEndSlot = routeEndNodeId ? internals.topLiftInboundApproachQueueSlot(routeEndNodeId) : null;
+  const standbyTargetSlot = standbyTargetNodeId
+    ? internals.topLiftInboundApproachQueueSlot(standbyTargetNodeId)
+    : null;
   const task = vehicle.taskId ? tasksById.get(vehicle.taskId) ?? null : null;
   const taskLiftNodeId = task ? internals.taskLiftPortNodeId(task) : null;
   const contributesInboundQueueCoverage = task?.kind === 'inbound' && taskLiftNodeId
@@ -204,6 +212,8 @@ function candidate(
     taskState: task?.state ?? null,
     taskLiftNodeId,
     contributesInboundQueueCoverage,
+    standbyTargetNodeId,
+    standbyTargetSlot: standbyTargetSlot ? `${standbyTargetSlot.liftNodeId}:s${standbyTargetSlot.slotIndex}` : null,
     releasedStandbyRouteLength: releasedStandbyRoute?.length ?? null,
     releasedStandbyRouteEndNodeId,
     releasedStandbyRouteEndSlot: releasedStandbyRouteEndSlot
@@ -212,14 +222,28 @@ function candidate(
     releasedStandbyRouteOriginAllowed: releasedStandbyRoute
       ? internals.tasklessInboundQueueStandbyRouteOriginAllowed(releasedStandbyRoute)
       : null,
+    releasedStandbyRouteLevelPattern: releasedStandbyRoute ? routeLevelPattern(releasedStandbyRoute) : null,
     routeLength: route?.length ?? null,
     routeEndNodeId,
-    routeEndSlot: routeEndSlot ? `${routeEndSlot.liftNodeId}:s${routeEndSlot.slotIndex}` : null
+    routeEndSlot: routeEndSlot ? `${routeEndSlot.liftNodeId}:s${routeEndSlot.slotIndex}` : null,
+    routeLevelPattern: route ? routeLevelPattern(route) : null
   };
 }
 
 function summarize(samples: Sample[], finalState: ShuttleSimState): Record<string, unknown> {
   const stationEntries = samples.flatMap((sample) => sample.stationContracts.stations);
+  const candidateEntries = samples.flatMap((sample) => sample.candidates);
+  const releasedRouteCandidates = candidateEntries.filter((candidate) => candidate.releasedStandbyRouteLength !== null);
+  const releasedOriginAllowed = releasedRouteCandidates.filter((candidate) => candidate.releasedStandbyRouteOriginAllowed);
+  const noStationTargetWithUncoveredReadyDemand = samples.reduce((count, sample) => {
+    const hasUncoveredReadyDemand = sample.stationContracts.stations.some((station) =>
+      station.readyDemandCount > 0 && station.nearCoveredDepth < station.targetDepth
+    );
+    if (!hasUncoveredReadyDemand) {
+      return count;
+    }
+    return count + sample.candidates.filter((candidate) => candidate.reason === 'no-station-target').length;
+  }, 0);
   const reasonCounts = samples.reduce<Record<string, number>>((accumulator, sample) => {
     for (const [reason, count] of Object.entries(sample.candidateReasons)) {
       accumulator[reason] = (accumulator[reason] ?? 0) + count;
@@ -229,10 +253,32 @@ function summarize(samples: Sample[], finalState: ShuttleSimState): Record<strin
   return {
     samples: samples.length,
     candidateReasons: reasonCounts,
+    busyTaskKindCounts: countBy(
+      candidateEntries.filter((candidate) => candidate.reason === 'busy-task'),
+      (candidate) => candidate.taskKind ?? 'unknown'
+    ),
+    busyInboundCoverageCounts: countBy(
+      candidateEntries.filter((candidate) => candidate.reason === 'busy-task' && candidate.taskKind === 'inbound'),
+      (candidate) => candidate.contributesInboundQueueCoverage ? 'queue-covered' : 'not-queue-covered'
+    ),
+    noStationTargetWithUncoveredReadyDemand,
+    releasedStandbyRouteSummary: {
+      total: releasedRouteCandidates.length,
+      originAllowed: releasedOriginAllowed.length,
+      originAllowedLengthLe8: releasedOriginAllowed.filter((candidate) =>
+        (candidate.releasedStandbyRouteLength ?? Number.POSITIVE_INFINITY) <= 8
+      ).length,
+      byLength: countBy(releasedRouteCandidates, (candidate) => String(candidate.releasedStandbyRouteLength)),
+      byLevelPattern: countBy(releasedRouteCandidates, (candidate) => candidate.releasedStandbyRouteLevelPattern ?? 'none')
+    },
     stationInvariantCounts: finalState.traffic.shadowLedger.stationContracts.invariantCounts,
     averageQueueReservationCount: round(average(stationEntries.map((station) => station.queueReservationCount)), 3),
     averageNearCoveredDepth: round(average(stationEntries.map((station) => station.nearCoveredDepth)), 3),
     averageReadyDemandCount: round(average(stationEntries.map((station) => station.readyDemandCount)), 3),
+    averageClaimedDemandCount: round(average(stationEntries.map((station) => station.claimedDemandCount)), 3),
+    averageActiveServiceDepth: round(average(stationEntries.map((station) => station.activeServiceDepth)), 3),
+    averageActiveAssignmentQueueLeaseCount: round(average(stationEntries.map((station) => station.activeAssignmentQueueLeaseCount)), 3),
+    averageFarForecastDepth: round(average(stationEntries.map((station) => station.farForecastDepth)), 3),
     finalKpis: {
       inboundPph: finalState.kpis.inboundPph,
       demandOutboundPph: finalState.kpis.demandOutboundPph,
@@ -244,6 +290,41 @@ function summarize(samples: Sample[], finalState: ShuttleSimState): Record<strin
       physicalViolations: finalState.traffic.physicalViolationCount
     }
   };
+}
+
+function routeLevelPattern(routeNodeIds: string[]): string {
+  const levels = routeNodeIds.map(nodeLevel);
+  return levels
+    .filter((level, index) => index === 0 || level !== levels[index - 1])
+    .join('>');
+}
+
+function nodeLevel(nodeId: string): string {
+  if (nodeId.startsWith('storage-')) {
+    return 'storage';
+  }
+  if (nodeId.includes('top-a')) {
+    return 'top-a';
+  }
+  if (nodeId.includes('top-b')) {
+    return 'top-b';
+  }
+  if (nodeId.includes('middle')) {
+    return 'middle';
+  }
+  if (nodeId.includes('bottom-a')) {
+    return 'bottom-a';
+  }
+  if (nodeId.includes('bottom-b')) {
+    return 'bottom-b';
+  }
+  if (nodeId.includes('inbound')) {
+    return 'inbound-port';
+  }
+  if (nodeId.includes('outbound')) {
+    return 'outbound-port';
+  }
+  return 'other';
 }
 
 function countBy<T>(values: T[], selector: (value: T) => string): Record<string, number> {
