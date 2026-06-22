@@ -2648,3 +2648,44 @@ Interpretation:
   - AMR is taskless and already on a bounded top-level handoff route,
   - route remains within the near-station window,
   - lease has FIFO/TTL and cannot be stolen by ordinary outbound assignment.
+
+## Cut B Experiment: Arrival-Intent Demand Source Rejected
+
+Date: 2026-06-22
+
+Experiment:
+
+- Changed `topLiftInboundQueueReplenishDemand()` to use station kernel tokens instead of raw `waitingSourceLoadCount * 10 + activeInboundTaskCount`.
+- Counted `arrival-intent` tokens in `announced` / `ready` state plus `inbound-task` tokens in `ready` / `claimed` state.
+- Kept route admission and assignment ordering unchanged to isolate the demand-source variable.
+
+Validation:
+
+```bash
+git diff --check
+pnpm --filter @four-way-shuttle/sim-core typecheck
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "station kernel|inbound queue reserve|station reserve|nearest available yellow queue|replenishment"
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --near-route-max-nodes 4 --out output/review/station-queue-contract-600s-after-arrival-intent-demand-source.json
+./node_modules/.bin/tsx scripts/diagnose-queue-reserve-efficiency.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --progress-sec 300 --outbound-full-columns 0 --out output/review/queue-reserve-efficiency-600s-after-arrival-intent-demand-source.json
+```
+
+Result:
+
+- Typecheck passed.
+- Targeted tests passed: `9 passed`.
+- Behavior regressed and the source/test changes were reverted.
+- Station contract 600s:
+  - previous total PPH `570`, inbound PPH `258`, physical violations `0`,
+  - experiment total PPH `552`, inbound PPH `228`, physical violations `0`.
+- Queue reserve efficiency 600s:
+  - previous total PPH `486`, inbound PPH `288`, demand outbound PPH `198`, physical violations `0`,
+  - experiment total PPH `480`, inbound PPH `282`, demand outbound PPH `198`, physical violations `0`.
+
+Decision:
+
+- Rejected and reverted.
+- A one-for-one arrival-intent token count is still weaker than the old reserve-demand pressure. It reduces excess reserve travel, but it also under-covers the lift early enough to hurt inbound throughput.
+- The next valid behavior cut should not simply replace the old source-buffer multiplier with token count.
+- Better next options:
+  - keep arrival-intent as source of truth but map it through an explicit station reserve target policy, for example one ready arrival intent can request up to the physical target depth while the lease admission remains bounded;
+  - or implement queue lease issuance first in shadow, then switch only the outbound-steal gate to the explicit lease without changing target demand pressure.
