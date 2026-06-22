@@ -233,6 +233,7 @@ type ShadowStationContracts = ShuttleSimState['traffic']['shadowLedger']['statio
 type ShadowStationContractSnapshot = ShadowStationContracts['stations'][number];
 type ShadowStationContractDemand = ShadowStationContractSnapshot['demands'][number];
 type ShadowStationVehicleCommitment = ShadowStationContractSnapshot['vehicleCommitments'][number];
+type ShadowStationRouteLease = ShadowStationContractSnapshot['routeLeases'][number];
 type ShadowStationContractViolation = ShadowStationContracts['violations'][number];
 type ShadowStationContractInvariantCounts = ShadowStationContracts['invariantCounts'];
 
@@ -33713,6 +33714,7 @@ export class ShuttleSimCore {
       physicalDepthOverTarget: 0,
       activeServiceWithoutDemand: 0,
       duplicateVehicleCommitment: 0,
+      duplicateRouteLease: 0,
       total: 0
     };
     const violations: ShadowStationContractViolation[] = [];
@@ -33793,6 +33795,7 @@ export class ShuttleSimCore {
       );
 
       const vehicleCommitments: ShadowStationVehicleCommitment[] = [];
+      const routeLeases: ShadowStationRouteLease[] = [];
       const physicalQueueOccupants = new Set<string>();
       for (const vehicle of this.vehicles) {
         const currentSlot = this.topLiftInboundApproachQueueSlot(vehicle.currentNodeId);
@@ -33855,6 +33858,60 @@ export class ShuttleSimCore {
           plannedQueueSlot,
           routeLeavesTopLevel
         });
+
+        const leaseBase = {
+          stationId,
+          vehicleId: vehicle.id,
+          taskId: task?.id ?? null,
+          loadId: task?.loadId ?? null
+        };
+        if (currentQueueSlot !== null) {
+          routeLeases.push({
+            ...leaseBase,
+            kind: 'physicalQueueSlot',
+            phase: 'occupied',
+            resourceKey: `station:${stationId}:queue-slot:${currentQueueSlot}`,
+            nodeId: vehicle.currentNodeId,
+            slotIndex: currentQueueSlot,
+            routeNodeIds: []
+          });
+        } else if (targetQueueSlot !== null) {
+          routeLeases.push({
+            ...leaseBase,
+            kind: 'queueSlotLease',
+            phase: 'targeted',
+            resourceKey: `station:${stationId}:queue-slot:${targetQueueSlot}`,
+            nodeId: vehicle.targetNodeId,
+            slotIndex: targetQueueSlot,
+            routeNodeIds: []
+          });
+        } else if (plannedQueueSlot !== null) {
+          routeLeases.push({
+            ...leaseBase,
+            kind: 'queueSlotLease',
+            phase: 'planned',
+            resourceKey: `station:${stationId}:queue-slot:${plannedQueueSlot}`,
+            nodeId: vehicle.plannedGoalNodeId,
+            slotIndex: plannedQueueSlot,
+            routeNodeIds: []
+          });
+        }
+
+        if (activeInboundService) {
+          const approachNodeIds = this.shadowStationApproachSegmentRouteNodeIds(vehicle, stationId);
+          for (const nodeId of approachNodeIds.slice(1)) {
+            routeLeases.push({
+              ...leaseBase,
+              kind: 'approachSegmentLease',
+              phase: 'approaching',
+              resourceKey: `node:${nodeId}`,
+              nodeId,
+              slotIndex: null,
+              routeNodeIds: approachNodeIds
+            });
+          }
+        }
+
         const stations = commitmentStationIdsByVehicle.get(vehicle.id) ?? new Set<string>();
         stations.add(stationId);
         commitmentStationIdsByVehicle.set(vehicle.id, stations);
@@ -33864,6 +33921,11 @@ export class ShuttleSimCore {
         left.kind.localeCompare(right.kind) ||
         (left.currentQueueSlot ?? 99) - (right.currentQueueSlot ?? 99) ||
         (left.plannedQueueSlot ?? 99) - (right.plannedQueueSlot ?? 99) ||
+        left.vehicleId.localeCompare(right.vehicleId)
+      );
+      routeLeases.sort((left, right) =>
+        left.resourceKey.localeCompare(right.resourceKey) ||
+        left.kind.localeCompare(right.kind) ||
         left.vehicleId.localeCompare(right.vehicleId)
       );
 
@@ -33932,10 +33994,34 @@ export class ShuttleSimCore {
         farForecastDepth,
         queueReservationCount,
         activeServiceDepth,
+        routeLeaseCount: routeLeases.length,
         demands: demands.slice(0, 12),
-        vehicleCommitments: vehicleCommitments.slice(0, 12)
+        vehicleCommitments: vehicleCommitments.slice(0, 12),
+        routeLeases
       };
     });
+
+    for (const station of stationSnapshots) {
+      const leasesByResource = new Map<string, ShadowStationRouteLease[]>();
+      for (const lease of station.routeLeases) {
+        const resourceLeases = leasesByResource.get(lease.resourceKey) ?? [];
+        resourceLeases.push(lease);
+        leasesByResource.set(lease.resourceKey, resourceLeases);
+      }
+      for (const [resourceKey, resourceLeases] of leasesByResource.entries()) {
+        const owners = [...new Set(resourceLeases.map((lease) => lease.vehicleId))];
+        if (owners.length <= 1) {
+          continue;
+        }
+        addViolation('duplicateRouteLease', {
+          code: 'station-duplicate-route-lease',
+          severity: 'watch',
+          stationId: station.stationId,
+          vehicleId: owners[0] ?? null,
+          detail: `${station.stationId} has ${owners.length} station route lease owners on ${resourceKey}: ${owners.join(', ')}.`
+        });
+      }
+    }
 
     for (const [vehicleId, stationIds] of commitmentStationIdsByVehicle.entries()) {
       if (stationIds.size <= 1) {
@@ -33955,7 +34041,8 @@ export class ShuttleSimCore {
       invariantCounts.queueReservationOverTarget +
       invariantCounts.physicalDepthOverTarget +
       invariantCounts.activeServiceWithoutDemand +
-      invariantCounts.duplicateVehicleCommitment;
+      invariantCounts.duplicateVehicleCommitment +
+      invariantCounts.duplicateRouteLease;
 
     return {
       schemaVersion: 'shadow-station-contracts.v1',
@@ -33965,6 +34052,24 @@ export class ShuttleSimCore {
       stations: stationSnapshots,
       violations
     };
+  }
+
+  private shadowStationApproachSegmentRouteNodeIds(vehicle: MutableVehicle, stationId: string): string[] {
+    if (vehicle.plannedRouteNodeIds.length < 2) {
+      return [];
+    }
+    const routeTail = this.vehicleRouteTail(vehicle, vehicle.plannedRouteNodeIds);
+    if (!this.topLiftRemoteInboundActiveServiceRouteShouldStageClaims(vehicle, routeTail)) {
+      return [];
+    }
+    const claimTail = this.shadowPlannedRouteClaimTail(vehicle);
+    if (claimTail.length < 2) {
+      return [];
+    }
+    const stationEntryIndex = claimTail.findIndex((nodeId, index) =>
+      index > 0 && this.topLiftInboundApproachQueueSlot(nodeId)?.liftNodeId === stationId
+    );
+    return stationEntryIndex >= 1 ? claimTail.slice(0, stationEntryIndex + 1) : claimTail;
   }
 
   private calculateShadowResourceLedgerDiagnostics(): ShuttleSimState['traffic']['shadowLedger'] {

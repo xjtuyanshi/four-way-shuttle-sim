@@ -945,3 +945,46 @@ Updated next step:
   - active service may own only the next physical approach segment until it reaches the station queue.
   - station queue slots should be leased by station coordinator and released on pickup/service transition.
   - middle/spine opposing-claim checks should consult those station leases instead of inferring ownership from full planned routes.
+
+## Station Route Lease Shadow Contract
+
+Change:
+
+- Extended `shadowLedger.stationContracts.stations[]` with `routeLeases` and `routeLeaseCount`.
+- Added lease kinds:
+  - `physicalQueueSlot`: a vehicle physically occupies a station queue slot.
+  - `queueSlotLease`: a vehicle targets or plans a station queue slot.
+  - `approachSegmentLease`: a remote active inbound service owns only the short station approach segment represented in shadow.
+- Added `duplicateRouteLease` to station invariant counts.
+- Added tests:
+  - `reports station-owned shadow contracts for inbound demand, queue reservation, and active service`
+  - `reports duplicate station route leases before they become physical queue conflicts`
+
+Validation:
+
+```bash
+pnpm --filter @four-way-shuttle/schemas exec tsc --noEmit
+pnpm --filter @four-way-shuttle/sim-core exec tsc --noEmit
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "station-owned shadow contracts|duplicate station route leases|station shadow contract sampling|far planned route nodes"
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --sample-sec 10 --dt-sec 0.2 --out output/review/station-route-lease-shadow-diagnosis-600s.json
+./node_modules/.bin/tsx scripts/run-physical-24h-amr-audit.ts --hours 0.5 --out output/review/station-route-lease-shadow-0p5h-audit.json --checkpoint-dir output/review/station-route-lease-shadow-0p5h-checkpoints --audit-every-sec 30 --quiet-critical
+```
+
+Results:
+
+- 600s station diagnosis: total `516`, inbound `210`, physical violations `0`, station invariant total `1`, `duplicateRouteLease=0`.
+- 30m physical audit: total `508`, inbound `200`, outbound `308`, anomalies `0`, critical anomalies `0`.
+- Final station contract sample:
+  - `lift-01-inbound`: `routeLeaseCount=0`, `queueReservationCount=0`, `activeServiceDepth=0`, `farForecastDepth=0`.
+  - `lift-02-inbound`: `routeLeaseCount=1`, `queueReservationCount=0`, `activeServiceDepth=1`, `farForecastDepth=0`.
+
+Decision:
+
+- Accepted as shadow-only instrumentation.
+- This does not change 3D tick behavior or PPH, but it gives the next source-of-truth cut a concrete station-owned resource list to consult.
+
+Updated next step:
+
+- Convert station route leases from shadow diagnostics into a runtime station coordinator table.
+- First source cut should only read station-owned queue slot leases for inbound station entry and release them on pickup/service transition.
+- Do not make middle/spine global planned-route ownership shorter until the station lease table can prove which station actually owns the contested route segment.

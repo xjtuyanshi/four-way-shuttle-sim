@@ -1504,6 +1504,7 @@ describe('shuttle phase 0 SimCore', () => {
       tasks: Array<{ id: string }>;
       vehicles: Array<{
         id: string;
+        currentNodeId: string;
         plannedGoalNodeId: string | null;
         plannedRouteNodeIds: string[];
         localRouteNodeIds: string[];
@@ -1658,6 +1659,62 @@ describe('shuttle phase 0 SimCore', () => {
       vehicleId: 'SH-02',
       kind: 'activeInboundService',
       taskId: 'shadow-contract-task'
+    }));
+    expect(station?.routeLeaseCount).toBeGreaterThanOrEqual(2);
+    expect(station?.routeLeases).toContainEqual(expect.objectContaining({
+      vehicleId: 'SH-01',
+      kind: 'physicalQueueSlot',
+      phase: 'occupied',
+      resourceKey: 'station:lift-01-inbound:queue-slot:1',
+      slotIndex: 1
+    }));
+    expect(station?.routeLeases).toContainEqual(expect.objectContaining({
+      vehicleId: 'SH-02',
+      kind: 'physicalQueueSlot',
+      phase: 'occupied',
+      resourceKey: 'station:lift-01-inbound:queue-slot:2',
+      slotIndex: 2
+    }));
+  });
+
+  it('reports duplicate station route leases before they become physical queue conflicts', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    }));
+    sim.setVehicleRouteForTest('SH-01', ['column-middle-c05']);
+    sim.setVehicleRouteForTest('SH-02', ['column-middle-c06']);
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        currentNodeId: string;
+        plannedGoalNodeId: string | null;
+        plannedRouteNodeIds: string[];
+        localRouteNodeIds: string[];
+        localRouteReason: string | null;
+      }>;
+    };
+    for (const vehicleId of ['SH-01', 'SH-02']) {
+      const vehicle = internals.vehicles.find((candidate) => candidate.id === vehicleId)!;
+      vehicle.plannedGoalNodeId = 'column-top-a-c09';
+      vehicle.plannedRouteNodeIds = [vehicle.currentNodeId, 'column-top-a-c09'];
+      vehicle.localRouteNodeIds = [];
+      vehicle.localRouteReason = 'inbound-queue-standby';
+    }
+
+    const stationContracts = ShuttleSimStateSchema.parse(sim.getState()).traffic.shadowLedger.stationContracts;
+
+    expect(stationContracts.invariantCounts.duplicateRouteLease).toBeGreaterThanOrEqual(1);
+    expect(stationContracts.violations).toContainEqual(expect.objectContaining({
+      code: 'station-duplicate-route-lease',
+      stationId: 'lift-01-inbound'
     }));
   });
 

@@ -634,6 +634,19 @@ export const ShadowStationVehicleCommitmentSchema = z.object({
   routeLeavesTopLevel: z.boolean().default(false)
 });
 
+export const ShadowStationRouteLeaseSchema = z.object({
+  stationId: z.string(),
+  vehicleId: z.string(),
+  kind: z.enum(['physicalQueueSlot', 'queueSlotLease', 'approachSegmentLease']),
+  phase: z.enum(['occupied', 'targeted', 'planned', 'approaching']),
+  resourceKey: z.string(),
+  nodeId: z.string().nullable(),
+  slotIndex: z.number().int().positive().nullable(),
+  taskId: z.string().nullable(),
+  loadId: z.string().nullable(),
+  routeNodeIds: z.array(z.string()).default([])
+});
+
 export const ShadowStationContractSnapshotSchema = z.object({
   stationId: z.string(),
   kind: z.literal('inbound'),
@@ -648,8 +661,10 @@ export const ShadowStationContractSnapshotSchema = z.object({
   farForecastDepth: z.number().int().nonnegative(),
   queueReservationCount: z.number().int().nonnegative(),
   activeServiceDepth: z.number().int().nonnegative(),
+  routeLeaseCount: z.number().int().nonnegative().default(0),
   demands: z.array(ShadowStationContractDemandSchema).default([]),
-  vehicleCommitments: z.array(ShadowStationVehicleCommitmentSchema).default([])
+  vehicleCommitments: z.array(ShadowStationVehicleCommitmentSchema).default([]),
+  routeLeases: z.array(ShadowStationRouteLeaseSchema).default([])
 });
 
 export const ShadowStationContractInvariantCountsSchema = z.object({
@@ -658,6 +673,7 @@ export const ShadowStationContractInvariantCountsSchema = z.object({
   physicalDepthOverTarget: z.number().int().nonnegative().default(0),
   activeServiceWithoutDemand: z.number().int().nonnegative().default(0),
   duplicateVehicleCommitment: z.number().int().nonnegative().default(0),
+  duplicateRouteLease: z.number().int().nonnegative().default(0),
   total: z.number().int().nonnegative().default(0)
 });
 
