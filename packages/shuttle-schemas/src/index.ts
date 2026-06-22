@@ -704,6 +704,8 @@ export const StationKernelStationSummarySchema = z.object({
   readyDemandTokenCount: z.number().int().nonnegative(),
   claimedDemandTokenCount: z.number().int().nonnegative(),
   servicingDemandTokenCount: z.number().int().nonnegative(),
+  arrivalIntentTokenCount: z.number().int().nonnegative().default(0),
+  inboundTaskDemandTokenCount: z.number().int().nonnegative().default(0),
   leaseCount: z.number().int().nonnegative(),
   sourceOnlyReadyShadowCount: z.number().int().nonnegative().default(0)
 });

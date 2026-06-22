@@ -1739,7 +1739,7 @@ describe('shuttle phase 0 SimCore', () => {
     }));
   });
 
-  it('station kernel separates source supply from true inbound task demand', () => {
+  it('station kernel models source supply as arrival intent without task demand', () => {
     const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
       vehicles: { count: 1 },
       taskGeneration: {
@@ -1767,15 +1767,25 @@ describe('shuttle phase 0 SimCore', () => {
     expect(kernel).toMatchObject({
       schemaVersion: 'station-kernel-shadow.v1',
       mode: 'shadow',
-      demandTokenCount: 0,
+      demandTokenCount: 1,
       leaseCount: 0
     });
+    expect(kernel.demandTokens).toContainEqual(expect.objectContaining({
+      id: 'station-arrival:station-kernel-source-only',
+      stationId: 'lift-01-inbound',
+      source: 'arrival-intent',
+      taskId: null,
+      loadId: 'station-kernel-source-only',
+      state: 'ready'
+    }));
     expect(station).toMatchObject({
       stationId: 'lift-01-inbound',
       sourceBufferOccupancy: 1,
       sourceOnlyReadyShadowCount: 1,
-      activeDemandTokenCount: 0,
-      readyDemandTokenCount: 0
+      activeDemandTokenCount: 1,
+      readyDemandTokenCount: 1,
+      arrivalIntentTokenCount: 1,
+      inboundTaskDemandTokenCount: 0
     });
   });
 
@@ -1835,6 +1845,11 @@ describe('shuttle phase 0 SimCore', () => {
       taskId: 'station-kernel-task',
       loadId: 'station-kernel-task-load',
       state: 'ready'
+    }));
+    expect(before.stationSummaries).toContainEqual(expect.objectContaining({
+      stationId: 'lift-01-inbound',
+      arrivalIntentTokenCount: 0,
+      inboundTaskDemandTokenCount: 1
     }));
     expect(snapshot.stationDemandTokens).toEqual(before.demandTokens);
     expect(restored).toEqual(before);

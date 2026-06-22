@@ -34390,6 +34390,10 @@ export class ShuttleSimCore {
     return task.vehicleId ? 'claimed' : 'announced';
   }
 
+  private stationArrivalIntentTokenStateForLoad(load: LoadStateRecord, stationId: string): StationDemandToken['state'] {
+    return load.nodeId === this.inboundSourceFrontBufferNodeId(stationId) ? 'ready' : 'announced';
+  }
+
   private reconcileStationKernelShadowState(): void {
     if (this.diagnosticReadOnlyDepth > 0) {
       return;
@@ -34402,6 +34406,7 @@ export class ShuttleSimCore {
 
     const existingTokens = new Map(this.stationDemandTokens.map((token) => [token.id, token]));
     const tokens: StationDemandToken[] = [];
+    const activeInboundTaskLoadIds = new Set<string>();
     for (const task of this.tasks) {
       if (
         task.kind !== 'inbound' ||
@@ -34413,6 +34418,7 @@ export class ShuttleSimCore {
       if (!stationId) {
         continue;
       }
+      activeInboundTaskLoadIds.add(task.loadId);
       const tokenId = `station-demand:${task.id}`;
       const existing = existingTokens.get(tokenId);
       tokens.push({
@@ -34425,6 +34431,27 @@ export class ShuttleSimCore {
         readyAtSec: existing?.readyAtSec ?? task.createdAtSec,
         state: this.stationDemandTokenStateForTask(task)
       });
+    }
+
+    for (const liftNode of this.inboundLiftNodes()) {
+      const stationId = liftNode.id;
+      for (const load of this.inboundLiftWaitingSourceLoads(stationId)) {
+        if (activeInboundTaskLoadIds.has(load.id)) {
+          continue;
+        }
+        const tokenId = `station-arrival:${load.id}`;
+        const existing = existingTokens.get(tokenId);
+        tokens.push({
+          id: tokenId,
+          stationId,
+          fifoSeq: existing?.fifoSeq ?? this.nextStationDemandFifoSeq(stationId),
+          source: 'arrival-intent',
+          taskId: null,
+          loadId: load.id,
+          readyAtSec: existing?.readyAtSec ?? this.simTimeSec,
+          state: this.stationArrivalIntentTokenStateForLoad(load, stationId)
+        });
+      }
     }
 
     this.stationDemandTokens = tokens.sort((left, right) =>
@@ -34479,6 +34506,8 @@ export class ShuttleSimCore {
           readyDemandTokenCount: stationTokens.filter((token) => token.state === 'ready').length,
           claimedDemandTokenCount: stationTokens.filter((token) => token.state === 'claimed').length,
           servicingDemandTokenCount: stationTokens.filter((token) => token.state === 'servicing').length,
+          arrivalIntentTokenCount: stationTokens.filter((token) => token.source === 'arrival-intent').length,
+          inboundTaskDemandTokenCount: stationTokens.filter((token) => token.source === 'inbound-task').length,
           leaseCount: stationLeases.length,
           sourceOnlyReadyShadowCount
         };

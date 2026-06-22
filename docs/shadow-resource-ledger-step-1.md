@@ -2591,3 +2591,60 @@ Decision:
 - The pure true-task-demand cut made reserve admission too late. By the time a task token exists, the station often has no useful near queue reserve vehicle ready, so inbound service starves.
 - The next valid behavior cut should keep source supply separate from task demand, but introduce an explicit earlier `arrival-intent` / lift-release demand token instead of falling back to raw source-buffer counts.
 - That `arrival-intent` token must still be station-owned, FIFO/TTL-bound, and only convertible to a physical queue lease when a bounded top-level route exists.
+
+## Cut A.2: Arrival Intent Shadow Demand Tokens
+
+Date: 2026-06-22
+
+Change:
+
+- Added explicit `arrival-intent` demand tokens to the station kernel.
+- A source load that is waiting at an inbound lift and is not yet bound to an inbound task now becomes `station-arrival:<loadId>`.
+- The token state is:
+  - `ready` when the load is at the front inbound source buffer node,
+  - `announced` when it is still behind the front buffer position.
+- Once a real inbound task binds the load, the arrival intent disappears and the existing `inbound-task` token owns the demand.
+- Added station summary counts:
+  - `arrivalIntentTokenCount`,
+  - `inboundTaskDemandTokenCount`.
+- This remains shadow-only. It does not change routing, assignment, queue reserve admission, or PPH behavior.
+
+Validation:
+
+```bash
+git diff --check
+pnpm --filter @four-way-shuttle/schemas typecheck
+pnpm --filter @four-way-shuttle/sim-core typecheck
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "station kernel|station shadow contract sampling read-only|restores agent-refresh snapshots"
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --near-route-max-nodes 4 --out output/review/station-queue-contract-600s-after-arrival-intent-shadow.json
+./node_modules/.bin/tsx scripts/diagnose-queue-reserve-efficiency.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --progress-sec 300 --outbound-full-columns 0 --out output/review/queue-reserve-efficiency-600s-after-arrival-intent-shadow.json
+```
+
+Result:
+
+- Typecheck passed for schemas and sim-core.
+- Targeted station kernel / snapshot tests passed: `4 passed`.
+- Station contract 600s behavior baseline unchanged:
+  - total PPH `570`,
+  - inbound PPH `258`,
+  - physical violations `0`.
+- Queue reserve efficiency 600s behavior baseline unchanged:
+  - total PPH `486`,
+  - inbound PPH `288`,
+  - demand outbound PPH `198`,
+  - queue reserve travel `0.804%`,
+  - waste reposition `12.13%`,
+  - physical violations `0`.
+- Evidence that arrival-intent exists during the run:
+  - sampled `arrival-intent` tokens across the 600s station diagnostic: `109`,
+  - examples: at `10s`, arrival `3` / inbound-task `7`; at `20s`, arrival `3` / inbound-task `7`; at `30s`, arrival `2` / inbound-task `8`.
+
+Interpretation:
+
+- This preserves the successful behavior baseline while replacing the vague "source load means demand" idea with an explicit station-owned demand token.
+- The next behavior cut should consume these `arrival-intent` tokens, not raw source-buffer counts, when deciding whether a bounded top-level queue lease may be issued.
+- The lease conversion rule still needs to be strict:
+  - station has ready/announced arrival intent or ready/claimed task demand,
+  - AMR is taskless and already on a bounded top-level handoff route,
+  - route remains within the near-station window,
+  - lease has FIFO/TTL and cannot be stolen by ordinary outbound assignment.
