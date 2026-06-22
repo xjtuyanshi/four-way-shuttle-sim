@@ -33983,6 +33983,16 @@ export class ShuttleSimCore {
       const nearCoveredDepth = this.topLiftInboundQueueCoveredDepth(stationId);
       const queueReservationCount = vehicleCommitments.filter((commitment) => commitment.kind === 'queueReservation').length;
       const activeServiceDepth = vehicleCommitments.filter((commitment) => commitment.kind === 'activeInboundService').length;
+      const activeAssignmentQueueLeaseCount = vehicleCommitments.filter((commitment) =>
+        commitment.kind === 'activeInboundService' &&
+        (
+          commitment.currentQueueSlot !== null ||
+          commitment.targetQueueSlot !== null ||
+          commitment.plannedQueueSlot !== null
+        )
+      ).length;
+      const tasklessStandbySoftReserveCount = queueReservationCount;
+      const physicalQueueSlotLeaseCount = routeLeases.filter((lease) => lease.kind === 'physicalQueueSlot').length;
       const farForecastDepth = vehicleCommitments.filter((commitment) =>
         commitment.plannedQueueSlot !== null &&
         commitment.currentQueueSlot === null &&
@@ -34044,6 +34054,9 @@ export class ShuttleSimCore {
         farForecastDepth,
         queueReservationCount,
         activeServiceDepth,
+        activeAssignmentQueueLeaseCount,
+        tasklessStandbySoftReserveCount,
+        physicalQueueSlotLeaseCount,
         routeLeaseCount: routeLeases.length,
         demands: demands.slice(0, 12),
         vehicleCommitments: vehicleCommitments.slice(0, 12),

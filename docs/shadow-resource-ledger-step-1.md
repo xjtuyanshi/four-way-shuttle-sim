@@ -1099,3 +1099,54 @@ Updated next step:
   - physical queue occupancy,
   - taskless standby soft reserves,
   before any of those counts are allowed to block replenishment.
+
+## Shadow Split: Active Assignment Lease vs Soft Standby Reserve
+
+Date: 2026-06-22
+
+Change:
+
+- Added station-contract shadow fields:
+  - `activeAssignmentQueueLeaseCount`
+  - `tasklessStandbySoftReserveCount`
+  - `physicalQueueSlotLeaseCount`
+- These are diagnostic-only and do not change task assignment, routing, collision avoidance, or queue admission.
+
+Reason:
+
+- The rejected runtime lifecycle cut proved that mixing active assignment leases and taskless standby soft reserves into one blocking count throttles inbound replenishment.
+- The next source cut needs to see those three quantities separately before any one of them becomes controlling behavior.
+
+Validation:
+
+```bash
+pnpm --filter @four-way-shuttle/schemas exec tsc --noEmit
+pnpm --filter @four-way-shuttle/sim-core exec tsc --noEmit
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "reports station-owned shadow contracts|reports duplicate station route leases|keeps station shadow contract sampling|allows projected inbound queue vehicles|keeps upstream inbound queue slots available" --reporter=dot
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --sample-sec 10 --dt-sec 0.2 --out output/review/station-contract-split-lease-metrics-diagnosis-600s.json
+./node_modules/.bin/tsx scripts/run-physical-24h-amr-audit.ts --hours 0.5 --out output/review/station-contract-split-lease-metrics-0p5h-audit.json --checkpoint-dir output/review/station-contract-split-lease-metrics-0p5h-checkpoints --audit-every-sec 30 --quiet-critical
+```
+
+Results:
+
+- Targeted tests: `5 passed`.
+- 600s station diagnosis:
+  - File: `output/review/station-contract-split-lease-metrics-diagnosis-600s.json`
+  - Total PPH `516`, inbound `210`, duplicate route lease `0`, physical violations `0`.
+  - Example final split:
+    - `lift-01-inbound`: active assignment queue lease `1`, taskless standby soft reserve `0`, physical queue slot lease `0`.
+    - `lift-02-inbound`: active assignment queue lease `2`, taskless standby soft reserve `0`, physical queue slot lease `1`.
+- 30m physical audit:
+  - File: `output/review/station-contract-split-lease-metrics-0p5h-audit.json`
+  - Total PPH `508`, inbound `200`, outbound `308`.
+  - AMR anomalies `0`, critical anomalies `0`.
+
+Decision:
+
+- Accepted as shadow-only instrumentation.
+- This keeps the accepted read-cut behavior unchanged while giving the next source cut a safer metric boundary.
+
+Updated next step:
+
+- Try a source cut that only creates controlling leases for active inbound assignments already admitted to the station queue.
+- Keep taskless standby reserves soft until the 30m and then 12h audits show they can safely control only duplicate standby, not inbound replenishment.
