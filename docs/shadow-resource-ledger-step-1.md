@@ -1936,3 +1936,135 @@ Updated next step:
   - when an outbound clearance or other taskless route is still top-compatible, station should be able to lease it as future queue reserve,
   - avoid long reroutes by keeping the same short-route bound,
   - and verify the change by reducing `zeroReserveDuringHeadGap` / `fleet-busy` rather than only improving short-window PPH.
+
+## Rejected Outbound Clearance Reserve Label Cut
+
+Date: 2026-06-22
+
+Rejected source cut:
+
+- Tried a local, uncommitted behavior change:
+  - if an outbound dropoff clearance route ended at an inbound queue slot,
+  - install the taskless route with `localRouteReason='inbound-queue-standby'` instead of `outbound-lift-clearance`,
+  - so the station shadow contract would count it as a `queueReservation` / forecast reserve while it was still moving.
+
+Validation:
+
+```bash
+./node_modules/.bin/tsx scripts/diagnose-idle-reserve-pool.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/idle-reserve-pool-600s-after-outbound-clearance-reserve-label.json
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/station-queue-contract-600s-after-outbound-clearance-reserve-label.json
+./node_modules/.bin/tsx scripts/diagnose-assignment-admission.ts --duration-sec 600 --dt-sec 0.2 --out output/review/assignment-admission-600s-after-outbound-clearance-reserve-label.json
+```
+
+Result:
+
+- Total PPH increased from `534` to `558`, but for the wrong reason:
+  - inbound PPH dropped from `228` to `198`.
+  - inbound assignments dropped from `41` to `34`.
+  - outbound assignments rose from `55` to `66`.
+  - outbound assignments while head gap rose from `39` to `52`.
+  - zero-reserve-during-head-gap worsened to `49/49`.
+  - routeInfeasible worsened from `21` to `48`.
+  - `reserve-in-transit` appeared only `3` times, not enough to change station service readiness.
+  - physical violations stayed `0`.
+
+Decision:
+
+- Rejected and removed before commit.
+- The station contract should not accept a moving outbound clearance vehicle as queue reserve just because its route terminal is a queue slot.
+- A valid station-owned reserve lease needs an admission rule:
+  - the station must request the lease,
+  - the route must remain short and queue-compatible,
+  - the lease must reduce `fleet-busy` / `zeroReserveDuringHeadGap`,
+  - and it must not increase outbound work while inbound demand remains uncovered.
+
+## Short Clearance Reserve Admission Source Cut
+
+Date: 2026-06-22
+
+Change:
+
+- Added `outboundClearanceRouteAcceptedAsStationReserve(...)`.
+- Outbound dropoff clearance is installed as `inbound-queue-standby` only when:
+  - the route terminal is a formal inbound approach queue node,
+  - the route has at most `TOP_LIFT_PROTECTED_STANDBY_REROUTE_MAX_NODE_COUNT` nodes,
+  - and that station currently has queue coverage below its required reserve depth.
+- Otherwise, outbound clearance remains ordinary `outbound-lift-clearance`.
+- Added `topLiftInboundReserveQueueSlot(...)` so lower-level outbound clearance holds such as `column-bottom-b-c03`
+  are not misclassified as formal inbound reserve queue targets.
+- Fixed a related hold-state loss:
+  - local route claims can intentionally expire before the outbound clearance route reaches its terminal,
+  - but the vehicle still carries `recentOutboundClearanceRouteNodeIds` and an active `assignmentHoldUntilSec`,
+  - so `topLiftOutboundClearanceHoldAllowed(...)` now recognizes that completed recent clearance and keeps the
+    vehicle at the bottom-b hold point instead of letting temporary-yield push it into storage.
+
+Why this cut:
+
+- The broad reserve-label cut was wrong because it accepted too many outbound clearance routes as station reserve.
+- This source cut adds the missing station admission rule:
+  - station must actually need reserve,
+  - and the physical route must be short enough to be a practical future reserve.
+
+Validation:
+
+```bash
+./node_modules/.bin/tsx scripts/diagnose-idle-reserve-pool.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/idle-reserve-pool-600s-after-short-clearance-reserve-admission.json
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/station-queue-contract-600s-after-short-clearance-reserve-admission.json
+./node_modules/.bin/tsx scripts/diagnose-assignment-admission.ts --duration-sec 600 --dt-sec 0.2 --out output/review/assignment-admission-600s-after-short-clearance-reserve-admission.json
+./node_modules/.bin/tsx scripts/diagnose-idle-reserve-pool.ts --duration-sec 1800 --dt-sec 0.2 --sample-sec 60 --progress-sec 600 --out output/review/idle-reserve-pool-30m-after-short-clearance-reserve-admission.json
+```
+
+Final validation after tightening reserve queue classification and outbound clearance hold:
+
+```bash
+pnpm --filter @four-way-shuttle/sim-core typecheck
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "routes a lower-side outbound finisher to the inbound queue before mixed-flow pickup|extends outbound clearance to an inbound queue standby when inbound demand exists|does not send an outbound dock clearance shuttle back through the dock face to reach standby|does not send a taskless mixed-flow shuttle on a long standby tour while queued work is waiting|clears an outbound dropoff directly onto bottom-b and holds away from the lift"
+./node_modules/.bin/tsx scripts/diagnose-idle-reserve-pool.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/idle-reserve-pool-600s-after-short-clearance-reserve-admission-final.json
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/station-queue-contract-600s-after-short-clearance-reserve-admission-final.json
+./node_modules/.bin/tsx scripts/diagnose-assignment-admission.ts --duration-sec 600 --dt-sec 0.2 --out output/review/assignment-admission-600s-after-short-clearance-reserve-admission-final.json
+./node_modules/.bin/tsx scripts/diagnose-idle-reserve-pool.ts --duration-sec 1800 --dt-sec 0.2 --sample-sec 60 --progress-sec 600 --out output/review/idle-reserve-pool-30m-after-short-clearance-reserve-admission-final.json
+```
+
+600s result versus short protected reroute only:
+
+- total PPH improved from `534` to `552`.
+- inbound PPH stayed `228`.
+- physical violations stayed `0`.
+- routeInfeasible improved from `21` to `14`.
+- fleet-busy improved from `63` to `61`.
+- reserve-in-transit appeared once.
+- outboundWhileFleetBusyGap improved from `39` to `31`.
+- targeted tests passed after the bottom-b hold fix:
+  - `clears an outbound dropoff directly onto bottom-b and holds away from the lift`,
+  - plus the four related mixed-flow / clearance tests above.
+
+30m A/B:
+
+- With short protected reroute only:
+  - total PPH `504`.
+  - inbound PPH `186`.
+  - demand outbound PPH `36`.
+  - physical violations `0`.
+  - head-gap samples `26/31`.
+- With short clearance reserve admission:
+  - total PPH `534`.
+  - inbound PPH `186`.
+  - demand outbound PPH `38`.
+  - physical violations `0`.
+  - head-gap samples `25/31`.
+
+Decision:
+
+- Keep this source cut.
+- It is a small positive step toward station-owned reserve admission and does not reduce 30m inbound PPH.
+- It still does not solve reserve-pool formation:
+  - zero-reserve-during-head-gap remains `100%` in the 30m sample,
+  - average reserve-eligible vehicle count is still `0`,
+  - and fleet-busy remains the dominant station gap.
+
+Updated next step:
+
+- Add a real top-compatible reserve pool, not only opportunistic outbound-clearance admission:
+  - station should reserve candidates before they fall to bottom/storage idle,
+  - source-of-truth lease should be tied to station demand and queue slot,
+  - and validation must show reduced zero-reserve head-gap samples, not only better total PPH.

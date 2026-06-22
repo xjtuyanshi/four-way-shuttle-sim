@@ -3852,6 +3852,14 @@ export class ShuttleSimCore {
     return null;
   }
 
+  private topLiftInboundReserveQueueSlot(nodeId: string): { liftNodeId: string; slotIndex: number } | null {
+    const slot = this.topLiftInboundApproachQueueSlot(nodeId);
+    if (!slot || !this.topLiftInboundApproachQueueNodeIds(slot.liftNodeId).includes(nodeId)) {
+      return null;
+    }
+    return slot;
+  }
+
   private topLiftInboundStationQueueSlotLeases(liftNodeId: string): StationQueueSlotLease[] {
     if (!this.topLiftColumnLayoutEnabled() || this.liftPortKindForNodeId(liftNodeId) !== 'inbound') {
       return [];
@@ -11015,8 +11023,26 @@ export class ShuttleSimCore {
     if (!route || route.length <= 1) {
       return false;
     }
+    if (this.outboundClearanceRouteAcceptedAsStationReserve(route)) {
+      this.installTasklessPostDropoffRoute(
+        vehicle,
+        route,
+        'outbound-lift-dropoff-clearance-to-inbound-reserve',
+        'inbound-queue-standby'
+      );
+      return true;
+    }
     this.installTasklessPostDropoffRoute(vehicle, route, 'outbound-lift-dropoff-clearance', 'outbound-lift-clearance');
     return true;
+  }
+
+  private outboundClearanceRouteAcceptedAsStationReserve(routeNodeIds: string[]): boolean {
+    const terminalSlot = this.topLiftInboundReserveQueueSlot(routeNodeIds.at(-1) ?? '');
+    if (!terminalSlot || routeNodeIds.length > TOP_LIFT_PROTECTED_STANDBY_REROUTE_MAX_NODE_COUNT) {
+      return false;
+    }
+    return this.topLiftInboundQueueCoveredDepth(terminalSlot.liftNodeId) <
+      this.topLiftInboundQueueReserveRequiredDepth(terminalSlot.liftNodeId);
   }
 
   private outboundLiftDropoffClearanceRoute(vehicle: MutableVehicle, task: TaskStateRecord): string[] | null {
@@ -11250,10 +11276,19 @@ export class ShuttleSimCore {
   }
 
   private topLiftOutboundClearanceHoldAllowed(vehicle: MutableVehicle): boolean {
+    const completedRecentClearance =
+      vehicle.localRouteReason === null &&
+      this.assignmentHoldActive(vehicle) &&
+      vehicle.recentOutboundClearanceRouteNodeIds.length > 1 &&
+      vehicle.recentOutboundClearanceRouteNodeIds.at(-1) === vehicle.currentNodeId;
     return this.topLiftColumnLayoutEnabled() &&
       !vehicle.loaded &&
       !vehicle.taskId &&
-      (vehicle.localRouteReason === 'outbound-lift-clearance' || vehicle.localRouteReason === 'outbound-lift-clearance-hold') &&
+      (
+        vehicle.localRouteReason === 'outbound-lift-clearance' ||
+        vehicle.localRouteReason === 'outbound-lift-clearance-hold' ||
+        completedRecentClearance
+      ) &&
       vehicle.plannedGoalNodeId === vehicle.currentNodeId &&
       isTopLiftAisleLevelNodeId(vehicle.currentNodeId, 'bottom-b');
   }
@@ -12368,7 +12403,7 @@ export class ShuttleSimCore {
       vehicle.phaseRemainingSec > 0 ||
       vehicle.localRouteReason !== 'outbound-lift-clearance' ||
       vehicle.plannedGoalNodeId !== nodeId ||
-      !this.topLiftInboundApproachQueueSlot(nodeId)
+      !this.topLiftInboundReserveQueueSlot(nodeId)
     ) {
       return false;
     }
