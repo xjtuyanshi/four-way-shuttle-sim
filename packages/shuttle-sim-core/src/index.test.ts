@@ -2294,7 +2294,9 @@ describe('shuttle phase 0 SimCore', () => {
         plannedGoalNodeId: string | null;
         plannedRouteNodeIds: string[];
       }>;
+      stationKernelReserveAdmissionCoverageGap(stationId: string): number;
     };
+    expect(internals.stationKernelReserveAdmissionCoverageGap('lift-01-inbound')).toBeGreaterThan(0);
     internals.assignQueuedTasks(0.2);
 
     const task = internals.tasks.find((candidate) => candidate.id === 'station-admission-outbound')!;
@@ -2313,6 +2315,34 @@ describe('shuttle phase 0 SimCore', () => {
       'column-top-b-c09',
       'column-top-a-c09'
     ]);
+  });
+
+  it('does not admit a station reserve route before outbound assignment without station kernel demand', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 3600,
+        outboundRatePerHour: 3600,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    }));
+    sim.setVehicleRouteForTest('SH-01', ['module-01-spine-middle']);
+
+    const internals = sim as unknown as {
+      vehicles: Array<{ id: string }>;
+      routeToInboundQueueStandby(vehicle: unknown, fromNodeId?: string, options?: { liftNodeId?: string }): string[] | null;
+      stationOwnedReserveAdmissionRouteBeforeOutboundAssignment(vehicle: unknown): string[] | null;
+      stationKernelReserveAdmissionCoverageGap(stationId: string): number;
+      topLiftInboundQueueReserveRequiredDepth(stationId: string): number;
+    };
+    const vehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+
+    expect(internals.topLiftInboundQueueReserveRequiredDepth('lift-01-inbound')).toBeGreaterThan(0);
+    expect(internals.routeToInboundQueueStandby(vehicle, undefined, { liftNodeId: 'lift-01-inbound' })).not.toBeNull();
+    expect(internals.stationKernelReserveAdmissionCoverageGap('lift-01-inbound')).toBe(0);
+    expect(internals.stationOwnedReserveAdmissionRouteBeforeOutboundAssignment(vehicle)).toBeNull();
   });
 
   it('does not let inbound work steal an en-route inbound queue reserve before it reaches the queue', () => {

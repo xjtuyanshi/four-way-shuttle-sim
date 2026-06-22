@@ -2796,3 +2796,59 @@ Interpretation:
 - We can now see explicit station-owned queue/service leases in normal 3D tick runs without changing behavior.
 - This closes the shadow data gap between station demand tokens, reserve target policy, and actual AMR queue/service presence.
 - The next behavior cut should be narrow: protect or admit bounded inbound queue movement using these leases and the `reserveCoverageGap`, while keeping the old route-admission rules as a fallback until 10m / 30m / 12h evidence proves no throughput or 3D-regression risk.
+
+## Cut B.1: Kernel Reserve Gap Admission Gate
+
+Date: 2026-06-22
+
+Behavior change:
+
+- Switched `stationOwnedReserveAdmissionRouteBeforeOutboundAssignment(...)` from the legacy source-buffer / planned-minimum reserve depth check to the station-kernel reserve gap:
+  - demand side: `stationKernelReserveTargetDepth(...)`, based on explicit station demand tokens,
+  - coverage side: station-kernel `queueLeases` with `targetKind='queue-slot'`.
+- Scope is intentionally narrow:
+  - only the pre-outbound-assignment station reserve admission gate changed,
+  - existing queue route admission, queue compression, post-dropoff clearance, and ordinary task assignment fallback logic remain unchanged.
+- Added a regression test proving that a vehicle is no longer taken from outbound work merely because the legacy planned-minimum reserve depth is positive when the station kernel has no concrete demand token.
+
+Validation:
+
+```bash
+git diff --check
+pnpm --filter @four-way-shuttle/schemas typecheck
+pnpm --filter @four-way-shuttle/sim-core typecheck
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "admits a short station reserve route before assigning ordinary outbound work|does not admit a station reserve route before outbound assignment without station kernel demand|station kernel|inbound queue reserve|nearest available yellow queue|does not let outbound work steal"
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --near-route-max-nodes 4 --out output/review/station-queue-contract-600s-after-kernel-admission-gap.json
+./node_modules/.bin/tsx scripts/diagnose-queue-reserve-efficiency.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --progress-sec 300 --outbound-full-columns 0 --out output/review/queue-reserve-efficiency-600s-after-kernel-admission-gap.json
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 1800 --dt-sec 0.2 --sample-sec 60 --progress-sec 600 --near-route-max-nodes 4 --out output/review/station-queue-contract-30m-after-kernel-admission-gap.json
+./node_modules/.bin/tsx scripts/diagnose-queue-reserve-efficiency.ts --duration-sec 1800 --dt-sec 0.2 --sample-sec 60 --progress-sec 600 --outbound-full-columns 0 --out output/review/queue-reserve-efficiency-30m-after-kernel-admission-gap.json
+```
+
+Result:
+
+- Typecheck passed for schemas and sim-core.
+- Targeted station / reserve tests passed: `9 passed`.
+- 600s station contract baseline unchanged:
+  - before cut: total PPH `570`, inbound PPH `258`, physical violations `0`,
+  - after cut: total PPH `570`, inbound PPH `258`, physical violations `0`.
+- 600s queue reserve efficiency baseline unchanged:
+  - before cut: total PPH `486`, inbound PPH `288`, demand outbound PPH `198`, queue reserve travel `0.804%`, waste reposition `12.13%`, physical violations `0`,
+  - after cut: total PPH `486`, inbound PPH `288`, demand outbound PPH `198`, queue reserve travel `0.804%`, waste reposition `12.13%`, physical violations `0`.
+- 30m station contract comparison against `station-queue-contract-30m-after-reserve-admission-gate.json`:
+  - before cut: total PPH `540`, inbound PPH `196`, demand outbound PPH `38`, physical violations `0`,
+  - after cut: total PPH `540`, inbound PPH `196`, demand outbound PPH `38`, physical violations `0`,
+  - new diagnostics expose `2` short station-specific release opportunities where the old report showed `0`.
+- 30m queue reserve efficiency after cut:
+  - total PPH `492`,
+  - inbound PPH `268`,
+  - demand outbound PPH `224`,
+  - queue reserve travel `0.844%`,
+  - waste reposition `10.129%`,
+  - physical violations `0`.
+
+Interpretation:
+
+- This is the first accepted source cut from shadow station-kernel policy into runtime behavior.
+- It removes one legacy planned-minimum overreach path without changing the validated 600s or 30m throughput / physical-safety baselines.
+- It is not the full station-owned coordinator yet: the queue lease is still mirrored from vehicle state, and the next cut should allocate a bounded queue lease at admission time, then release it on service transition.
+- 12h / 24h 3D tick validation still remains required before claiming customer-review readiness.

@@ -7586,10 +7586,7 @@ export class ShuttleSimCore {
       return null;
     }
     const candidates = this.inboundLiftNodes()
-      .filter((lift) =>
-        this.topLiftInboundStationReserveAdmissionCoverageDepth(lift.id) <
-        this.topLiftInboundQueueReserveRequiredDepth(lift.id)
-      )
+      .filter((lift) => this.stationKernelReserveAdmissionCoverageGap(lift.id) > 0)
       .map((lift) => {
         const route = this.routeToInboundQueueStandby(vehicle, vehicle.currentNodeId, { liftNodeId: lift.id });
         return route && this.stationOwnedReserveAdmissionRouteAllowed(route)
@@ -7614,6 +7611,25 @@ export class ShuttleSimCore {
           : this.agentMoveBlocker(vehicle, nextNodeId)
       : null;
     return nextBlock ? null : candidate.route;
+  }
+
+  private stationKernelQueueLeaseCoverageDepth(stationId: string): number {
+    const vehicleIds = new Set<string>();
+    for (const lease of this.stationQueueLeases) {
+      if (
+        lease.stationId !== stationId ||
+        lease.targetKind !== 'queue-slot' ||
+        lease.phase === 'revoking'
+      ) {
+        continue;
+      }
+      vehicleIds.add(lease.vehicleId);
+    }
+    return vehicleIds.size;
+  }
+
+  private stationKernelReserveAdmissionCoverageGap(stationId: string): number {
+    return Math.max(0, this.stationKernelReserveTargetDepth(stationId) - this.stationKernelQueueLeaseCoverageDepth(stationId));
   }
 
   private stationOwnedReserveAdmissionRouteAllowed(routeNodeIds: string[]): boolean {
