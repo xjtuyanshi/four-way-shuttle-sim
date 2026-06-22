@@ -7568,7 +7568,43 @@ export class ShuttleSimCore {
       'inbound-queue-reserve-before-outbound-assignment',
       'inbound-queue-standby'
     );
+    this.issueStationKernelQueueAdmissionLease(vehicle, route, 'inbound-queue-reserve-before-outbound-assignment');
     return true;
+  }
+
+  private issueStationKernelQueueAdmissionLease(vehicle: MutableVehicle, route: string[], admissionCauseId: string): void {
+    const targetNodeId = route.at(-1) ?? null;
+    const targetSlot = targetNodeId ? this.topLiftInboundReserveQueueSlot(targetNodeId) : null;
+    if (!targetNodeId || !targetSlot) {
+      return;
+    }
+    const id = `station-lease:${targetSlot.liftNodeId}:${vehicle.id}:queue`;
+    const existing = this.stationQueueLeases.find((lease) => lease.id === id);
+    const lease: StationQueueLeaseToken = {
+      id,
+      stationId: targetSlot.liftNodeId,
+      vehicleId: vehicle.id,
+      admissionCauseId,
+      serviceDemandId: this.stationKernelReserveDemandTokens(targetSlot.liftNodeId)[0]?.id ?? null,
+      targetKind: 'queue-slot',
+      targetNodeId,
+      slotIndex: targetSlot.slotIndex,
+      phase: vehicle.currentNodeId === targetNodeId ? 'occupied' : 'approaching',
+      issuedAtSec: existing?.issuedAtSec ?? this.simTimeSec,
+      expiresAtSec: round(this.simTimeSec + 60),
+      lastProgressAtSec: existing?.lastProgressAtSec ?? this.simTimeSec,
+      boundedRouteNodeIds: [...route],
+      fifoSeq: existing?.fifoSeq ?? this.nextStationLeaseFifoSeq()
+    };
+    this.stationQueueLeases = [
+      ...this.stationQueueLeases.filter((candidate) => candidate.id !== id),
+      lease
+    ].sort((left, right) =>
+      left.stationId.localeCompare(right.stationId) ||
+      left.fifoSeq - right.fifoSeq ||
+      left.vehicleId.localeCompare(right.vehicleId) ||
+      left.id.localeCompare(right.id)
+    );
   }
 
   private stationOwnedReserveAdmissionRouteBeforeOutboundAssignment(vehicle: MutableVehicle): string[] | null {
@@ -34493,8 +34529,8 @@ export class ShuttleSimCore {
         id,
         stationId: options.stationId,
         vehicleId: vehicle.id,
-        admissionCauseId: options.admissionCauseId,
-        serviceDemandId: options.serviceDemandId,
+        admissionCauseId: existing?.admissionCauseId ?? options.admissionCauseId,
+        serviceDemandId: existing?.serviceDemandId ?? options.serviceDemandId,
         targetKind: options.targetKind,
         targetNodeId: options.targetNodeId,
         slotIndex: options.slotIndex,

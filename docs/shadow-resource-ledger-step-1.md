@@ -2852,3 +2852,68 @@ Interpretation:
 - It removes one legacy planned-minimum overreach path without changing the validated 600s or 30m throughput / physical-safety baselines.
 - It is not the full station-owned coordinator yet: the queue lease is still mirrored from vehicle state, and the next cut should allocate a bounded queue lease at admission time, then release it on service transition.
 - 12h / 24h 3D tick validation still remains required before claiming customer-review readiness.
+
+## Cut B.2: Admission-Time Queue Lease Source
+
+Date: 2026-06-22
+
+Behavior change:
+
+- When `admitVehicleToStationReserveBeforeOutboundAssignment(...)` accepts a bounded station reserve route, the station now immediately issues a `queue-slot` lease into the station kernel.
+- The issued lease records:
+  - station id,
+  - vehicle id,
+  - admission cause `inbound-queue-reserve-before-outbound-assignment`,
+  - the demand token that justified the lease,
+  - queue target node / slot,
+  - bounded route node ids,
+  - FIFO sequence and TTL.
+- The next station-kernel reconcile preserves the issued lease cause/demand while refreshing phase and bounded route from vehicle state.
+- Release remains intentionally narrow and implicit in this cut:
+  - if the vehicle keeps the taskless queue reserve route, reconcile keeps the queue lease,
+  - if the vehicle is converted to active inbound service, the queue lease is no longer mirrored and the service lease takes over,
+  - if the route is gone, the queue lease disappears on reconcile.
+
+Validation:
+
+```bash
+git diff --check
+pnpm --filter @four-way-shuttle/schemas typecheck
+pnpm --filter @four-way-shuttle/sim-core typecheck
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "admits a short station reserve route before assigning ordinary outbound work|does not admit a station reserve route before outbound assignment without station kernel demand|station kernel|station-owned shadow contracts|station shadow contract sampling read-only|restores agent-refresh snapshots"
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --near-route-max-nodes 4 --out output/review/station-queue-contract-600s-after-admission-lease-source.json
+./node_modules/.bin/tsx scripts/diagnose-queue-reserve-efficiency.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --progress-sec 300 --outbound-full-columns 0 --out output/review/queue-reserve-efficiency-600s-after-admission-lease-source.json
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 1800 --dt-sec 0.2 --sample-sec 60 --progress-sec 600 --near-route-max-nodes 4 --out output/review/station-queue-contract-30m-after-admission-lease-source.json
+./node_modules/.bin/tsx scripts/diagnose-queue-reserve-efficiency.ts --duration-sec 1800 --dt-sec 0.2 --sample-sec 60 --progress-sec 600 --outbound-full-columns 0 --out output/review/queue-reserve-efficiency-30m-after-admission-lease-source.json
+```
+
+Result:
+
+- Typecheck passed for schemas and sim-core.
+- Targeted station / lease tests passed: `7 passed`.
+- 600s station contract unchanged vs Cut B.1:
+  - before: total PPH `570`, inbound PPH `258`, physical violations `0`,
+  - after: total PPH `570`, inbound PPH `258`, physical violations `0`.
+- 600s queue reserve efficiency unchanged vs Cut B.1:
+  - before: total PPH `486`, inbound PPH `288`, demand outbound PPH `198`, queue reserve travel `0.804%`, waste reposition `12.13%`, physical violations `0`,
+  - after: total PPH `486`, inbound PPH `288`, demand outbound PPH `198`, queue reserve travel `0.804%`, waste reposition `12.13%`, physical violations `0`.
+- 600s station samples captured `2` admission-source queue lease observations. Example:
+  - `station-lease:lift-02-inbound:SH-01:queue`,
+  - `serviceDemandId = station-demand:task-0021`,
+  - target `column-top-a-c23`, slot `1`,
+  - bounded route `column-middle-c22 > module-02-spine-middle > module-02-spine-top-b > column-top-b-c22 > column-top-b-c23 > column-top-a-c23`.
+- 30m station contract unchanged vs Cut B.1:
+  - before: total PPH `540`, inbound PPH `196`, demand outbound PPH `38`, physical violations `0`,
+  - after: total PPH `540`, inbound PPH `196`, demand outbound PPH `38`, physical violations `0`.
+- 30m queue reserve efficiency unchanged vs Cut B.1:
+  - before: total PPH `492`, inbound PPH `268`, demand outbound PPH `224`, queue reserve travel `0.844%`, waste reposition `10.129%`, physical violations `0`,
+  - after: total PPH `492`, inbound PPH `268`, demand outbound PPH `224`, queue reserve travel `0.844%`, waste reposition `10.129%`, physical violations `0`.
+
+Interpretation:
+
+- Station reserve admission now creates an explicit station-owned lease at the moment of admission instead of waiting for later diagnostics to infer one from route fields.
+- This moves the system-resource contract in the right direction without changing validated short-window behavior.
+- The next source cut should make the lease lifecycle stricter:
+  - add explicit lease release / transition reasons,
+  - use the lease table as the single read path for pre-outbound reserve coverage,
+  - then run a 12h physical tick before deciding whether to proceed to 24h + 3D visual review.

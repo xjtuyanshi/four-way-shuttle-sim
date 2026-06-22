@@ -2315,6 +2315,30 @@ describe('shuttle phase 0 SimCore', () => {
       'column-top-b-c09',
       'column-top-a-c09'
     ]);
+    const kernel = ShuttleSimStateSchema.parse(sim.getState()).traffic.shadowLedger.stationContracts.stationKernel;
+    expect(kernel.queueLeases).toContainEqual(expect.objectContaining({
+      id: 'station-lease:lift-01-inbound:SH-01:queue',
+      stationId: 'lift-01-inbound',
+      vehicleId: 'SH-01',
+      admissionCauseId: 'inbound-queue-reserve-before-outbound-assignment',
+      serviceDemandId: 'station-arrival:station-admission-source',
+      targetKind: 'queue-slot',
+      targetNodeId: 'column-top-a-c09',
+      slotIndex: 1,
+      phase: 'approaching',
+      boundedRouteNodeIds: [
+        'module-01-spine-middle',
+        'module-01-spine-top-b',
+        'column-top-b-c08',
+        'column-top-b-c09',
+        'column-top-a-c09'
+      ]
+    }));
+    expect(kernel.stationSummaries).toContainEqual(expect.objectContaining({
+      stationId: 'lift-01-inbound',
+      leaseCount: 1,
+      reserveCoverageGap: 1
+    }));
   });
 
   it('does not admit a station reserve route before outbound assignment without station kernel demand', () => {
