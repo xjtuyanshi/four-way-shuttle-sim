@@ -1780,3 +1780,95 @@ Updated next step:
   - are they missing a top-lane return path,
   - or is the system failing to maintain a minimum top-lane reserve pool before demand becomes urgent?
 - The next valid source cut is likely not assignment admission; it is idle positioning / reserve-pool maintenance.
+
+## Idle Reserve Pool Audit
+
+Date: 2026-06-22
+
+Change:
+
+- Added `scripts/diagnose-idle-reserve-pool.ts`.
+- The script advances the physical 3D tick simulation at `dt=0.2s`, samples every 10 seconds, and records:
+  - which inbound stations have a head-reservation gap,
+  - every vehicle's taskless / loaded / moving state,
+  - current node and top-lift level,
+  - local route reason,
+  - reserve eligibility to each head-gap station,
+  - route-origin-disallowed / no-route / no-target classifications,
+  - and every `task-completed` vehicle's immediate post-completion disposition.
+- This is script-only diagnostics. It does not change runtime behavior.
+
+Validation:
+
+```bash
+./node_modules/.bin/tsx scripts/diagnose-idle-reserve-pool.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/idle-reserve-pool-600s.json
+```
+
+Results:
+
+- 600s idle reserve pool diagnosis:
+  - samples `61`.
+  - samples with inbound station head gap `44`.
+  - samples with head gap and zero reserve-eligible vehicles `44`.
+  - zero-reserve-during-head-gap share `100%`.
+  - average reserve-eligible vehicle count `0`.
+  - average idle taskless vehicle count `0.574`.
+  - idle taskless locations: `storage=15`, `bottom-b=8`, `top-a=6`, `parking=5`, `middle=1`.
+  - while head gap had zero reserve, idle taskless locations were mostly `storage=9`, `bottom-b=7`, `middle=1`, `parking=3`.
+  - candidate reasons during head gaps: `busy-task=279`, `busy-moving=52`, `no-route=20`, `route-origin-disallowed=1`.
+  - completion dispositions during head gaps included `assigned-outbound=15`, `moving-outbound-lift-clearance=16`, `assigned-inbound=13`, `idle-bottom-b=7`, `moving-taskless=7`, `idle-storage=3`.
+  - final 600s behavior stayed at total PPH `516`, inbound `210`, physical violations `0`.
+
+Rejected experiment: convert completed outbound clearance to queue standby
+
+- Tried a local, uncommitted source cut:
+  - if a taskless vehicle finished an `outbound-lift-clearance` route exactly on an inbound queue slot, convert it to `inbound-queue-standby` before clearing the local route state.
+- Validation:
+
+```bash
+./node_modules/.bin/tsx scripts/diagnose-idle-reserve-pool.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/idle-reserve-pool-600s-after-clearance-convert.json
+```
+
+- Result:
+  - no metric changed versus baseline.
+  - head-gap samples stayed `44`.
+  - zero-reserve-during-head-gap samples stayed `44`.
+  - average reserve-eligible vehicle count stayed `0`.
+  - total PPH stayed `516`, inbound stayed `210`, physical violations stayed `0`.
+- The source cut was removed before commit.
+
+Rejected experiment: increase inbound queue target depth to all physical queue slots
+
+- Tried a local, uncommitted source cut:
+  - changed `topLiftInboundQueueReplenishTargetDepth(...)` from `min(2, queueDepth)` to the full physical queue depth (`3` in this layout).
+- Validation:
+
+```bash
+./node_modules/.bin/tsx scripts/diagnose-idle-reserve-pool.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/idle-reserve-pool-600s-after-queue-depth3.json
+```
+
+- Result:
+  - head-gap samples worsened from `44` to `50`.
+  - zero-reserve-during-head-gap samples worsened from `44` to `50`.
+  - inbound PPH dropped from `210` to `180`.
+  - total PPH rose slightly from `516` to `522`, but this was not a balanced-flow improvement.
+  - physical violations stayed `0`.
+- The source cut was removed before commit.
+
+Decision:
+
+- The current root cause is not simple outbound assignment priority and not simply "fill more queue slots".
+- During head gaps, the fleet has no valid reserve-eligible empty vehicle; idle taskless vehicles are usually in storage, bottom lane, parking, or middle positions where `routeToInboundQueueStandby(...)` cannot produce a legal immediate queue route.
+- Forcing a storage vehicle out is also not proven sufficient: spot checks showed storage exits may terminate at middle / temporary storage hold nodes and still cannot become queue reserve.
+
+Updated next step:
+
+- The next source cut should be station-owned reserve-pool maintenance, not assignment blocking:
+  - station must own a queue-reservation contract before demand becomes urgent,
+  - reserve candidates must be selected while they are still on a top-lane / queue-compatible route,
+  - lower-level or storage idle vehicles should not be counted as an immediate inbound reserve substitute,
+  - and the coordinator should decide whether an outbound clearance vehicle should become a future reserve before it falls back to bottom-lane / storage standby.
+- Keep using the idle reserve pool audit as the first regression check for any source cut:
+  - target direction is to reduce zero-reserve-during-head-gap samples,
+  - without increasing physical violations,
+  - and without hurting inbound PPH.
