@@ -706,6 +706,11 @@ export const StationKernelStationSummarySchema = z.object({
   servicingDemandTokenCount: z.number().int().nonnegative(),
   arrivalIntentTokenCount: z.number().int().nonnegative().default(0),
   inboundTaskDemandTokenCount: z.number().int().nonnegative().default(0),
+  reserveDemandTokenCount: z.number().int().nonnegative().default(0),
+  reserveTargetDepth: z.number().int().nonnegative().default(0),
+  legacyReserveTargetDepth: z.number().int().nonnegative().default(0),
+  reserveCoverageDepth: z.number().int().nonnegative().default(0),
+  reserveCoverageGap: z.number().int().nonnegative().default(0),
   leaseCount: z.number().int().nonnegative(),
   sourceOnlyReadyShadowCount: z.number().int().nonnegative().default(0)
 });

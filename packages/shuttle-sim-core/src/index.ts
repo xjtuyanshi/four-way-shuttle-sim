@@ -34394,6 +34394,25 @@ export class ShuttleSimCore {
     return load.nodeId === this.inboundSourceFrontBufferNodeId(stationId) ? 'ready' : 'announced';
   }
 
+  private stationKernelReserveDemandTokens(stationId: string): StationDemandToken[] {
+    return this.stationDemandTokens.filter((token) => {
+      if (token.stationId !== stationId) {
+        return false;
+      }
+      if (token.source === 'arrival-intent') {
+        return token.state === 'announced' || token.state === 'ready';
+      }
+      return token.state === 'ready' || token.state === 'claimed';
+    });
+  }
+
+  private stationKernelReserveTargetDepth(stationId: string): number {
+    if (this.stationKernelReserveDemandTokens(stationId).length === 0) {
+      return 0;
+    }
+    return this.topLiftInboundQueueReplenishTargetDepth(stationId);
+  }
+
   private reconcileStationKernelShadowState(): void {
     if (this.diagnosticReadOnlyDepth > 0) {
       return;
@@ -34494,6 +34513,9 @@ export class ShuttleSimCore {
         const stationTokens = this.stationDemandTokens.filter((token) => token.stationId === stationId);
         const stationLeases = this.stationQueueLeases.filter((lease) => lease.stationId === stationId);
         const activeDemandTokens = stationTokens.filter((token) => token.state !== 'picked' && token.state !== 'cancelled');
+        const reserveDemandTokenCount = this.stationKernelReserveDemandTokens(stationId).length;
+        const reserveTargetDepth = this.stationKernelReserveTargetDepth(stationId);
+        const reserveCoverageDepth = this.topLiftInboundQueueCoveredDepth(stationId);
         const sourceOnlyReadyShadowCount = inboundDemandLedger.entries.filter((entry) =>
           entry.stationId === stationId &&
           entry.source === 'source-buffer' &&
@@ -34508,6 +34530,11 @@ export class ShuttleSimCore {
           servicingDemandTokenCount: stationTokens.filter((token) => token.state === 'servicing').length,
           arrivalIntentTokenCount: stationTokens.filter((token) => token.source === 'arrival-intent').length,
           inboundTaskDemandTokenCount: stationTokens.filter((token) => token.source === 'inbound-task').length,
+          reserveDemandTokenCount,
+          reserveTargetDepth,
+          legacyReserveTargetDepth: this.topLiftInboundQueueReserveRequiredDepth(stationId),
+          reserveCoverageDepth,
+          reserveCoverageGap: Math.max(0, reserveTargetDepth - reserveCoverageDepth),
           leaseCount: stationLeases.length,
           sourceOnlyReadyShadowCount
         };

@@ -2689,3 +2689,59 @@ Decision:
 - Better next options:
   - keep arrival-intent as source of truth but map it through an explicit station reserve target policy, for example one ready arrival intent can request up to the physical target depth while the lease admission remains bounded;
   - or implement queue lease issuance first in shadow, then switch only the outbound-steal gate to the explicit lease without changing target demand pressure.
+
+## Cut A.3: Station Reserve Target Policy Shadow
+
+Date: 2026-06-22
+
+Change:
+
+- Added station kernel shadow target-policy fields to each station summary:
+  - `reserveDemandTokenCount`,
+  - `reserveTargetDepth`,
+  - `legacyReserveTargetDepth`,
+  - `reserveCoverageDepth`,
+  - `reserveCoverageGap`.
+- The policy keeps `arrival-intent` / `inbound-task` as the source of truth, but maps any active reserve demand to the station's physical queue target depth.
+- This explicitly fixes the flaw in the rejected 1:1 token-count behavior experiment: one ready arrival intent may require more than one reserve slot because the physical station policy wants a small queue depth, not a literal one-token-one-AMR mapping.
+- This cut is diagnostic only. It does not change routing, assignment, reserve admission, or queue hold behavior.
+
+Validation:
+
+```bash
+git diff --check
+pnpm --filter @four-way-shuttle/schemas typecheck
+pnpm --filter @four-way-shuttle/sim-core typecheck
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "station kernel|station shadow contract sampling read-only|restores agent-refresh snapshots"
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --near-route-max-nodes 4 --out output/review/station-queue-contract-600s-after-reserve-target-policy-shadow.json
+./node_modules/.bin/tsx scripts/diagnose-queue-reserve-efficiency.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --progress-sec 300 --outbound-full-columns 0 --out output/review/queue-reserve-efficiency-600s-after-reserve-target-policy-shadow.json
+```
+
+Result:
+
+- Typecheck passed for schemas and sim-core.
+- Targeted station kernel / snapshot tests passed: `4 passed`.
+- Station contract 600s behavior baseline unchanged:
+  - total PPH `570`,
+  - inbound PPH `258`,
+  - physical violations `0`.
+- Queue reserve efficiency 600s behavior baseline unchanged:
+  - total PPH `486`,
+  - inbound PPH `288`,
+  - demand outbound PPH `198`,
+  - queue reserve travel `0.804%`,
+  - waste reposition `12.13%`,
+  - physical violations `0`.
+- Policy evidence from the station 600s run:
+  - station samples checked: `122`,
+  - `reserveTargetDepth != legacyReserveTargetDepth` in only `2` station samples,
+  - `maxReserveCoverageGap = 2`,
+  - `maxArrivalIntentTokenCount = 3`,
+  - final lift-01: token demand `4`, target depth `2`, legacy target `2`, coverage `1`, gap `1`,
+  - final lift-02: token demand `4`, target depth `2`, legacy target `2`, coverage `0`, gap `2`.
+
+Interpretation:
+
+- The explicit token-based target policy now almost matches the old source-count target pressure without changing behavior.
+- This gives the next behavior cut a cleaner source: switch a narrow gate to `reserveTargetDepth` / `reserveCoverageGap` rather than using raw source-buffer counts.
+- The safer next behavior change is to issue or protect explicit bounded queue leases only when the shadow policy says `reserveCoverageGap > 0`, while preserving the current route-admission rules until the lease lifecycle proves stable.

@@ -1785,7 +1785,12 @@ describe('shuttle phase 0 SimCore', () => {
       activeDemandTokenCount: 1,
       readyDemandTokenCount: 1,
       arrivalIntentTokenCount: 1,
-      inboundTaskDemandTokenCount: 0
+      inboundTaskDemandTokenCount: 0,
+      reserveDemandTokenCount: 1,
+      reserveTargetDepth: 2,
+      legacyReserveTargetDepth: 2,
+      reserveCoverageDepth: 0,
+      reserveCoverageGap: 2
     });
   });
 
@@ -1849,7 +1854,12 @@ describe('shuttle phase 0 SimCore', () => {
     expect(before.stationSummaries).toContainEqual(expect.objectContaining({
       stationId: 'lift-01-inbound',
       arrivalIntentTokenCount: 0,
-      inboundTaskDemandTokenCount: 1
+      inboundTaskDemandTokenCount: 1,
+      reserveDemandTokenCount: 1,
+      reserveTargetDepth: 2,
+      legacyReserveTargetDepth: 2,
+      reserveCoverageDepth: 0,
+      reserveCoverageGap: 2
     }));
     expect(snapshot.stationDemandTokens).toEqual(before.demandTokens);
     expect(restored).toEqual(before);
