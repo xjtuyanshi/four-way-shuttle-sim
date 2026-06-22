@@ -2268,3 +2268,78 @@ Updated next step:
   - reduce the lag between planned reserve and physical queue coverage,
   - focus on routes that already have `localRouteReason='inbound-queue-standby'`,
   - and validate against lower zero-reserve head-gap samples, not just PPH.
+
+## Rejected Follow-Up Reserve Admission Experiments
+
+Date: 2026-06-22
+
+Context:
+
+- After `fix: gate outbound assignment for station reserve`, the 600s and 30m windows improved versus `743708d`, but the real remaining defect stayed:
+  - `zeroReserveDuringHeadGapPct = 1`,
+  - `averageReserveEligibleVehicleCount = 0`,
+  - station gaps were still dominated by `fleet-busy`.
+- I tested two broader gate ideas and one reserve-depth idea, then rejected them instead of mixing them into the source cut.
+
+Experiment A: available-pool station reserve gate before outbound best-assignment.
+
+- Idea:
+  - before assigning an ordinary outbound task, scan all currently available AMRs,
+  - reserve the shortest station-specific candidate,
+  - not only the AMR selected by outbound nearest-vehicle assignment.
+- 600s result:
+  - same final KPIs as the committed source cut:
+    - inbound PPH `258`,
+    - total PPH `570`,
+    - physical violations `0`,
+  - same assignment summary:
+    - total assignments `102`,
+    - inbound assignments `45`,
+    - outbound assignments `57`.
+- 30m result:
+  - same final KPIs as the committed source cut:
+    - inbound PPH `196`,
+    - demand outbound PPH `38`,
+    - total PPH `540`,
+    - physical violations `0`.
+- Decision:
+  - reject as a performance fix.
+  - It is a plausible contract hardening, but this deterministic failure window did not have available station-reserve candidates for it to capture.
+
+Experiment B: direct `tryAssignQueuedTaskToVehicle(...)` station admission before outbound.
+
+- Idea:
+  - task completion can call `tryAssignQueuedTaskToVehicle(...)` directly,
+  - so add the same station-owned reserve admission before the direct outbound fallback.
+- 600s result:
+  - same final KPIs and assignment summary as Experiment A:
+    - inbound PPH `258`,
+    - total PPH `570`,
+    - total assignments `102`,
+    - outbound assignments `57`,
+    - physical violations `0`.
+- Decision:
+  - reject as a performance fix for this window.
+  - It closes a narrow contract hole in isolation, but the measured head-gap samples still had no available reserve candidate.
+
+Experiment C: raise planned minimum inbound reserve depth from `1` to the full replenishment target depth.
+
+- Idea:
+  - maintain two planned station reserves before source loads become ready,
+  - so the station does not wait until inbound demand appears to rebuild queue coverage.
+- Test result:
+  - failed existing guard:
+    - `does not pre-stage taskless mixed-flow shuttles without concrete inbound work`,
+    - observed `localRouteReason='inbound-queue-standby'` where the guard expects `null`.
+- Decision:
+  - reject.
+  - This is too blunt: it starts pre-staging without concrete inbound work and risks reintroducing the earlier "random queue occupation" behavior.
+
+Updated conclusion:
+
+- The next useful cut is not a broader outbound gate and not a larger unconditional planned reserve.
+- The evidence points to earlier, demand-aware queue-resource formation:
+  - detect when source-buffer demand is close to becoming ready,
+  - create station queue coverage before all free AMRs become busy,
+  - keep the trigger tied to concrete station demand or near-term source-buffer pressure,
+  - and keep the no-concrete-work pre-stage guard intact.
