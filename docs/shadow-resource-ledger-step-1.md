@@ -2549,3 +2549,45 @@ Interpretation:
   - taskless AMR is already at a bounded top-level handoff candidate,
   - route to queue/approach is at most the near-station limit,
   - queue lease has FIFO/TTL and is protected before ordinary outbound assignment.
+
+## Cut B Experiment: Pure True-Demand Bounded Reserve Rejected
+
+Date: 2026-06-22
+
+Experiment:
+
+- Changed station queue reserve demand from legacy source-buffer demand to station kernel ready/claimed inbound task tokens only.
+- Removed planned minimum reserve when no task demand token exists.
+- Tightened station reserve admission routes to max `4` nodes on top-a/top-b / queue-approach nodes only.
+
+Validation:
+
+```bash
+git diff --check
+pnpm --filter @four-way-shuttle/schemas typecheck
+pnpm --filter @four-way-shuttle/sim-core typecheck
+pnpm exec vitest run packages/shuttle-sim-core/src/index.test.ts -t "station kernel|inbound queue reserve|station reserve|nearest available yellow queue"
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --near-route-max-nodes 4 --out output/review/station-queue-contract-600s-after-true-demand-bounded-reserve.json
+./node_modules/.bin/tsx scripts/diagnose-queue-reserve-efficiency.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --progress-sec 300 --outbound-full-columns 0 --out output/review/queue-reserve-efficiency-600s-after-true-demand-bounded-reserve.json
+```
+
+Result:
+
+- Typecheck passed.
+- Targeted tests passed after updating assertions to the new rule.
+- Behavior regressed and the source/test changes were reverted.
+- Station contract 600s:
+  - previous total PPH `570`, inbound PPH `258`, physical violations `0`,
+  - experiment total PPH `534`, inbound PPH `192`, physical violations `0`.
+- Queue reserve efficiency 600s:
+  - previous total PPH `486`, inbound PPH `288`, demand outbound PPH `198`, physical violations `0`,
+  - experiment total PPH `438`, inbound PPH `258`, demand outbound PPH `180`, physical violations `0`,
+  - `averageReserveVehicles` fell from `0.083` to `0.017`,
+  - `offQueueWaitingSamples` rose from `9` to `15`.
+
+Decision:
+
+- Rejected and reverted.
+- The pure true-task-demand cut made reserve admission too late. By the time a task token exists, the station often has no useful near queue reserve vehicle ready, so inbound service starves.
+- The next valid behavior cut should keep source supply separate from task demand, but introduce an explicit earlier `arrival-intent` / lift-release demand token instead of falling back to raw source-buffer counts.
+- That `arrival-intent` token must still be station-owned, FIFO/TTL-bound, and only convertible to a physical queue lease when a bounded top-level route exists.
