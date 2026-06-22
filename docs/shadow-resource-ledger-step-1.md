@@ -1872,3 +1872,67 @@ Updated next step:
   - target direction is to reduce zero-reserve-during-head-gap samples,
   - without increasing physical violations,
   - and without hurting inbound PPH.
+
+## Short Protected Standby Reroute Source Cut
+
+Date: 2026-06-22
+
+Change:
+
+- Updated `routeToInboundQueueStandby(...)` to retry standby route planning with active inbound protected-route nodes treated as blocked nodes.
+- The retry is only used when the first route exists but violates `tasklessInboundQueueStandbyRouteAllowed(...)`.
+- The retry is bounded by `TOP_LIFT_PROTECTED_STANDBY_REROUTE_MAX_NODE_COUNT = 10` so the system can use short legal alternatives without sending vehicles on long cross-system reserve trips.
+- This keeps the no-crossing rule intact: protected nodes are blocked, not ignored.
+
+Why this cut:
+
+- One-off route diagnostics showed outbound clearance queue-extension failures were often not true graph failures:
+  - `planStandbyRoute(...)` could find a bottom-b -> bottom-a -> middle -> top-b -> top-a path,
+  - but the first shortest route crossed active inbound protected nodes,
+  - and the previous implementation rejected it without trying a protected-node-blocked alternative.
+- An unbounded retry was rejected:
+  - it reduced route infeasible counts and raised inbound PPH slightly,
+  - but sent too many vehicles on long taskless reserve paths,
+  - total PPH dropped from `516` to `492`.
+
+Validation:
+
+```bash
+./node_modules/.bin/tsx scripts/diagnose-idle-reserve-pool.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/idle-reserve-pool-600s-after-short-protected-reroute.json
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/station-queue-contract-600s-after-short-protected-reroute.json
+./node_modules/.bin/tsx scripts/diagnose-assignment-admission.ts --duration-sec 600 --dt-sec 0.2 --out output/review/assignment-admission-600s-after-short-protected-reroute.json
+```
+
+Results versus the idle reserve pool baseline:
+
+- 600s physical tick:
+  - total PPH improved from `516` to `534`.
+  - inbound PPH improved from `210` to `228`.
+  - physical violations stayed `0`.
+  - completed assignments stayed `96`.
+  - inbound assignments improved from `38` to `41`.
+  - outbound assignments changed from `58` to `55`.
+- Station contract:
+  - `routeInfeasible` head-reservation bucket improved from `30` to `21`.
+  - `fleet-busy` head-reservation bucket stayed `63`.
+  - average queue coverage gap worsened from `1.197` in the unbounded reroute run to `1.311` in the short reroute run, and remains a real issue.
+- Idle reserve pool:
+  - head-gap samples were `45`.
+  - zero-reserve-during-head-gap samples stayed `44`.
+  - average reserve-eligible vehicle count stayed very low at `0.016`.
+
+Decision:
+
+- Keep the short protected reroute source cut because it improves 600s physical throughput and inbound completions without creating physical violations.
+- Do not treat it as the final station-owned reserve-pool fix.
+- The remaining root problem is still reserve-pool formation:
+  - during most head gaps there is still no valid reserve-eligible empty vehicle,
+  - station `fleet-busy` is unchanged,
+  - and lower/storage idle vehicles still cannot be counted as immediate queue reserve.
+
+Updated next step:
+
+- Implement a real station-owned reserve reservation contract:
+  - when an outbound clearance or other taskless route is still top-compatible, station should be able to lease it as future queue reserve,
+  - avoid long reroutes by keeping the same short-route bound,
+  - and verify the change by reducing `zeroReserveDuringHeadGap` / `fleet-busy` rather than only improving short-window PPH.

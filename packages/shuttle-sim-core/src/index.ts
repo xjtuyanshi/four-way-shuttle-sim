@@ -55,6 +55,7 @@ const TOP_LIFT_COLUMN_LAYOUT_PROFILE_ID = 'top-lift-column-v1';
 const INBOUND_DROPOFF_STANDBY_GRACE_SEC = 0.8;
 const OUTBOUND_STORAGE_ROUTE_UNAVAILABLE_RELEASE_SEC = 120;
 const OUTBOUND_STORAGE_ROUTE_UNAVAILABLE_REASSIGN_HOLD_SEC = 45;
+const TOP_LIFT_PROTECTED_STANDBY_REROUTE_MAX_NODE_COUNT = 10;
 
 type PriorityQueueEntry = {
   nodeId: string;
@@ -11777,10 +11778,11 @@ export class ShuttleSimCore {
       return null;
     }
     try {
+      const outboundDockBlockedNodeIds = this.activeTopLiftOutboundDockBlockedNodeIds(vehicle.id);
       const route = this.planStandbyRoute(
         fromNodeId,
         targetNodeId,
-        this.activeTopLiftOutboundDockBlockedNodeIds(vehicle.id)
+        outboundDockBlockedNodeIds
       );
       if (
         route.length > 1 &&
@@ -11791,6 +11793,22 @@ export class ShuttleSimCore {
         this.routeAvoidsActiveTopLiftOutboundDockBlocks(vehicle, route)
       ) {
         return route;
+      }
+      if (!this.tasklessInboundQueueStandbyRouteAllowed(vehicle, route, options)) {
+        const protectedNodeIds = this.activeTopLiftInboundMainFlowProtectedNodeIds(vehicle.id);
+        const blockedNodeIds = new Set([...outboundDockBlockedNodeIds, ...protectedNodeIds]);
+        const protectedRoute = this.planStandbyRoute(fromNodeId, targetNodeId, blockedNodeIds);
+        if (
+          protectedRoute.length > 1 &&
+          protectedRoute.length <= TOP_LIFT_PROTECTED_STANDBY_REROUTE_MAX_NODE_COUNT &&
+          protectedRoute.at(-1) === targetNodeId &&
+          this.routeEdgesExist(protectedRoute) &&
+          this.agentRefreshLocalRouteNodesClear(vehicle, protectedRoute) &&
+          this.tasklessInboundQueueStandbyRouteAllowed(vehicle, protectedRoute, options) &&
+          this.routeAvoidsActiveTopLiftOutboundDockBlocks(vehicle, protectedRoute)
+        ) {
+          return protectedRoute;
+        }
       }
     } catch {
       return null;
