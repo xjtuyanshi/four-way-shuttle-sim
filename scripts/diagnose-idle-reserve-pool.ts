@@ -20,6 +20,7 @@ type InternalSim = ShuttleSimCore & {
     options?: { allowTaskedVehicle?: boolean; liftNodeId?: string }
   ): string[] | null;
   tasklessInboundQueueStandbyRouteOriginAllowed(routeNodeIds: string[]): boolean;
+  stationOwnedReserveAdmissionRouteAllowed(routeNodeIds: string[]): boolean;
   topLiftInboundQueueStandbyTargetNodeId(
     vehicle: VehicleState,
     fromNodeId?: string,
@@ -245,7 +246,9 @@ function classifyVehicleForReserve(
   const moving = vehicle.currentEdgeId !== null || vehicle.legRemainingM > 0 || vehicle.phaseRemainingSec > 0;
   const task = vehicle.taskId ? tasksById.get(vehicle.taskId) ?? null : null;
   const routeChecks = headGapStations.map((station) => routeCheckForStation(vehicle, station.stationId));
-  const reserveEligible = routeChecks.filter((check) => check.reason === 'reserve-eligible');
+  const reserveEligible = routeChecks.filter((check) =>
+    check.reason === 'reserve-eligible' || check.reason === 'station-owned-reserve-eligible'
+  );
   const routeOriginDisallowed = routeChecks.filter((check) => check.reason === 'route-origin-disallowed');
   const routeUnavailable = routeChecks.filter((check) => check.reason === 'no-route');
   const noTarget = routeChecks.filter((check) => check.reason === 'no-target');
@@ -279,7 +282,7 @@ function classifyVehicleForReserve(
 
 type RouteCheck = {
   stationId: string;
-  reason: 'reserve-eligible' | 'route-origin-disallowed' | 'no-route' | 'no-target' | 'not-applicable';
+  reason: 'reserve-eligible' | 'station-owned-reserve-eligible' | 'route-origin-disallowed' | 'no-route' | 'no-target' | 'not-applicable';
   routeLength: number | null;
   routePattern: string | null;
 };
@@ -303,6 +306,14 @@ function routeCheckForStation(vehicle: VehicleState, stationId: string): RouteCh
     return { stationId, reason: 'no-route', routeLength: null, routePattern: null };
   }
   if (!sim.tasklessInboundQueueStandbyRouteOriginAllowed(route)) {
+    if (sim.stationOwnedReserveAdmissionRouteAllowed(route)) {
+      return {
+        stationId,
+        reason: 'station-owned-reserve-eligible',
+        routeLength: route.length,
+        routePattern: routeLevelPattern(route)
+      };
+    }
     return {
       stationId,
       reason: 'route-origin-disallowed',
@@ -340,7 +351,7 @@ function candidateReason(vehicle: VehicleState, routeChecks: RouteCheck[]): stri
   if (routeChecks.length === 0) {
     return 'no-head-gap';
   }
-  if (routeChecks.some((check) => check.reason === 'reserve-eligible')) {
+  if (routeChecks.some((check) => check.reason === 'reserve-eligible' || check.reason === 'station-owned-reserve-eligible')) {
     return 'reserve-eligible';
   }
   if (routeChecks.some((check) => check.reason === 'route-origin-disallowed')) {

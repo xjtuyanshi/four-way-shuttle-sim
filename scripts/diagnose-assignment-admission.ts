@@ -20,6 +20,7 @@ type SimWithEventLog = ShuttleSimCore & {
     options?: { allowTaskedVehicle?: boolean; liftNodeId?: string }
   ): string[] | null;
   tasklessInboundQueueStandbyRouteOriginAllowed(routeNodeIds: string[]): boolean;
+  stationOwnedReserveAdmissionRouteAllowed(routeNodeIds: string[]): boolean;
 };
 
 type ReserveEligibleVehicle = {
@@ -233,7 +234,13 @@ function admissionContext(state: ShuttleSimState): PreAdmissionContext {
     .flatMap((vehicle) => {
       return headGapStations.map((station) => {
         const route = sim.routeToInboundQueueStandby(vehicle, vehicle.currentNodeId, { liftNodeId: station.stationId });
-        if (!route || route.length <= 1 || !sim.tasklessInboundQueueStandbyRouteOriginAllowed(route)) {
+        const reserveEligible = route &&
+          route.length > 1 &&
+          (
+            sim.tasklessInboundQueueStandbyRouteOriginAllowed(route) ||
+            sim.stationOwnedReserveAdmissionRouteAllowed(route)
+          );
+        if (!route || !reserveEligible) {
           return null;
         }
         const level = nodeLevel(vehicle.currentNodeId);

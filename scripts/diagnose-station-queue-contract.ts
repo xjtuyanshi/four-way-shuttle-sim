@@ -15,6 +15,7 @@ type InternalSim = ShuttleSimCore & {
   tasklessInboundQueueStandbyRerouteAllowed(vehicle: VehicleState): boolean;
   routeToInboundQueueStandby(vehicle: VehicleState, fromNodeId?: string, options?: { allowTaskedVehicle?: boolean; liftNodeId?: string }): string[] | null;
   tasklessInboundQueueStandbyRouteOriginAllowed(routeNodeIds: string[]): boolean;
+  stationOwnedReserveAdmissionRouteAllowed(routeNodeIds: string[]): boolean;
   topLiftInboundQueueStandbyTargetNodeId(vehicle: VehicleState, fromNodeId?: string, options?: { allowTaskedVehicle?: boolean; liftNodeId?: string }): string | null;
   topLiftInboundApproachQueueSlot(nodeId: string): { liftNodeId: string; slotIndex: number } | null;
   taskLiftPortNodeId(task: TaskStateRecord): string | null;
@@ -189,8 +190,11 @@ function diagnoseReleaseOpportunities(
             allowTaskedVehicle: true,
             liftNodeId: station.stationId
           });
-          const originAllowed = route ? internals.tasklessInboundQueueStandbyRouteOriginAllowed(route) : false;
-          return route && originAllowed
+          const admissionAllowed = route
+            ? internals.tasklessInboundQueueStandbyRouteOriginAllowed(route) ||
+              internals.stationOwnedReserveAdmissionRouteAllowed(route)
+            : false;
+          return route && admissionAllowed
             ? { vehicleId: vehicle.id, length: route.length }
             : null;
         })
@@ -238,7 +242,10 @@ function diagnoseCandidate(vehicle: VehicleState, tasksById: Map<string, TaskSta
   if (!route || route.length <= 1) {
     return candidate(vehicle, 'no-standby-route', targetNodeId, route, tasksById);
   }
-  if (!internals.tasklessInboundQueueStandbyRouteOriginAllowed(route)) {
+  if (
+    !internals.tasklessInboundQueueStandbyRouteOriginAllowed(route) &&
+    !internals.stationOwnedReserveAdmissionRouteAllowed(route)
+  ) {
     return candidate(vehicle, 'route-origin-disallowed', targetNodeId, route, tasksById);
   }
   return candidate(vehicle, 'dispatchable-reserve', targetNodeId, route, tasksById);

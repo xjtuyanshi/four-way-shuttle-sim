@@ -2343,3 +2343,53 @@ Updated conclusion:
   - create station queue coverage before all free AMRs become busy,
   - keep the trigger tied to concrete station demand or near-term source-buffer pressure,
   - and keep the no-concrete-work pre-stage guard intact.
+
+## Station-Owned Diagnostic Eligibility Alignment
+
+Date: 2026-06-22
+
+Change:
+
+- Updated reserve diagnostics to treat a route as reserve-eligible when either:
+  - legacy `tasklessInboundQueueStandbyRouteOriginAllowed(...)` accepts it,
+  - or source gate `stationOwnedReserveAdmissionRouteAllowed(...)` accepts it.
+- Updated scripts:
+  - `scripts/diagnose-idle-reserve-pool.ts`,
+  - `scripts/diagnose-assignment-admission.ts`,
+  - `scripts/diagnose-station-queue-contract.ts`.
+
+Why:
+
+- Earlier diagnostics could classify a route as `route-origin-disallowed` even if the new station-owned source gate would admit it.
+- Before changing dispatch again, the measurement had to match the source-of-truth admission contract.
+
+Validation:
+
+```bash
+./node_modules/.bin/tsx scripts/diagnose-idle-reserve-pool.ts --duration-sec 60 --dt-sec 0.2 --sample-sec 10 --out output/review/idle-reserve-pool-60s-station-owned-diagnostic-smoke.json
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 60 --dt-sec 0.2 --sample-sec 10 --out output/review/station-queue-contract-60s-station-owned-diagnostic-smoke.json
+./node_modules/.bin/tsx scripts/diagnose-assignment-admission.ts --duration-sec 60 --dt-sec 0.2 --out output/review/assignment-admission-60s-station-owned-diagnostic-smoke.json
+./node_modules/.bin/tsx scripts/diagnose-idle-reserve-pool.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/idle-reserve-pool-600s-station-owned-diagnostic.json
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --dt-sec 0.2 --sample-sec 10 --out output/review/station-queue-contract-600s-station-owned-diagnostic.json
+./node_modules/.bin/tsx scripts/diagnose-assignment-admission.ts --duration-sec 600 --dt-sec 0.2 --out output/review/assignment-admission-600s-station-owned-diagnostic.json
+```
+
+600s result with aligned diagnostic:
+
+- `zeroReserveDuringHeadGapPct` remains `1`.
+- `averageReserveEligibleVehicleCount` remains `0`.
+- `outboundWhileReserveEligible` remains `0`.
+- `outboundAssignedReserveEligible` remains `0`.
+- `outboundWhileHeadGap` remains `36`.
+- `outboundWhileFleetBusyGap` remains `30`.
+- final KPIs remain:
+  - inbound PPH `258`,
+  - total PPH `570`,
+  - physical violations `0`.
+
+Decision:
+
+- The earlier conclusion stands with a corrected diagnostic lens.
+- The issue is not that outbound assignment is stealing an available station-owned reserve candidate in this 600s window.
+- The issue is that by the time head-gap is visible, the system has no routeable reserve candidate left.
+- Next source cut should create demand-aware queue coverage earlier, not add another outbound gate.
