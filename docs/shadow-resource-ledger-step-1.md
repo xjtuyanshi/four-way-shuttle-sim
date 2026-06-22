@@ -1603,3 +1603,63 @@ Updated next step:
   - protect at least one near-field taskless reserve before assigning lower-priority outbound work,
   - or let the station coordinator preempt/release selected empty outbound assignments only when it can produce a short, valid inbound reserve route.
 - Any source cut must be A/B checked against this baseline before running longer 3D tests.
+
+## Station-Specific Outbound Release Opportunity Audit
+
+Date: 2026-06-22
+
+Change:
+
+- Extended `scripts/diagnose-station-queue-contract.ts` with `releaseOpportunities`.
+- For every station sample with `headReservationSupply.gap=fleet-busy` or `serviceTransition.gap=waiting-for-head-reservation`, the script now checks:
+  - how many AMRs are assigned to empty outbound work,
+  - how many of those outbound-assigned AMRs are stationary,
+  - whether releasing any of them would produce a station-specific inbound queue standby route,
+  - whether that route is origin-allowed,
+  - and whether any such route is short (`<=8` nodes).
+- This remains script-only diagnostics. It does not affect `getState()`, UI playback, 3D tick speed, task assignment, or routing.
+
+Validation:
+
+```bash
+pnpm --filter @four-way-shuttle/sim-core exec tsc --noEmit
+./node_modules/.bin/tsx scripts/diagnose-station-queue-contract.ts --duration-sec 600 --sample-sec 10 --dt-sec 0.2 --out output/review/station-shadow-outbound-release-opportunity-600s.json
+```
+
+Results:
+
+- Typecheck passed for sim-core.
+- 600s station diagnosis stayed behavior-equivalent:
+  - total PPH `516`, inbound `210`, physical violations `0`.
+  - station invariant total `1`.
+- Station-specific release opportunity:
+  - `totalStationGaps=63`.
+  - `withStationSpecificReleaseRoute=0`.
+  - `withShortStationSpecificReleaseRouteLe8=0`.
+  - `shortestReleasedOriginAllowedLength=null`.
+  - average empty outbound assignments during those gaps `1.937`.
+  - average stationary empty outbound assignments during those gaps `0.270`.
+- The global non-station-specific diagnostic still found only `1` origin-allowed release route, and no short route (`originAllowedLengthLe8=0`).
+
+Rejected experiment:
+
+- Tried a local, uncommitted outbound assignment hold source cut:
+  - if an idle top-lane AMR was about to receive outbound work while an inbound station had ready/claimed demand and no physical head reservation, defer that outbound assignment.
+- 600s diagnosis was identical to baseline:
+  - total PPH `516`, inbound `210`, physical violations `0`.
+  - head-reservation gap distribution unchanged.
+- The source cut was removed before commit because it did not reach the actual bottleneck.
+
+Decision:
+
+- Do not implement outbound preemption/release yet.
+- The evidence says empty outbound AMRs are often not stationary, and when stationary they do not have a station-specific valid route to the missing inbound head reservation.
+- Forcing preemption here would likely create exactly the kind of visible route churn and unsafe cross-flow behavior we are trying to eliminate.
+
+Updated next step:
+
+- The next source-of-truth cut should not be "steal an outbound AMR now."
+- Focus instead on assignment admission before AMRs become committed:
+  - measure when outbound assignments were created relative to inbound demand becoming ready,
+  - add a shadow "would reserve instead of assigning outbound" decision at assignment time,
+  - then A/B test a bounded admission rule only where the shadow decision actually fires.

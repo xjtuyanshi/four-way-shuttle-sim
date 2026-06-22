@@ -46,11 +46,25 @@ type CandidateRecord = {
   routeLevelPattern: string | null;
 };
 
+type StationReleaseOpportunity = {
+  stationId: string;
+  timeSec: number;
+  supplyGap: string;
+  emptyOutboundAssignments: number;
+  stationaryEmptyOutboundAssignments: number;
+  releasedStandbyRouteCount: number;
+  releasedOriginAllowedCount: number;
+  releasedOriginAllowedLengthLe8Count: number;
+  shortestReleasedOriginAllowedLength: number | null;
+  shortestReleasedOriginAllowedVehicleId: string | null;
+};
+
 type Sample = {
   timeSec: number;
   stationContracts: ShuttleSimState['traffic']['shadowLedger']['stationContracts'];
   candidateReasons: Record<string, number>;
   candidates: CandidateRecord[];
+  releaseOpportunities: StationReleaseOpportunity[];
 };
 
 const durationSec = numberArg('--duration-sec', 600);
@@ -135,12 +149,66 @@ function sampleState(state: ShuttleSimState): Sample {
   const tasksById = new Map(state.tasks.map((task) => [task.id, task]));
   const candidates = state.vehicles.map((vehicle) => diagnoseCandidate(vehicle, tasksById));
   const candidateReasons = countBy(candidates, (candidate) => candidate.reason);
+  const stationContracts = state.traffic.shadowLedger.stationContracts;
   return {
     timeSec: round(state.simTimeSec),
-    stationContracts: state.traffic.shadowLedger.stationContracts,
+    stationContracts,
     candidateReasons,
-    candidates
+    candidates,
+    releaseOpportunities: diagnoseReleaseOpportunities(state, stationContracts.stations, tasksById)
   };
+}
+
+function diagnoseReleaseOpportunities(
+  state: ShuttleSimState,
+  stations: ShuttleSimState['traffic']['shadowLedger']['stationContracts']['stations'],
+  tasksById: Map<string, TaskStateRecord>
+): StationReleaseOpportunity[] {
+  const emptyOutboundVehicles = state.vehicles.filter((vehicle) => {
+    if (!vehicle.taskId || vehicle.loaded) {
+      return false;
+    }
+    const task = tasksById.get(vehicle.taskId);
+    return task?.kind === 'outbound';
+  });
+  const stationaryEmptyOutboundVehicles = emptyOutboundVehicles.filter((vehicle) =>
+    vehicle.currentEdgeId === null &&
+    vehicle.legRemainingM <= 0 &&
+    vehicle.phaseRemainingSec <= 0
+  );
+
+  return stations
+    .filter((station) =>
+      station.headReservationSupply.gap === 'fleet-busy' ||
+      station.serviceTransition.gap === 'waiting-for-head-reservation'
+    )
+    .map((station) => {
+      const releasedRoutes = stationaryEmptyOutboundVehicles
+        .map((vehicle) => {
+          const route = internals.routeToInboundQueueStandby(vehicle, vehicle.currentNodeId, {
+            allowTaskedVehicle: true,
+            liftNodeId: station.stationId
+          });
+          const originAllowed = route ? internals.tasklessInboundQueueStandbyRouteOriginAllowed(route) : false;
+          return route && originAllowed
+            ? { vehicleId: vehicle.id, length: route.length }
+            : null;
+        })
+        .filter((entry): entry is { vehicleId: string; length: number } => entry !== null)
+        .sort((left, right) => left.length - right.length || left.vehicleId.localeCompare(right.vehicleId));
+      return {
+        stationId: station.stationId,
+        timeSec: round(state.simTimeSec),
+        supplyGap: station.headReservationSupply.gap,
+        emptyOutboundAssignments: emptyOutboundVehicles.length,
+        stationaryEmptyOutboundAssignments: stationaryEmptyOutboundVehicles.length,
+        releasedStandbyRouteCount: releasedRoutes.length,
+        releasedOriginAllowedCount: releasedRoutes.length,
+        releasedOriginAllowedLengthLe8Count: releasedRoutes.filter((route) => route.length <= 8).length,
+        shortestReleasedOriginAllowedLength: releasedRoutes[0]?.length ?? null,
+        shortestReleasedOriginAllowedVehicleId: releasedRoutes[0]?.vehicleId ?? null
+      };
+    });
 }
 
 function diagnoseCandidate(vehicle: VehicleState, tasksById: Map<string, TaskStateRecord>): CandidateRecord {
@@ -237,6 +305,7 @@ function summarize(samples: Sample[], finalState: ShuttleSimState): Record<strin
   const headReservationSupplyEntries = stationEntries.map((station) => station.headReservationSupply);
   const ledgerEntries = samples.map((sample) => sample.stationContracts.inboundDemandLedger);
   const candidateEntries = samples.flatMap((sample) => sample.candidates);
+  const releaseOpportunityEntries = samples.flatMap((sample) => sample.releaseOpportunities);
   const releasedRouteCandidates = candidateEntries.filter((candidate) => candidate.releasedStandbyRouteLength !== null);
   const releasedOriginAllowed = releasedRouteCandidates.filter((candidate) => candidate.releasedStandbyRouteOriginAllowed);
   const noStationTargetWithUncoveredReadyDemand = samples.reduce((count, sample) => {
@@ -274,6 +343,19 @@ function summarize(samples: Sample[], finalState: ShuttleSimState): Record<strin
       ).length,
       byLength: countBy(releasedRouteCandidates, (candidate) => String(candidate.releasedStandbyRouteLength)),
       byLevelPattern: countBy(releasedRouteCandidates, (candidate) => candidate.releasedStandbyRouteLevelPattern ?? 'none')
+    },
+    stationReleaseOpportunitySummary: {
+      totalStationGaps: releaseOpportunityEntries.length,
+      withStationSpecificReleaseRoute: releaseOpportunityEntries.filter((entry) => entry.releasedOriginAllowedCount > 0).length,
+      withShortStationSpecificReleaseRouteLe8: releaseOpportunityEntries.filter((entry) => entry.releasedOriginAllowedLengthLe8Count > 0).length,
+      shortestReleasedOriginAllowedLength: minNullable(releaseOpportunityEntries.map((entry) => entry.shortestReleasedOriginAllowedLength)),
+      bySupplyGap: countBy(releaseOpportunityEntries, (entry) => entry.supplyGap),
+      byShortestLength: countBy(
+        releaseOpportunityEntries.filter((entry) => entry.shortestReleasedOriginAllowedLength !== null),
+        (entry) => String(entry.shortestReleasedOriginAllowedLength)
+      ),
+      averageEmptyOutboundAssignments: round(average(releaseOpportunityEntries.map((entry) => entry.emptyOutboundAssignments)), 3),
+      averageStationaryEmptyOutboundAssignments: round(average(releaseOpportunityEntries.map((entry) => entry.stationaryEmptyOutboundAssignments)), 3)
     },
     stationInvariantCounts: finalState.traffic.shadowLedger.stationContracts.invariantCounts,
     finalInboundDemandLedgerStatusCounts: finalState.traffic.shadowLedger.stationContracts.inboundDemandLedger.statusCounts,
@@ -374,6 +456,11 @@ function countBy<T>(values: T[], selector: (value: T) => string): Record<string,
 
 function average(values: number[]): number {
   return values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+}
+
+function minNullable(values: Array<number | null>): number | null {
+  const numericValues = values.filter((value): value is number => value !== null);
+  return numericValues.length > 0 ? Math.min(...numericValues) : null;
 }
 
 function numberArg(name: string, fallback: number): number {
