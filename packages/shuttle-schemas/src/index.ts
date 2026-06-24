@@ -591,8 +591,10 @@ export const ShadowLedgerInvariantCountsSchema = z.object({
   staleLocalRouteClaim: z.number().int().nonnegative().default(0),
   blockedWaiterFutureClaim: z.number().int().nonnegative().default(0),
   orphanedYieldHold: z.number().int().nonnegative().default(0),
+  intentWithoutRouteOrHold: z.number().int().nonnegative().default(0),
   reservationOwnerMismatch: z.number().int().nonnegative().default(0),
   duplicateResourceOwner: z.number().int().nonnegative().default(0),
+  plannedRouteOverlap: z.number().int().nonnegative().default(0),
   conflictSessionMismatch: z.number().int().nonnegative().default(0),
   liftFifoInversion: z.number().int().nonnegative().default(0),
   columnModeConflict: z.number().int().nonnegative().default(0),
@@ -606,6 +608,31 @@ export const ShadowLedgerViolationSchema = z.object({
   vehicleId: z.string().nullable(),
   otherVehicleId: z.string().nullable().default(null),
   detail: z.string()
+});
+
+export const ShadowVehicleIntentSchema = z.object({
+  id: z.string(),
+  mode: z.literal('shadow').default('shadow'),
+  vehicleId: z.string(),
+  kind: z.enum(['idle', 'task', 'station-queue', 'station-service', 'station-clear', 'yield', 'park', 'hold']),
+  phase: z.enum(['idle', 'committed', 'executing', 'holding', 'blocked']),
+  taskId: z.string().nullable(),
+  stationId: z.string().nullable(),
+  goalNodeId: z.string().nullable(),
+  currentNodeId: z.string(),
+  targetNodeId: z.string().nullable(),
+  plannedGoalNodeId: z.string().nullable(),
+  routeNodeIds: z.array(z.string()).default([]),
+  localRouteReason: z.string().nullable(),
+  waitReason: z.string().nullable(),
+  blockingVehicleId: z.string().nullable(),
+  blockingReservationId: z.string().nullable(),
+  stationLeaseIds: z.array(z.string()).default([]),
+  conflictSessionIds: z.array(z.string()).default([]),
+  hasRunnableRoute: z.boolean().default(false),
+  hasExplicitHold: z.boolean().default(false),
+  hasStationLease: z.boolean().default(false),
+  hasYieldConflict: z.boolean().default(false)
 });
 
 export const ShadowStationContractDemandSchema = z.object({
@@ -686,7 +713,7 @@ export const StationKernelQueueLeaseSchema = z.object({
   vehicleId: z.string(),
   admissionCauseId: z.string(),
   serviceDemandId: z.string().nullable(),
-  targetKind: z.enum(['queue-slot', 'bounded-approach']),
+  targetKind: z.enum(['queue-slot', 'bounded-approach', 'service-envelope', 'clear-through']),
   targetNodeId: z.string(),
   slotIndex: z.number().int().positive().nullable(),
   phase: z.enum(['approaching', 'occupied', 'service-granted', 'servicing', 'revoking']),
@@ -764,7 +791,7 @@ export const ShadowStationRouteLeaseSchema = z.object({
   phase: z.enum(['occupied', 'targeted', 'planned', 'approaching']),
   resourceKey: z.string(),
   nodeId: z.string().nullable(),
-  slotIndex: z.number().int().positive().nullable(),
+  slotIndex: z.number().int().nonnegative().nullable(),
   taskId: z.string().nullable(),
   loadId: z.string().nullable(),
   routeNodeIds: z.array(z.string()).default([])
@@ -995,6 +1022,7 @@ export const ShadowResourceLedgerDiagnosticsSchema = z.object({
   futureClaimLeaseCount: z.number().int().nonnegative().default(0),
   invariantCounts: ShadowLedgerInvariantCountsSchema.default({}),
   violations: z.array(ShadowLedgerViolationSchema).default([]),
+  vehicleIntents: z.array(ShadowVehicleIntentSchema).default([]),
   stationContracts: ShadowStationContractDiagnosticsSchema.default({})
 });
 

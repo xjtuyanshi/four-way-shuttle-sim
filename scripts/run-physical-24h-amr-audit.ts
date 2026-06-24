@@ -522,7 +522,7 @@ function appendRollingRunLog(result: any): void {
     anomalies: result.anomalies ?? [],
     finalWaitingVehicles: result.finalWaitingVehicles ?? []
   };
-  const runs = [...existing.runs, entry].slice(-100);
+  const runs = [...existing.runs, entry];
   const updated = {
     schemaVersion: 'sim-run-rolling-log.v2',
     updatedAt: new Date().toISOString(),
@@ -547,7 +547,7 @@ function rerenderRollingRunLog(): void {
     schemaVersion: 'sim-run-rolling-log.v2',
     updatedAt: new Date().toISOString(),
     htmlPath: rollingLogHtmlPath,
-    runs: existing.runs.slice(-100)
+    runs: existing.runs
   };
   writeFileSync(rollingLogPath, `${JSON.stringify(updated, null, 2)}\n`);
   writeFileSync(rollingLogHtmlPath, renderRollingRunLogHtml(updated));
@@ -1174,6 +1174,8 @@ function auditState(state: ShuttleSimState, dtSec: number): void {
   if (state.kpis.deadlockCount > lastDeadlocks) {
     const deadlockCandidateIds = state.traffic.deadlockCandidateVehicleIds ?? [];
     const maxCurrentWaitSec = maxCurrentWaitingSec(state);
+    const deadlockEvent = latestDeadlockDetectedEvent(state.simTimeSec);
+    const eventWaitingVehicles = deadlockEvent?.details.waitingVehicles ?? null;
     const severity = maxCurrentWaitSec >= thresholds.longWaitSec ? 'critical' : 'watch';
     addAnomaly(
       state.simTimeSec,
@@ -1181,7 +1183,9 @@ function auditState(state: ShuttleSimState, dtSec: number): void {
       null,
       severity,
       'deadlock-count-increased',
-      `${lastDeadlocks} -> ${state.kpis.deadlockCount}; activeCandidates=${deadlockCandidateIds.join(',') || 'none'}; maxCurrentWaitSec=${round(maxCurrentWaitSec, 3)}`
+      `${lastDeadlocks} -> ${state.kpis.deadlockCount}; activeCandidates=${deadlockCandidateIds.join(',') || 'none'}; ` +
+        `eventWaitingVehicles=${eventWaitingVehicles ?? 'unknown'}; eventTimeSec=${deadlockEvent ? round(deadlockEvent.timeSec, 3) : 'unknown'}; ` +
+        `maxCurrentWaitSec=${round(maxCurrentWaitSec, 3)}`
     );
     recordCheckpoint(state, state.simTimeSec);
     lastDeadlocks = state.kpis.deadlockCount;
@@ -1233,6 +1237,20 @@ function auditState(state: ShuttleSimState, dtSec: number): void {
     }
     updateVehicleWindow(state, vehicle as VehicleRuntimeState, dtSec);
   }
+}
+
+function latestDeadlockDetectedEvent(timeSec: number): EventLogEntry | null {
+  const eventLog = sim.getEventLog();
+  for (let index = eventLog.length - 1; index >= 0; index -= 1) {
+    const event = eventLog[index]!;
+    if (event.timeSec > timeSec + 1e-9) {
+      continue;
+    }
+    if (event.eventType === 'deadlock-detected') {
+      return event;
+    }
+  }
+  return null;
 }
 
 function maxCurrentWaitingSec(state: ShuttleSimState): number {
