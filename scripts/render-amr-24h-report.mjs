@@ -16,6 +16,7 @@ const hourlyRows = data.hourlyPph ?? [];
 const windows = data.tenMinuteWindows ?? [];
 const amrSummary = data.amrSummary ?? [];
 const anomalies = data.anomalies ?? [];
+const finalWaitingVehicles = data.finalWaitingVehicles ?? [];
 const flaggedWindows = windows.filter((row) => row.riskCodes?.length > 0);
 const criticalAnomalies = anomalies.filter((item) => item.severity === 'critical');
 const warningAnomalies = anomalies.filter((item) => item.severity === 'warn');
@@ -23,7 +24,10 @@ const durationHours = data.finalSimTimeSec / 3600;
 const speed = data.finalSimTimeSec / Math.max(1, data.wallClockMs / 1000);
 const lastHourly = hourlyRows.at(-1) ?? {};
 const shadowLedger = data.shadowLedger ?? {};
+const stationQueueLeaseTransitions = data.stationQueueLeaseTransitions ?? {};
 const finalShadowLedger = shadowLedger.final ?? data.traffic?.shadowLedger ?? {};
+const finalStationContracts = finalShadowLedger.stationContracts ?? {};
+const finalStationSnapshots = finalStationContracts.stations ?? [];
 const maxShadowCounts = shadowLedger.maxInvariantCounts ?? finalShadowLedger.invariantCounts ?? {};
 const maxShadowTotal = Number(maxShadowCounts.total ?? finalShadowLedger.invariantCounts?.total ?? 0);
 const hasCoreSafetyWatch = Number(data.traffic.deadlocks ?? 0) > 0 || Number(data.traffic.livelocks ?? 0) > 0;
@@ -71,6 +75,7 @@ const html = `<!doctype html>
   <li><b class="${criticalAnomalies.length === 0 ? 'pass' : 'risk'}">AMR critical stuck signals: ${criticalAnomalies.length}.</b> The audit found ${warningAnomalies.length} warning anomalies and ${flaggedWindows.length} flagged 10-minute AMR windows.</li>
   <li><b class="${coreSafetyClass}">Physical safety counters:</b> deadlock=${data.traffic.deadlocks}, livelock=${data.traffic.livelocks}, physicalViolation=${data.traffic.physicalViolations}, min separation ${round(data.traffic.minVehicleSeparationM ?? 0, 3)}m. ${hasCoreSafetyWatch ? 'Deadlock/livelock counter changes are treated as watch signals unless they coincide with a long current wait or critical AMR window.' : ''}</li>
   <li><b class="${maxShadowTotal === 0 ? 'pass' : 'warn'}">Shadow resource ledger:</b> max invariant violations ${formatInt(maxShadowTotal)}, samples with violations ${formatInt(shadowLedger.samplesWithViolations ?? 0)} / ${formatInt(shadowLedger.samples ?? 0)}. This is diagnostic only and does not change vehicle behavior.</li>
+  <li><b class="${Number(stationQueueLeaseTransitions.total ?? 0) > 0 ? 'pass' : 'warn'}">Station queue lease transitions:</b> ${formatInt(stationQueueLeaseTransitions.total ?? 0)} lifecycle events. Reason mix: ${formatReasonList(stationQueueLeaseTransitions.byReason, 'count')}.</li>
   <li><b class="warn">新增矩阵：</b>每台 AMR 每 10 分钟完成任务数。持续 0 completion 不自动等于异常，但如果同时出现高 loopiness / 小 bbox / blocked，它就是强证据。</li>
 </ul>
 </div>
@@ -127,6 +132,36 @@ const html = `<!doctype html>
 </section>
 
 <section>
+<h2>Station Queue Lease Lifecycle</h2>
+<p><b>这是 station-owned coordinator 的关键审计。</b> Queue lease 应该从 reserve admission 进入服务，或被明确 reset/release；如果这里大量出现非 service-granted 原因，就说明 AMR 不是稳定排队，而是在被反复撤销和重路由。</p>
+<div id="station-lease-reasons" class="chart"></div>
+<div class="two">
+  <div class="card">
+    <h3>Reason Mix</h3>
+    <div class="table-wrap"><table class="small-table"><thead><tr><th>Reason</th><th>Count</th></tr></thead><tbody>${stationLeaseReasonRowsHtml()}</tbody></table></div>
+  </div>
+  <div class="card">
+    <h3>Age</h3>
+    <p>Total ${formatInt(stationQueueLeaseTransitions.total ?? 0)}. Min ${formatSec(stationQueueLeaseTransitions.ageSec?.min ?? 0)}, avg ${formatSec(stationQueueLeaseTransitions.ageSec?.avg ?? 0)}, max ${formatSec(stationQueueLeaseTransitions.ageSec?.max ?? 0)}.</p>
+    <div class="table-wrap"><table class="small-table"><thead><tr><th>Station</th><th>Count</th></tr></thead><tbody>${stationLeaseStationRowsHtml()}</tbody></table></div>
+  </div>
+</div>
+<div class="card">
+  <h3>Sample Events</h3>
+  <div class="table-wrap"><table class="small-table"><thead><tr><th>Time</th><th>Vehicle</th><th>Reason</th><th>Station</th><th>Target</th><th>Next Task</th><th>Age</th></tr></thead><tbody>${stationLeaseSampleRowsHtml()}</tbody></table></div>
+</div>
+</section>
+
+<section>
+<h2>Station Active Service Health</h2>
+<p><b>这是 station-owned coordinator 下一步要看的核心。</b> Active service 如果被 predecessor、aisle 或 occupied node 卡住，station 不能再把它当作健康服务；否则后续 queue / demand 判断会显示 gap=none，但实际通道已经堵住。</p>
+<div id="station-active-service" class="chart"></div>
+<div class="table-wrap">
+<table class="small-table"><thead><tr><th>Station</th><th>Demand</th><th>Claimed</th><th>Active</th><th>Blocked active</th><th>Longest current wait</th><th>Blocked reasons</th><th>Service gap</th><th>Active vehicles</th></tr></thead><tbody>${stationActiveServiceRowsHtml()}</tbody></table>
+</div>
+</section>
+
+<section>
 <h2>Shadow Resource Ledger</h2>
 <p><b>这部分是系统级资源审计，不参与控制。</b> 它把 node occupancy、reservation、target/planned/local route claim 临时汇总成一张影子 ledger，用来观察 stale claim、hidden hold、blocked waiter future claim、FIFO/column 冲突是否随时间增长。</p>
 <div id="shadow-ledger-hourly" class="chart"></div>
@@ -161,6 +196,14 @@ const html = `<!doctype html>
 <h2>AMR Summary Table</h2>
 <div class="table-wrap">
 <table><thead><tr><th>AMR</th><th>Path m</th><th>Completed</th><th>Moving h</th><th>Idle h</th><th>Blocked h</th><th>Flagged windows</th><th>Critical</th><th>Max loopiness</th><th>Max confined run</th><th>Top wait reason</th></tr></thead><tbody>${amrSummaryRows()}</tbody></table>
+</div>
+</section>
+
+<section>
+<h2>Final Waiting Vehicles</h2>
+<p><b>Current wait</b> is the age of the waiting episode that is active at the end of this run. <b>Cumulative blocked</b> is the total blocked time accumulated by that AMR across the whole run.</p>
+<div class="table-wrap">
+<table class="small-table"><thead><tr><th>AMR</th><th>Node</th><th>Target</th><th>Reason</th><th>Current wait</th><th>Cumulative blocked</th><th>Blocking AMR</th><th>Reservation</th></tr></thead><tbody>${finalWaitingRowsHtml()}</tbody></table>
 </div>
 </section>
 
@@ -221,6 +264,8 @@ const html = `<!doctype html>
   const windows = data.tenMinuteWindows || [];
   const amrSummary = data.amrSummary || [];
   const anomalies = data.anomalies || [];
+  const stationQueueLeaseTransitions = data.stationQueueLeaseTransitions || {};
+  const stationSnapshots = data.shadowLedger?.final?.stationContracts?.stations || data.traffic?.shadowLedger?.stationContracts?.stations || [];
   const vehicles = Array.from(new Set(windows.map((row) => row.vehicleId))).sort();
   const windowIndexes = Array.from(new Set(windows.map((row) => row.windowIndex))).sort((a, b) => a - b);
   const windowLabels = windowIndexes.map((index) => 'H' + (index / 6).toFixed(index % 6 === 0 ? 0 : 1));
@@ -401,6 +446,53 @@ const html = `<!doctype html>
     yaxis: { ...darkLayout.yaxis, automargin: true }
   }, config);
 
+  const leaseReasonRows = stationQueueLeaseTransitions.byReason || [];
+  Plotly.newPlot('station-lease-reasons', [{
+    type: 'bar',
+    orientation: 'h',
+    x: leaseReasonRows.map((row) => row.count).reverse(),
+    y: leaseReasonRows.map((row) => row.reason).reverse(),
+    marker: { color: leaseReasonRows.map((row) => row.reason === 'service-granted' ? '#7ee787' : '#f5c451').reverse() },
+    hovertemplate: '%{y}: %{x}<extra></extra>'
+  }], {
+    ...darkLayout,
+    title: { text: 'Station queue lease transition reasons', x: 0.02 },
+    xaxis: { ...darkLayout.xaxis, title: 'Events' },
+    yaxis: { ...darkLayout.yaxis, automargin: true }
+  }, config);
+
+  Plotly.newPlot('station-active-service', [
+    {
+      type: 'bar',
+      name: 'Active service',
+      x: stationSnapshots.map((row) => row.stationId),
+      y: stationSnapshots.map((row) => row.activeServiceDepth || 0),
+      marker: { color: '#52d6ff' },
+      hovertemplate: '%{x}<br>active service=%{y}<extra></extra>'
+    },
+    {
+      type: 'bar',
+      name: 'Blocked active service',
+      x: stationSnapshots.map((row) => row.stationId),
+      y: stationSnapshots.map((row) => row.activeServiceBlockedCount || 0),
+      marker: { color: '#ff7b72' },
+      text: stationSnapshots.map((row) => [
+        row.stationId,
+        'blocked active=' + (row.activeServiceBlockedCount || 0),
+        'longest current wait=' + (row.longestActiveServiceWaitSec || 0) + 's',
+        'reasons=' + Object.entries(row.activeServiceBlockedReasonCounts || {}).map(([reason, count]) => reason + ':' + count).join(', '),
+        'service gap=' + (row.serviceTransition?.gap || '-')
+      ].join('<br>')),
+      hovertemplate: '%{text}<extra></extra>'
+    }
+  ], {
+    ...darkLayout,
+    barmode: 'group',
+    title: { text: 'Station active service depth vs blocked active service', x: 0.02 },
+    xaxis: { ...darkLayout.xaxis, title: 'Inbound station' },
+    yaxis: { ...darkLayout.yaxis, title: 'Vehicles', rangemode: 'tozero' }
+  }, config);
+
   Plotly.newPlot('shadow-ledger-hourly', [
     { type: 'scatter', mode: 'lines+markers', name: 'Total shadow violations', x: hourly.map((row) => 'H' + row.hour), y: hourly.map((row) => row.shadowLedgerViolations || 0), line: { color: '#f5c451', width: 3 } },
     { type: 'scatter', mode: 'lines+markers', name: 'Duplicate resource owners', x: hourly.map((row) => 'H' + row.hour), y: hourly.map((row) => row.shadowLedgerDuplicateResourceOwners || 0), line: { color: '#ff7b72', width: 2 } },
@@ -476,6 +568,28 @@ function amrSummaryRows() {
   }).join('\n');
 }
 
+function finalWaitingRowsHtml() {
+  return finalWaitingVehicles.map((row) => {
+    const currentWaitSec = row.currentWaitSec ?? (
+      row.waitingSinceSec == null
+        ? 0
+        : Math.max(0, Number(data.finalSimTimeSec ?? 0) - Number(row.waitingSinceSec ?? 0))
+    );
+    const reservation = row.blockingReservationId ?? row.reservedNodeId ?? row.reservationNodeId ?? row.claimedNodeId ?? '-';
+    const reason = row.waitReason ?? row.reason ?? '-';
+    return `<tr>
+      <td>${htmlEscape(row.vehicleId ?? '-')}</td>
+      <td>${htmlEscape(row.nodeId ?? row.currentNodeId ?? '-')}</td>
+      <td>${htmlEscape(row.targetNodeId ?? row.plannedGoalNodeId ?? '-')}</td>
+      <td>${htmlEscape(reason)}</td>
+      <td>${formatSec(currentWaitSec)}</td>
+      <td>${formatSec(row.blockedTimeSec ?? 0)}</td>
+      <td>${htmlEscape(row.blockingVehicleId ?? '-')}</td>
+      <td>${htmlEscape(reservation)}</td>
+    </tr>`;
+  }).join('\n') || '<tr><td colspan="8">No final waiting vehicles.</td></tr>';
+}
+
 function hourlyRowsHtml() {
   return hourlyRows.map((row) => `<tr>
     <td>H${formatInt(row.hour)}</td>
@@ -511,6 +625,74 @@ function shadowCountRowsHtml() {
     <td>${htmlEscape(key)}</td>
     <td>${formatInt(value)}</td>
   </tr>`).join('\n') || '<tr><td colspan="2">No shadow ledger counts available.</td></tr>';
+}
+
+function stationLeaseReasonRowsHtml() {
+  const rows = stationQueueLeaseTransitions.byReason ?? [];
+  return rows.map((row) => `<tr>
+    <td>${htmlEscape(row.reason ?? '-')}</td>
+    <td>${formatInt(row.count)}</td>
+  </tr>`).join('\n') || '<tr><td colspan="2">No station queue lease transitions.</td></tr>';
+}
+
+function stationLeaseStationRowsHtml() {
+  const rows = stationQueueLeaseTransitions.byStation ?? [];
+  return rows.map((row) => `<tr>
+    <td>${htmlEscape(row.stationId ?? '-')}</td>
+    <td>${formatInt(row.count)}</td>
+  </tr>`).join('\n') || '<tr><td colspan="2">No station queue lease station counts.</td></tr>';
+}
+
+function stationLeaseSampleRowsHtml() {
+  const rows = stationQueueLeaseTransitions.samples ?? [];
+  return rows.slice(0, 50).map((row) => `<tr>
+    <td>${formatWindow(row.timeSec ?? 0)}</td>
+    <td>${htmlEscape(row.vehicleId ?? '-')}</td>
+    <td>${htmlEscape(row.reason ?? '-')}</td>
+    <td>${htmlEscape(row.stationId ?? '-')}</td>
+    <td>${htmlEscape(row.targetNodeId ?? '-')}</td>
+    <td>${htmlEscape(row.nextTaskKind ?? '-')}</td>
+    <td>${formatSec(row.ageSec ?? 0)}</td>
+  </tr>`).join('\n') || '<tr><td colspan="7">No sampled station queue lease events.</td></tr>';
+}
+
+function stationActiveServiceRowsHtml() {
+  return finalStationSnapshots.map((station) => {
+    const activeVehicles = (station.vehicleCommitments ?? [])
+      .filter((commitment) => commitment.kind === 'activeInboundService')
+      .map((commitment) => {
+        const wait = commitment.waitReason
+          ? ` wait=${commitment.waitReason}/${formatSec(commitment.currentWaitSec ?? 0)}`
+          : '';
+        const blocker = commitment.blockingVehicleId ? ` blocker=${commitment.blockingVehicleId}` : '';
+        const predecessor = commitment.predecessorTaskId
+          ? ` pred=${commitment.predecessorTaskId}/${commitment.predecessorVehicleId ?? '-'}@${commitment.predecessorDropoffNodeId ?? '-'}`
+          : '';
+        const predecessorState = commitment.predecessorTaskId
+          ? ` predState=${commitment.predecessorState ?? '-'} loaded=${commitment.predecessorLoaded ?? '-'} wait=${commitment.predecessorWaitReason ?? '-'}`
+          : '';
+        return `${commitment.vehicleId}${wait}${blocker}${predecessor}${predecessorState}`;
+      })
+      .join('<br>') || '-';
+    return `<tr>
+      <td>${htmlEscape(station.stationId ?? '-')}</td>
+      <td>${formatInt(station.demandCount)}</td>
+      <td>${formatInt(station.claimedDemandCount)}</td>
+      <td>${formatInt(station.activeServiceDepth)}</td>
+      <td>${formatInt(station.activeServiceBlockedCount)}</td>
+      <td>${formatSec(station.longestActiveServiceWaitSec ?? 0)}</td>
+      <td>${formatReasonCountObject(station.activeServiceBlockedReasonCounts)}</td>
+      <td>${htmlEscape(station.serviceTransition?.gap ?? '-')}</td>
+      <td style="white-space:normal;text-align:left">${activeVehicles}</td>
+    </tr>`;
+  }).join('\n') || '<tr><td colspan="9">No station active service summary available.</td></tr>';
+}
+
+function formatReasonCountObject(counts) {
+  return Object.entries(counts ?? {})
+    .sort((left, right) => Number(right[1] ?? 0) - Number(left[1] ?? 0) || left[0].localeCompare(right[0]))
+    .map(([reason, count]) => `${htmlEscape(reason)} (${formatInt(count)})`)
+    .join('<br>') || '-';
 }
 
 function shadowViolationRowsHtml() {

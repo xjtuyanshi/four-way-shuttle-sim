@@ -1,4 +1,4 @@
-import { ShuttleScenarioSchema, ShuttleSimStateSchema, type Reservation, type ShuttleScenario } from '@four-way-shuttle/schemas';
+import { ShuttleScenarioSchema, ShuttleSimStateSchema, type Reservation, type ShuttleScenario, type ShuttleSimState } from '@four-way-shuttle/schemas';
 
 import goldenStaticSceneContract from '../../../config/shuttle/static-scene-contract.golden.json';
 import {
@@ -635,14 +635,18 @@ describe('shuttle phase 0 SimCore', () => {
       expect(occupiedSlotIds).toEqual(sourceSlotIdsByLift.get(liftId)!.sort());
     }
     const inboundTasks = state.tasks.filter((task) => task.kind === 'inbound');
-    expect(inboundTasks).toHaveLength(2);
+    expect(inboundTasks).toHaveLength(4);
     expect(inboundTasks.map((task) => task.pickupNodeId)).toEqual([
+      'column-top-a-c08',
+      'column-top-a-c22',
       'column-top-a-c08',
       'column-top-a-c22'
     ]);
     expect(inboundTasks.map((task) => task.dropoffNodeId)).toEqual([
       'storage-r14-c01',
-      'storage-r14-c15'
+      'storage-r14-c15',
+      'storage-r13-c01',
+      'storage-r13-c15'
     ]);
     expect(state.vehicles.map((vehicle) => vehicle.currentNodeId)).toEqual([
       'storage-r02-c07',
@@ -807,6 +811,66 @@ describe('shuttle phase 0 SimCore', () => {
       'column-top-a-c09',
       'column-top-a-c08'
     ]);
+  });
+
+  it('does not treat an inbound temporary-yield storage pocket as the pickup dispatch goal', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 4 },
+      taskGeneration: {
+        inboundRatePerHour: 3600,
+        outboundRatePerHour: 3600,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 4,
+        initialStorageFillPolicy: 'zone-balanced-50',
+        maxTasks: 1
+      },
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      }
+    }));
+    sim.addLoadForTest({
+      id: 'temporary-yield-pocket-load',
+      state: 'waiting',
+      nodeId: 'lift-02-inbound-buffer-03',
+      vehicleId: null,
+      weightKg: 100
+    });
+    sim.addTaskForTest({
+      id: 'temporary-yield-pocket-task',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c22',
+      dropoffNodeId: 'storage-r07-c16',
+      loadId: 'temporary-yield-pocket-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', ['storage-r01-c14']);
+    sim.setVehicleTaskForTest('SH-01', 'temporary-yield-pocket-task', false);
+    sim.setVehicleRouteForTest('SH-02', ['column-top-a-c23']);
+    sim.setVehicleRouteForTest('SH-03', ['column-top-a-c24']);
+    sim.setVehicleRouteForTest('SH-04', ['column-top-a-c25']);
+
+    const internals = sim as unknown as {
+      vehicles: Array<{ id: string; currentNodeId: string }>;
+      tasks: Array<{ id: string }>;
+      taskDispatchGoalNodeId(task: unknown, vehicle: unknown): string;
+      topLiftInboundAssignmentMustStageThroughQueue(vehicle: unknown, task: unknown): boolean;
+      topLiftInboundQueueNodeIdForTask(task: unknown, vehicle: unknown): string | null;
+    };
+    const vehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    const task = internals.tasks.find((candidate) => candidate.id === 'temporary-yield-pocket-task')!;
+
+    expect(internals.topLiftInboundAssignmentMustStageThroughQueue(vehicle, task)).toBe(true);
+    expect(internals.topLiftInboundQueueNodeIdForTask(task, vehicle)).toBeNull();
+    expect(internals.taskDispatchGoalNodeId(task, vehicle)).toBe('column-top-a-c22');
+    expect(internals.taskDispatchGoalNodeId(task, vehicle)).not.toBe(vehicle.currentNodeId);
   });
 
   it('keeps upstream inbound queue slots available while a vehicle travels to the queue tail', () => {
@@ -1384,9 +1448,141 @@ describe('shuttle phase 0 SimCore', () => {
     expectRouteHopsAdjacent(scenario, adoptedVehicle?.routeNodeIds ?? []);
   });
 
+  it('releases a stale taskless inbound queue reserve when active inbound service needs its slot', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 4 },
+      taskGeneration: {
+        inboundRatePerHour: 3600,
+        outboundRatePerHour: 3600,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({
+      id: 'stale-reserve-load',
+      state: 'waiting',
+      nodeId: 'lift-01-inbound-buffer-01',
+      vehicleId: null,
+      weightKg: 100
+    });
+    sim.addTaskForTest({
+      id: 'stale-reserve-active-task',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r10-c12',
+      loadId: 'stale-reserve-load',
+      vehicleId: 'SH-02',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', ['column-top-a-c23']);
+    sim.setVehicleRouteForTest('SH-02', ['column-top-a-c24', 'column-top-a-c23', 'column-top-a-c22', 'module-02-spine-top-a']);
+    sim.setVehicleRouteForTest('SH-03', ['module-01-spine-middle']);
+    sim.setVehicleRouteForTest('SH-04', ['module-02-spine-middle']);
+    sim.setVehicleTaskForTest('SH-02', 'stale-reserve-active-task', false);
+    sim.setVehicleWaitingForTest('SH-02', {
+      targetNodeId: 'column-top-a-c23',
+      waitReason: 'node-occupied',
+      blockingVehicleId: 'SH-01',
+      waitingSinceSec: 0
+    });
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        currentNodeId: string;
+        targetNodeId: string | null;
+        plannedGoalNodeId: string | null;
+        plannedRouteNodeIds: string[];
+        localRouteNodeIds: string[];
+        localRouteReason: string | null;
+        routeNodeIds: string[];
+      }>;
+      holdTasklessInboundQueueStandby(vehicle: unknown, nodeId: string): boolean;
+    };
+    const reserveVehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    reserveVehicle.plannedGoalNodeId = 'column-top-a-c23';
+    reserveVehicle.plannedRouteNodeIds = ['column-top-a-c23'];
+    reserveVehicle.localRouteNodeIds = [];
+    reserveVehicle.localRouteReason = 'inbound-queue-standby';
+
+    expect(internals.holdTasklessInboundQueueStandby(reserveVehicle, 'column-top-a-c23')).toBe(true);
+
+    expect(reserveVehicle.localRouteReason).toBe('post-dropoff-column-exit');
+    expect(reserveVehicle.routeNodeIds[0]).toBe('column-top-a-c23');
+    expect(reserveVehicle.routeNodeIds.length).toBeGreaterThan(1);
+    expect(reserveVehicle.targetNodeId).not.toBe('column-top-a-c23');
+    expect(sim.getEventLog()).toContainEqual(expect.objectContaining({
+      eventType: 'station-queue-reserve-released',
+      vehicleId: 'SH-01',
+      fromNodeId: 'column-top-a-c23',
+      reason: 'active-inbound-service-claims-reserve-slot',
+      details: expect.objectContaining({
+        stationId: 'lift-02-inbound',
+        blockedVehicleId: 'SH-02',
+        blockedTaskId: 'stale-reserve-active-task'
+      })
+    }));
+    expectRouteHopsAdjacent(scenario, reserveVehicle.routeNodeIds);
+  });
+
+  it('keeps a taskless inbound queue reserve parked when no active service claims the slot', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 3600,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['column-top-a-c09']);
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        currentNodeId: string;
+        targetNodeId: string | null;
+        plannedGoalNodeId: string | null;
+        plannedRouteNodeIds: string[];
+        localRouteNodeIds: string[];
+        localRouteReason: string | null;
+        routeNodeIds: string[];
+      }>;
+      holdTasklessInboundQueueStandby(vehicle: unknown, nodeId: string): boolean;
+    };
+    const reserveVehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    reserveVehicle.plannedGoalNodeId = 'column-top-a-c09';
+    reserveVehicle.plannedRouteNodeIds = ['column-top-a-c09'];
+    reserveVehicle.localRouteNodeIds = [];
+    reserveVehicle.localRouteReason = 'inbound-queue-standby';
+
+    expect(internals.holdTasklessInboundQueueStandby(reserveVehicle, 'column-top-a-c09')).toBe(true);
+
+    expect(reserveVehicle.localRouteReason).toBe('inbound-queue-standby');
+    expect(reserveVehicle.routeNodeIds).toEqual(['column-top-a-c09']);
+    expect(reserveVehicle.targetNodeId).toBeNull();
+    expect(sim.getEventLog()).not.toContainEqual(expect.objectContaining({
+      eventType: 'station-queue-reserve-released'
+    }));
+  });
+
   it('does not let outbound work steal a demanded inbound queue standby reserve', () => {
     const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
-      vehicles: { count: 2 },
+      vehicles: { count: 3 },
       taskGeneration: {
         inboundRatePerHour: 3600,
         outboundRatePerHour: 3600,
@@ -1466,7 +1662,7 @@ describe('shuttle phase 0 SimCore', () => {
 
   it('lets outbound work use a stale inbound queue standby when no inbound source demand exists', () => {
     const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
-      vehicles: { count: 2 },
+      vehicles: { count: 4 },
       taskGeneration: {
         inboundRatePerHour: 0,
         outboundRatePerHour: 3600,
@@ -1706,6 +1902,9 @@ describe('shuttle phase 0 SimCore', () => {
       claimedDemandCount: 1,
       queueReservationCount: 1,
       activeServiceDepth: 1,
+      activeServiceBlockedCount: 0,
+      activeServiceBlockedReasonCounts: {},
+      longestActiveServiceWaitSec: 0,
       physicalDepth: 2,
       nearCoveredDepth: 2,
       activeAssignmentQueueLeaseCount: 1,
@@ -1772,6 +1971,1317 @@ describe('shuttle phase 0 SimCore', () => {
       resourceKey: 'station:lift-01-inbound:queue-slot:2',
       slotIndex: 2
     }));
+    expect(stationContracts.invariantCounts).toMatchObject({
+      kernelQueueLeaseWithoutRouteLease: 0,
+      routeLeaseWithoutKernelQueueLease: 0
+    });
+    expect(stationContracts.violations).not.toContainEqual(expect.objectContaining({
+      code: expect.stringMatching(/station-(?:kernel|route)-lease/)
+    }));
+  });
+
+  it('reports outbound station shadow contract and paired lift coordinator state without changing dispatch', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    }));
+    sim.addLoadForTest({
+      id: 'shadow-outbound-load',
+      state: 'carried',
+      nodeId: null,
+      vehicleId: 'SH-01',
+      weightKg: 100
+    });
+    sim.addTaskForTest({
+      id: 'shadow-outbound-task',
+      kind: 'outbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r04-c03',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'shadow-outbound-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', ['column-bottom-b-c08']);
+    sim.setVehicleTaskForTest('SH-01', 'shadow-outbound-task', true);
+
+    const state = ShuttleSimStateSchema.parse(sim.getState());
+    const stationContracts = state.traffic.shadowLedger.stationContracts;
+    const outboundStation = stationContracts.stations.find((candidate) => candidate.stationId === 'lift-01-outbound');
+    const pairCoordinator = stationContracts.stationPairCoordinators.find((candidate) => candidate.pairId === 'lift-01');
+
+    expect(outboundStation).toMatchObject({
+      stationId: 'lift-01-outbound',
+      kind: 'outbound',
+      demandCount: 1,
+      claimedDemandCount: 1,
+      activeServiceDepth: 1,
+      activeServiceBlockedCount: 0,
+      coordinator: {
+        mode: 'shadow',
+        decision: 'hold-active-service'
+      },
+      serviceTransition: {
+        mode: 'shadow',
+        headDemandId: 'outbound-task:shadow-outbound-task',
+        headDemandStatus: 'claimed',
+        activeServiceVehicleId: 'SH-01',
+        activeServiceTaskId: 'shadow-outbound-task',
+        gap: 'none'
+      }
+    });
+    expect(outboundStation?.demands).toContainEqual(expect.objectContaining({
+      id: 'outbound-task:shadow-outbound-task',
+      kind: 'outbound-task',
+      status: 'claimed',
+      stationId: 'lift-01-outbound',
+      loadId: 'shadow-outbound-load',
+      taskId: 'shadow-outbound-task',
+      nodeId: 'column-bottom-b-c08'
+    }));
+    expect(outboundStation?.vehicleCommitments).toContainEqual(expect.objectContaining({
+      vehicleId: 'SH-01',
+      kind: 'activeOutboundService',
+      stationId: 'lift-01-outbound',
+      taskId: 'shadow-outbound-task'
+    }));
+    expect(outboundStation?.routeLeases).toContainEqual(expect.objectContaining({
+      vehicleId: 'SH-01',
+      kind: 'protectedThroatLease',
+      stationId: 'lift-01-outbound',
+      nodeId: 'column-bottom-b-c08'
+    }));
+    expect(pairCoordinator).toMatchObject({
+      pairId: 'lift-01',
+      mode: 'shadow',
+      inboundStationId: 'lift-01-inbound',
+      outboundStationId: 'lift-01-outbound',
+      outboundDemandCount: 1,
+      activeServiceCount: 1
+    });
+    expect(pairCoordinator?.protectedThroatNodeIds).toContain('column-bottom-b-c08');
+    expect(stationContracts.invariantCounts.routeLeaseWithoutKernelQueueLease).toBe(0);
+    expect(stationContracts.violations).not.toContainEqual(expect.objectContaining({
+      stationId: 'lift-01-outbound',
+      code: expect.stringMatching(/station-(?:kernel|route)-lease/)
+    }));
+  });
+
+  it('defines outbound station approach slots on the yellow feasible bottom-a lane', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    }));
+    const internals = sim as unknown as {
+      outboundStationPlanForDropoff(stationId: string, dropoffNodeId: string): {
+        passNodeId: string;
+        approachSlotNodeIdsHeadToTail: string[];
+        admissionEdges: Array<{ fromNodeId: string; toNodeId: string }>;
+        advanceEdges: Array<{ fromNodeId: string; toNodeId: string }>;
+        serviceEntryEdge: { fromNodeId: string; toNodeId: string } | null;
+        serviceEnvelopeId: string;
+      } | null;
+      topLiftOutboundApproachMeterNodeIds(stationId: string): string[];
+    };
+
+    const leftPlan = internals.outboundStationPlanForDropoff('lift-01-outbound', 'column-bottom-b-c08');
+    expect(leftPlan).toMatchObject({
+      passNodeId: 'column-bottom-a-c07',
+      approachSlotNodeIdsHeadToTail: [
+        'column-bottom-a-c07',
+        'column-bottom-a-c08',
+        'column-bottom-a-c09'
+      ],
+      admissionEdges: [
+        { fromNodeId: 'column-bottom-a-c10', toNodeId: 'column-bottom-a-c09' }
+      ],
+      advanceEdges: [
+        { fromNodeId: 'column-bottom-a-c09', toNodeId: 'column-bottom-a-c08' },
+        { fromNodeId: 'column-bottom-a-c08', toNodeId: 'column-bottom-a-c07' }
+      ],
+      serviceEntryEdge: { fromNodeId: 'column-bottom-a-c07', toNodeId: 'column-bottom-b-c07' },
+      serviceEnvelopeId: 'lift-01-outbound:column-bottom-b-c08:service-envelope'
+    });
+    expect(leftPlan?.approachSlotNodeIdsHeadToTail).not.toEqual(internals.topLiftOutboundApproachMeterNodeIds('lift-01-outbound'));
+    expect(leftPlan?.approachSlotNodeIdsHeadToTail).not.toContain('column-bottom-b-c04');
+
+    const rightPlan = internals.outboundStationPlanForDropoff('lift-02-outbound', 'column-bottom-b-c22');
+    expect(rightPlan).toMatchObject({
+      passNodeId: 'column-bottom-a-c21',
+      approachSlotNodeIdsHeadToTail: [
+        'column-bottom-a-c21',
+        'column-bottom-a-c20',
+        'column-bottom-a-c19'
+      ],
+      admissionEdges: [
+        { fromNodeId: 'column-bottom-a-c18', toNodeId: 'column-bottom-a-c19' }
+      ],
+      advanceEdges: [
+        { fromNodeId: 'column-bottom-a-c19', toNodeId: 'column-bottom-a-c20' },
+        { fromNodeId: 'column-bottom-a-c20', toNodeId: 'column-bottom-a-c21' }
+      ],
+      serviceEntryEdge: { fromNodeId: 'column-bottom-a-c21', toNodeId: 'column-bottom-b-c21' },
+      serviceEnvelopeId: 'lift-02-outbound:column-bottom-b-c22:service-envelope'
+    });
+    expect(rightPlan?.approachSlotNodeIdsHeadToTail).not.toEqual(internals.topLiftOutboundApproachMeterNodeIds('lift-02-outbound'));
+    expect(rightPlan?.approachSlotNodeIdsHeadToTail).not.toContain('column-bottom-b-c19');
+
+    const stationPairs = ShuttleSimStateSchema.parse(sim.getState()).traffic.shadowLedger.stationContracts.stationPairCoordinators;
+    expect(stationPairs.find((candidate) => candidate.pairId === 'lift-01')?.outboundQueueSlotNodeIds).toEqual(leftPlan?.approachSlotNodeIdsHeadToTail);
+    expect(stationPairs.find((candidate) => candidate.pairId === 'lift-02')?.outboundQueueSlotNodeIds).toEqual(rightPlan?.approachSlotNodeIdsHeadToTail);
+  });
+
+  it('does not turn outbound clear-through into sibling inbound reserve while outbound dock is claimed', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 3600,
+        outboundRatePerHour: 3600,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    }));
+    const internals = sim as unknown as {
+      vehicles: Array<{ id: string }>;
+      tasks: Array<{ id: string }>;
+      outboundLiftDropoffClearanceRoute(vehicle: unknown, task: unknown): string[] | null;
+      topLiftInboundReserveQueueSlot(nodeId: string): { liftNodeId: string; slotIndex: number } | null;
+    };
+
+    sim.setVehicleRouteForTest('SH-01', ['column-bottom-b-c22']);
+    sim.addTaskForTest({
+      id: 'cleared-outbound-task',
+      kind: 'outbound',
+      state: 'completed',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: 1,
+      pickupNodeId: 'storage-r14-c20',
+      dropoffNodeId: 'column-bottom-b-c22',
+      loadId: 'cleared-outbound-load',
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addLoadForTest({ id: 'active-outbound-load', state: 'stored', nodeId: 'storage-r14-c20', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'active-outbound-task',
+      kind: 'outbound',
+      state: 'assigned',
+      createdAtSec: 1,
+      assignedAtSec: 1,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r14-c20',
+      dropoffNodeId: 'column-bottom-b-c22',
+      loadId: 'active-outbound-load',
+      vehicleId: 'SH-02',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-02', [
+      'parking-07',
+      'column-bottom-b-c22',
+      'column-bottom-a-c22',
+      'module-02-spine-bottom-a',
+      'column-bottom-a-c21',
+      'column-bottom-a-c20',
+      'storage-r14-c20'
+    ]);
+    sim.setVehicleTaskForTest('SH-02', 'active-outbound-task', false);
+
+    const clearingVehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    const clearedTask = internals.tasks.find((candidate) => candidate.id === 'cleared-outbound-task')!;
+    const route = internals.outboundLiftDropoffClearanceRoute(clearingVehicle, clearedTask);
+
+    expect(route).toBeTruthy();
+    expect(route).not.toContain('column-top-a-c23');
+    expect(route).not.toContain('column-top-a-c24');
+    expect(route).not.toContain('column-top-a-c25');
+    expect(internals.topLiftInboundReserveQueueSlot(route?.at(-1) ?? '')).toBeNull();
+  });
+
+  it('revokes a taskless inbound reserve that blocks active outbound dock access', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 3600,
+        outboundRatePerHour: 3600,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    }));
+    sim.addLoadForTest({ id: 'dock-active-outbound-load', state: 'stored', nodeId: 'storage-r14-c20', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'dock-active-outbound-task',
+      kind: 'outbound',
+      state: 'assigned',
+      createdAtSec: 1,
+      assignedAtSec: 1,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r14-c20',
+      dropoffNodeId: 'column-bottom-b-c22',
+      loadId: 'dock-active-outbound-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', [
+      'parking-07',
+      'column-bottom-b-c22',
+      'column-bottom-a-c22',
+      'module-02-spine-bottom-a',
+      'column-bottom-a-c21',
+      'column-bottom-a-c20',
+      'storage-r14-c20'
+    ]);
+    sim.setVehicleTaskForTest('SH-01', 'dock-active-outbound-task', false);
+    sim.setVehicleRouteForTest('SH-02', [
+      'column-bottom-b-c22',
+      'module-02-spine-bottom-b',
+      'module-02-spine-bottom-a',
+      'module-02-spine-middle',
+      'module-02-spine-top-b',
+      'column-top-b-c22',
+      'column-top-b-c23',
+      'column-top-a-c23'
+    ]);
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        localRouteReason: string | null;
+        routeNodeIds: string[];
+        plannedGoalNodeId: string | null;
+        targetNodeId: string | null;
+      }>;
+      tryReleaseTasklessInboundReserveFromOutboundDockConflict(reserveVehicle: unknown, outboundVehicle: unknown): boolean;
+    };
+    const outboundVehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    const reserveVehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-02')!;
+    reserveVehicle.localRouteReason = 'inbound-queue-standby';
+    reserveVehicle.plannedGoalNodeId = 'column-top-a-c23';
+
+    expect(internals.tryReleaseTasklessInboundReserveFromOutboundDockConflict(reserveVehicle, outboundVehicle)).toBe(true);
+    expect(reserveVehicle.localRouteReason).toBe('outbound-lift-clearance');
+    expect(reserveVehicle.plannedGoalNodeId).not.toBe('column-top-a-c23');
+    expect(reserveVehicle.routeNodeIds[0]).toBe('column-bottom-b-c22');
+    expect(reserveVehicle.routeNodeIds).not.toContain('module-02-spine-top-b');
+    expect(sim.getEventLog()).toContainEqual(expect.objectContaining({
+      eventType: 'station-queue-reserve-released',
+      vehicleId: 'SH-02',
+      reason: 'inbound-reserve-revoked-for-outbound-corridor',
+      details: expect.objectContaining({
+        outboundLiftNodeId: 'lift-02-outbound',
+        outboundVehicleId: 'SH-01',
+        outboundTaskId: 'dock-active-outbound-task'
+      })
+    }));
+  });
+
+  it('uses outbound station envelope passes as the throat source of truth', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    }));
+    const internals = sim as unknown as {
+      vehicles: Array<{ id: string }>;
+      tasks: Array<{ id: string }>;
+      outboundStationApproachBoundaryNodeId(stationId: string): string | null;
+      outboundStationPlanForDropoff(stationId: string, dropoffNodeId: string): {
+        passNodeId: string;
+        approachSlotNodeIdsHeadToTail: string[];
+        admissionEdges: Array<{ fromNodeId: string; toNodeId: string }>;
+        advanceEdges: Array<{ fromNodeId: string; toNodeId: string }>;
+        serviceEntryEdge: { fromNodeId: string; toNodeId: string } | null;
+        approachNodeIds: string[];
+        serviceRouteNodeIds: string[];
+        serviceEnvelopeNodeIds: string[];
+      } | null;
+      outboundStationAwaitingTransition(task: unknown, vehicle: unknown): boolean;
+      outboundStationSlot1NodeId(stationId: string): string | null;
+      outboundDropoffDispatchGoalNodeId(task: unknown, vehicle: unknown): string;
+      reconcileOutboundStationRuntime(): void;
+      holdOutboundStationAwaitTransition(vehicle: unknown, task: unknown, dtSec: number): void;
+      outboundStationActiveTransitionForVehicle(vehicleId: string): { phase: string; routeNodeIds: string[]; envelopeNodeIds: string[] } | null;
+      stationCoordinatorOutboundProtectedMoveBlocker(vehicle: unknown, toNodeId: string): { reason: string; blockingVehicleId: string | null } | null;
+      outboundStationRuntimes: Map<string, { envelopeOwnerRequestId: string | null; activeTransition: { id: string } | null }>;
+    };
+    const boundaryNodeId = internals.outboundStationApproachBoundaryNodeId('lift-01-outbound');
+    const stationPlan = internals.outboundStationPlanForDropoff('lift-01-outbound', 'column-bottom-b-c08');
+    const slot1NodeId = internals.outboundStationSlot1NodeId('lift-01-outbound');
+    expect(boundaryNodeId).toBe('column-bottom-a-c07');
+    expect(stationPlan).toMatchObject({
+      passNodeId: 'column-bottom-a-c07',
+      approachSlotNodeIdsHeadToTail: [
+        'column-bottom-a-c07',
+        'column-bottom-a-c08',
+        'column-bottom-a-c09'
+      ],
+      admissionEdges: [
+        { fromNodeId: 'column-bottom-a-c10', toNodeId: 'column-bottom-a-c09' }
+      ],
+      advanceEdges: [
+        { fromNodeId: 'column-bottom-a-c09', toNodeId: 'column-bottom-a-c08' },
+        { fromNodeId: 'column-bottom-a-c08', toNodeId: 'column-bottom-a-c07' }
+      ],
+      serviceEntryEdge: { fromNodeId: 'column-bottom-a-c07', toNodeId: 'column-bottom-b-c07' },
+      approachNodeIds: expect.arrayContaining([
+        'column-bottom-b-c04',
+        'column-bottom-a-c04',
+        'column-bottom-a-c05',
+        'column-bottom-a-c06',
+        'column-bottom-a-c07'
+      ]),
+      serviceRouteNodeIds: expect.arrayContaining([
+        'column-bottom-a-c07',
+        'column-bottom-b-c07',
+        'column-bottom-b-c08'
+      ]),
+      serviceEnvelopeNodeIds: expect.arrayContaining([
+        'column-bottom-b-c07',
+        'column-bottom-b-c08'
+      ])
+    });
+    expect(stationPlan?.serviceEnvelopeNodeIds).not.toContain('column-bottom-b-c04');
+    expect(stationPlan?.serviceEnvelopeNodeIds).not.toContain('column-bottom-a-c07');
+    expect(slot1NodeId).toBeTruthy();
+    const firstServiceLaneNodeId = 'column-bottom-b-c07';
+
+    sim.setVehicleRouteForTest('SH-01', [boundaryNodeId!]);
+    sim.addLoadForTest({ id: 'station-grant-load', state: 'carried', nodeId: null, vehicleId: 'SH-01', weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'station-grant-task',
+      kind: 'outbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r04-c03',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'station-grant-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleTaskForTest('SH-01', 'station-grant-task', true);
+
+    const headVehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    const headTask = internals.tasks.find((candidate) => candidate.id === 'station-grant-task')!;
+    const visitStation = ShuttleSimStateSchema.parse(sim.getState()).traffic.shadowLedger.stationContracts.stations.find(
+      (candidate) => candidate.stationId === 'lift-01-outbound'
+    );
+    expect(visitStation?.outboundVisits).toContainEqual(expect.objectContaining({
+      id: 'outbound-visit:station-grant-task',
+      stationId: 'lift-01-outbound',
+      taskId: 'station-grant-task',
+      vehicleId: 'SH-01',
+      dropoffNodeId: 'column-bottom-b-c08',
+      passNodeId: 'column-bottom-a-c07',
+      phase: 'at-pass',
+      currentSlotIndex: 0,
+      currentNodeId: 'column-bottom-a-c07'
+    }));
+
+    sim.setVehicleRouteForTest('SH-01', ['column-bottom-a-c04']);
+    sim.setVehicleTaskForTest('SH-01', 'station-grant-task', true);
+    expect(internals.outboundDropoffDispatchGoalNodeId(headTask, headVehicle)).toBe(boundaryNodeId);
+    expect(internals.stationCoordinatorOutboundProtectedMoveBlocker(headVehicle, 'column-bottom-a-c04')).toBeNull();
+    expect(internals.stationCoordinatorOutboundProtectedMoveBlocker(headVehicle, 'column-bottom-a-c05')).toBeNull();
+    expect(internals.stationCoordinatorOutboundProtectedMoveBlocker(headVehicle, boundaryNodeId!)).toBeNull();
+    sim.setVehicleRouteForTest('SH-01', ['column-bottom-b-c12']);
+    sim.setVehicleTaskForTest('SH-01', 'station-grant-task', true);
+    expect(internals.outboundDropoffDispatchGoalNodeId(headTask, headVehicle)).toBe(boundaryNodeId);
+    expect(internals.outboundStationAwaitingTransition(headTask, headVehicle)).toBe(false);
+    expect(internals.stationCoordinatorOutboundProtectedMoveBlocker(headVehicle, 'column-bottom-a-c12')).toBeNull();
+    expect(internals.stationCoordinatorOutboundProtectedMoveBlocker(headVehicle, 'column-bottom-b-c11')).toMatchObject({
+      reason: 'outbound-station-await-transition',
+      blockingVehicleId: null
+    });
+    sim.setVehicleRouteForTest('SH-01', [boundaryNodeId!]);
+    sim.setVehicleTaskForTest('SH-01', 'station-grant-task', true);
+
+    expect(internals.outboundDropoffDispatchGoalNodeId(headTask, headVehicle)).toBe(boundaryNodeId);
+    expect(internals.stationCoordinatorOutboundProtectedMoveBlocker(headVehicle, firstServiceLaneNodeId)).toMatchObject({
+      reason: 'outbound-station-await-transition',
+      blockingVehicleId: null
+    });
+    internals.holdOutboundStationAwaitTransition(headVehicle, headTask, 1);
+    const heldStateVehicle = sim.getState().vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    expect(heldStateVehicle).toMatchObject({
+      waitReason: 'outbound-station-await-transition',
+      targetNodeId: null,
+      plannedGoalNodeId: null,
+      blockingVehicleId: null
+    });
+
+    internals.reconcileOutboundStationRuntime();
+
+    expect(internals.outboundStationActiveTransitionForVehicle('SH-01')).toMatchObject({
+      phase: 'entering',
+      routeNodeIds: expect.arrayContaining([boundaryNodeId, firstServiceLaneNodeId, 'column-bottom-b-c08']),
+      envelopeNodeIds: expect.arrayContaining([firstServiceLaneNodeId, 'column-bottom-b-c08'])
+    });
+    expect(internals.outboundStationActiveTransitionForVehicle('SH-01')?.routeNodeIds.at(-1)).toBe('column-bottom-b-c08');
+    expect(internals.outboundDropoffDispatchGoalNodeId(headTask, headVehicle)).toBe('column-bottom-b-c08');
+    expect(internals.stationCoordinatorOutboundProtectedMoveBlocker(headVehicle, firstServiceLaneNodeId)).toBeNull();
+    expect(internals.outboundStationRuntimes.get('lift-01-outbound')).toMatchObject({
+      envelopeOwnerRequestId: 'outbound-station-request:station-grant-task'
+    });
+  });
+
+  it('limits outbound station work admission to one active request per station until approach leases are authoritative', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    }));
+    const internals = sim as unknown as {
+      tasks: Array<{ id: string }>;
+      taskAssignmentBlockReason(task: unknown): string | null;
+    };
+
+    sim.setVehicleRouteForTest('SH-01', ['storage-r14-c01']);
+    sim.addLoadForTest({ id: 'admission-active-load', state: 'carried', nodeId: null, vehicleId: 'SH-01', weightKg: 100 });
+    sim.addLoadForTest({ id: 'admission-queued-load', state: 'stored', nodeId: 'storage-r04-c04', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'admission-active-task',
+      kind: 'outbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r04-c03',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'admission-active-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'admission-queued-task',
+      kind: 'outbound',
+      state: 'queued',
+      createdAtSec: 1,
+      assignedAtSec: null,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r04-c04',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'admission-queued-load',
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleTaskForTest('SH-01', 'admission-active-task', true);
+
+    const queuedTask = internals.tasks.find((candidate) => candidate.id === 'admission-queued-task')!;
+
+    expect(internals.taskAssignmentBlockReason(queuedTask)).toBe('outbound-station-work-admission-full:lift-01-outbound');
+  });
+
+  it('grants only the boundary vehicle in outbound station depth-1 mode', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    }));
+    const internals = sim as unknown as {
+      vehicles: Array<{ id: string }>;
+      tasks: Array<{ id: string }>;
+      outboundStationApproachBoundaryNodeId(stationId: string): string | null;
+      outboundDropoffDispatchGoalNodeId(task: unknown, vehicle: unknown): string;
+      reconcileOutboundStationRuntime(): void;
+      outboundStationActiveTransitionForVehicle(vehicleId: string): { phase: string; routeNodeIds: string[] } | null;
+    };
+    const boundaryNodeId = internals.outboundStationApproachBoundaryNodeId('lift-01-outbound');
+    expect(boundaryNodeId).toBe('column-bottom-a-c07');
+
+    sim.setVehicleRouteForTest('SH-01', ['storage-r14-c01']);
+    sim.setVehicleRouteForTest('SH-02', [boundaryNodeId!]);
+    sim.addLoadForTest({ id: 'depth-one-parked-load', state: 'carried', nodeId: null, vehicleId: 'SH-01', weightKg: 100 });
+    sim.addLoadForTest({ id: 'depth-one-boundary-load', state: 'carried', nodeId: null, vehicleId: 'SH-02', weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'depth-one-parked-task',
+      kind: 'outbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r04-c03',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'depth-one-parked-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'depth-one-boundary-task',
+      kind: 'outbound',
+      state: 'in-progress',
+      createdAtSec: 10,
+      assignedAtSec: 10,
+      startedAtSec: 10,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r04-c04',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'depth-one-boundary-load',
+      vehicleId: 'SH-02',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleTaskForTest('SH-01', 'depth-one-parked-task', true);
+    sim.setVehicleTaskForTest('SH-02', 'depth-one-boundary-task', true);
+
+    internals.reconcileOutboundStationRuntime();
+
+    const parkedVehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    const boundaryVehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-02')!;
+    const parkedTask = internals.tasks.find((candidate) => candidate.id === 'depth-one-parked-task')!;
+    const boundaryTask = internals.tasks.find((candidate) => candidate.id === 'depth-one-boundary-task')!;
+
+    expect(internals.outboundStationActiveTransitionForVehicle('SH-02')).toMatchObject({
+      phase: 'entering',
+      routeNodeIds: expect.arrayContaining([boundaryNodeId, 'column-bottom-b-c07', 'column-bottom-b-c08'])
+    });
+    expect(internals.outboundStationActiveTransitionForVehicle('SH-02')?.routeNodeIds.at(-1)).toBe('column-bottom-b-c08');
+    expect(internals.outboundStationActiveTransitionForVehicle('SH-01')).toBeNull();
+    expect(internals.outboundDropoffDispatchGoalNodeId(boundaryTask, boundaryVehicle)).toBe('column-bottom-b-c08');
+    expect(internals.outboundDropoffDispatchGoalNodeId(parkedTask, parkedVehicle)).toBe(boundaryNodeId);
+  });
+
+  it('does not recover orphaned outbound station interior vehicles without an envelope pass', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    }));
+    const internals = sim as unknown as {
+      reconcileOutboundStationRuntime(): void;
+      outboundStationActiveTransitionForVehicle(vehicleId: string): { phase: string; routeNodeIds: string[] } | null;
+      stationCoordinatorOutboundProtectedMoveBlocker(vehicle: unknown, toNodeId: string): { reason: string; blockingVehicleId: string | null } | null;
+      vehicles: Array<{ id: string }>;
+    };
+
+    sim.setVehicleRouteForTest('SH-01', ['lift-01-outbound-queue-01-entry-access']);
+    sim.addLoadForTest({ id: 'interior-recovery-load', state: 'carried', nodeId: null, vehicleId: 'SH-01', weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'interior-recovery-task',
+      kind: 'outbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r04-c03',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'interior-recovery-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleTaskForTest('SH-01', 'interior-recovery-task', true);
+
+    internals.reconcileOutboundStationRuntime();
+
+    expect(internals.outboundStationActiveTransitionForVehicle('SH-01')).toBeNull();
+    expect(internals.stationCoordinatorOutboundProtectedMoveBlocker(
+      internals.vehicles.find((candidate) => candidate.id === 'SH-01')!,
+      'column-bottom-b-c08'
+    )).toMatchObject({
+      reason: 'outbound-station-await-transition',
+      blockingVehicleId: null
+    });
+  });
+
+  it('holds outbound station envelope ownership through service and clear-through', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    }));
+    const internals = sim as unknown as {
+      vehicles: Array<{ id: string; loaded: boolean; taskId: string | null }>;
+      tasks: Array<{ id: string }>;
+      outboundStationApproachBoundaryNodeId(stationId: string): string | null;
+      reconcileOutboundStationRuntime(): void;
+      outboundLiftDropoffClearanceRoute(vehicle: unknown, task: unknown): string[] | null;
+      outboundStationMarkLowerComplete(vehicle: unknown, task: unknown): void;
+      outboundStationInstallClearServiceTransition(vehicle: unknown, task: unknown, routeNodeIds: string[]): void;
+      outboundStationRuntimes: Map<string, {
+        envelopeOwnerRequestId: string | null;
+        activeTransition: { phase: string; serviceNodeId: string; clearThroughNodeId: string | null; routeNodeIds: string[] } | null;
+      }>;
+    };
+    const boundaryNodeId = internals.outboundStationApproachBoundaryNodeId('lift-01-outbound');
+    expect(boundaryNodeId).toBeTruthy();
+
+    sim.setVehicleRouteForTest('SH-01', [boundaryNodeId!]);
+    sim.addLoadForTest({ id: 'lifecycle-load', state: 'carried', nodeId: null, vehicleId: 'SH-01', weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'lifecycle-task',
+      kind: 'outbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r04-c03',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'lifecycle-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleTaskForTest('SH-01', 'lifecycle-task', true);
+
+    const vehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    const task = internals.tasks.find((candidate) => candidate.id === 'lifecycle-task')!;
+    const requestId = 'outbound-station-request:lifecycle-task';
+
+    internals.reconcileOutboundStationRuntime();
+    expect(internals.outboundStationRuntimes.get('lift-01-outbound')).toMatchObject({
+      envelopeOwnerRequestId: requestId,
+      activeTransition: { phase: 'entering', serviceNodeId: 'column-bottom-b-c08' }
+    });
+
+    sim.setVehicleRouteForTest('SH-01', ['column-bottom-b-c08']);
+    sim.setVehicleTaskForTest('SH-01', 'lifecycle-task', true);
+    internals.reconcileOutboundStationRuntime();
+    expect(internals.outboundStationRuntimes.get('lift-01-outbound')).toMatchObject({
+      envelopeOwnerRequestId: requestId,
+      activeTransition: { phase: 'servicing', serviceNodeId: 'column-bottom-b-c08' }
+    });
+
+    const clearanceRoute = internals.outboundLiftDropoffClearanceRoute(vehicle, task);
+    expect(clearanceRoute?.[0]).toBe('column-bottom-b-c08');
+    internals.outboundStationMarkLowerComplete(vehicle, task);
+    vehicle.loaded = false;
+    vehicle.taskId = null;
+    internals.outboundStationInstallClearServiceTransition(vehicle, task, clearanceRoute!);
+    const clearingRuntime = internals.outboundStationRuntimes.get('lift-01-outbound')!;
+    expect(clearingRuntime).toMatchObject({
+      envelopeOwnerRequestId: requestId,
+      activeTransition: { phase: 'clearing', clearThroughNodeId: clearanceRoute!.at(-1) }
+    });
+
+    sim.setVehicleRouteForTest('SH-01', [clearanceRoute!.at(-1)!]);
+    internals.reconcileOutboundStationRuntime();
+    expect(internals.outboundStationRuntimes.get('lift-01-outbound')).toMatchObject({
+      envelopeOwnerRequestId: null,
+      activeTransition: null
+    });
+  });
+
+  it('releases a stale outbound clearing envelope when the owner leaves the clearance lifecycle', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    }));
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        loaded: boolean;
+        taskId: string | null;
+        localRouteReason: string | null;
+      }>;
+      reconcileOutboundStationRuntime(): void;
+      stationCoordinatorOutboundProtectedMoveBlocker(vehicle: unknown, toNodeId: string): { reason: string; blockingVehicleId: string | null } | null;
+      outboundStationRuntimes: Map<string, {
+        stationId: string;
+        requests: Map<string, {
+          id: string;
+          stationId: string;
+          taskId: string;
+          loadId: string | null;
+          vehicleId: string;
+          demandSeq: number;
+          queueSeq: number | null;
+          state: string;
+          readyAtSec: number;
+        }>;
+        envelopeOwnerRequestId: string | null;
+        slotOwnerRequestId: string | null;
+        slotIncomingTransitionId: string | null;
+        serviceOwnerRequestId: string | null;
+        activeTransition: {
+          id: string;
+          stationId: string;
+          requestId: string;
+          vehicleId: string;
+          phase: string;
+          entryNodeId: string;
+          serviceNodeId: string;
+          clearThroughNodeId: string | null;
+          routeNodeIds: string[];
+          envelopeNodeIds: string[];
+          issuedAtSec: number;
+          lastProgressAtSec: number;
+          expectedCompleteBySec: number;
+        } | null;
+        nextQueueSeq: number;
+      }>;
+    };
+    const owner = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    const blocked = internals.vehicles.find((candidate) => candidate.id === 'SH-02')!;
+    sim.setVehicleRouteForTest('SH-01', ['column-top-b-c09', 'storage-r01-c09']);
+    sim.setVehicleRouteForTest('SH-02', ['column-top-a-c11', 'column-top-a-c10']);
+    owner.loaded = false;
+    owner.taskId = 'new-inbound-task';
+    owner.localRouteReason = 'temporary-yield';
+
+    const requestId = 'outbound-station-request:old-outbound-task';
+    internals.outboundStationRuntimes.set('lift-01-outbound', {
+      stationId: 'lift-01-outbound',
+      requests: new Map([[
+        requestId,
+        {
+          id: requestId,
+          stationId: 'lift-01-outbound',
+          taskId: 'old-outbound-task',
+          loadId: 'old-outbound-load',
+          vehicleId: 'SH-01',
+          demandSeq: 1,
+          queueSeq: 1,
+          state: 'clearing',
+          readyAtSec: 0
+        }
+      ]]),
+      envelopeOwnerRequestId: requestId,
+      slotOwnerRequestId: null,
+      slotIncomingTransitionId: null,
+      serviceOwnerRequestId: requestId,
+      activeTransition: {
+        id: 'outbound-station-pass:stale',
+        stationId: 'lift-01-outbound',
+        requestId,
+        vehicleId: 'SH-01',
+        phase: 'clearing',
+        entryNodeId: 'column-bottom-a-c07',
+        serviceNodeId: 'column-bottom-b-c08',
+        clearThroughNodeId: 'column-top-a-c10',
+        routeNodeIds: ['column-bottom-b-c08', 'module-01-spine-bottom-b', 'module-01-spine-top-a', 'column-top-a-c10'],
+        envelopeNodeIds: ['column-bottom-b-c08', 'module-01-spine-bottom-b', 'module-01-spine-top-a', 'column-top-a-c10'],
+        issuedAtSec: 0,
+        lastProgressAtSec: 0,
+        expectedCompleteBySec: 90
+      },
+      nextQueueSeq: 2
+    });
+
+    expect(internals.stationCoordinatorOutboundProtectedMoveBlocker(blocked, 'column-top-a-c10')).toMatchObject({
+      reason: 'outbound-station-envelope-owned',
+      blockingVehicleId: 'SH-01'
+    });
+
+    internals.reconcileOutboundStationRuntime();
+
+    expect(internals.outboundStationRuntimes.get('lift-01-outbound')).toMatchObject({
+      envelopeOwnerRequestId: null,
+      serviceOwnerRequestId: null,
+      activeTransition: null
+    });
+    expect(internals.stationCoordinatorOutboundProtectedMoveBlocker(blocked, 'column-top-a-c10')).toBeNull();
+  });
+
+  it('flags station kernel queue leases that are not represented by station route leases', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    }));
+    sim.setVehicleRouteForTest('SH-01', ['module-01-spine-middle']);
+
+    const internals = sim as unknown as {
+      stationQueueLeases: Array<{
+        id: string;
+        stationId: string;
+        vehicleId: string;
+        admissionCauseId: string;
+        serviceDemandId: string | null;
+        targetKind: 'queue-slot' | 'bounded-approach';
+        targetNodeId: string;
+        slotIndex: number | null;
+        phase: 'approaching' | 'occupied' | 'service-granted' | 'servicing' | 'revoking';
+        issuedAtSec: number;
+        expiresAtSec: number;
+        lastProgressAtSec: number;
+        boundedRouteNodeIds: string[];
+        fifoSeq: number;
+      }>;
+      calculateShadowStationContractDiagnostics(): ShuttleSimState['traffic']['shadowLedger']['stationContracts'];
+    };
+    internals.stationQueueLeases = [{
+      id: 'station-lease:lift-01-inbound:SH-01:queue',
+      stationId: 'lift-01-inbound',
+      vehicleId: 'SH-01',
+      admissionCauseId: 'test-stale-kernel-lease',
+      serviceDemandId: null,
+      targetKind: 'queue-slot',
+      targetNodeId: 'column-top-a-c09',
+      slotIndex: 1,
+      phase: 'approaching',
+      issuedAtSec: 0,
+      expiresAtSec: 60,
+      lastProgressAtSec: 0,
+      boundedRouteNodeIds: ['module-01-spine-middle', 'module-01-spine-top-b', 'column-top-b-c08', 'column-top-b-c09', 'column-top-a-c09'],
+      fifoSeq: 1
+    }];
+
+    const stationContracts = internals.calculateShadowStationContractDiagnostics();
+
+    expect(stationContracts.invariantCounts.kernelQueueLeaseWithoutRouteLease).toBe(1);
+    expect(stationContracts.violations).toContainEqual(expect.objectContaining({
+      code: 'station-kernel-queue-lease-without-route-lease',
+      severity: 'warn',
+      stationId: 'lift-01-inbound',
+      vehicleId: 'SH-01'
+    }));
+  });
+
+  it('flags station route leases that are not represented by station kernel queue leases', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    }));
+    sim.setVehicleRouteForTest('SH-01', ['column-top-a-c09']);
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        plannedGoalNodeId: string | null;
+        plannedRouteNodeIds: string[];
+        localRouteReason: string | null;
+      }>;
+      calculateShadowStationContractDiagnostics(): ShuttleSimState['traffic']['shadowLedger']['stationContracts'];
+    };
+    const vehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    vehicle.plannedGoalNodeId = 'column-top-a-c09';
+    vehicle.plannedRouteNodeIds = ['column-top-a-c09'];
+    vehicle.localRouteReason = 'inbound-queue-standby';
+
+    const stationContracts = internals.calculateShadowStationContractDiagnostics();
+
+    expect(stationContracts.invariantCounts.routeLeaseWithoutKernelQueueLease).toBe(1);
+    expect(stationContracts.violations).toContainEqual(expect.objectContaining({
+      code: 'station-route-lease-without-kernel-queue-lease',
+      severity: 'watch',
+      stationId: 'lift-01-inbound',
+      vehicleId: 'SH-01'
+    }));
+  });
+
+  it('station shadow surfaces blocked active inbound service vehicles', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 4 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    }));
+    sim.addLoadForTest({
+      id: 'predecessor-service-load',
+      state: 'carried',
+      nodeId: null,
+      vehicleId: 'SH-01',
+      weightKg: 100
+    });
+    sim.addTaskForTest({
+      id: 'predecessor-service-task',
+      kind: 'inbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r03-c08',
+      loadId: 'predecessor-service-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addLoadForTest({
+      id: 'blocked-service-load',
+      state: 'waiting',
+      nodeId: 'lift-01-inbound-buffer-03',
+      vehicleId: null,
+      weightKg: 100
+    });
+    sim.addLoadForTest({
+      id: 'healthy-service-load',
+      state: 'waiting',
+      nodeId: 'lift-01-inbound-buffer-02',
+      vehicleId: null,
+      weightKg: 100
+    });
+    sim.addTaskForTest({
+      id: 'blocked-service-task',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 1,
+      assignedAtSec: 1,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r02-c08',
+      loadId: 'blocked-service-load',
+      vehicleId: 'SH-02',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'healthy-service-task',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 2,
+      assignedAtSec: 2,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r02-c09',
+      loadId: 'healthy-service-load',
+      vehicleId: 'SH-03',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', ['storage-r03-c08']);
+    sim.setVehicleTaskForTest('SH-01', 'predecessor-service-task', true);
+    sim.setVehicleRouteForTest('SH-02', ['column-top-a-c10']);
+    sim.setVehicleTaskForTest('SH-02', 'blocked-service-task', false);
+    sim.setVehicleRouteForTest('SH-03', ['column-top-a-c11']);
+    sim.setVehicleTaskForTest('SH-03', 'healthy-service-task', false);
+
+    const internals = sim as unknown as {
+      simTimeSec: number;
+      vehicles: Array<{
+        id: string;
+        state: string;
+        waitReason: string | null;
+        waitingSinceSec: number | null;
+        blockingVehicleId: string | null;
+        blockingReservationId: string | null;
+      }>;
+    };
+    internals.simTimeSec = 42;
+    const activeVehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-02')!;
+    activeVehicle.state = 'waiting-blocked';
+    activeVehicle.waitReason = 'inbound-column-predecessor-wait';
+    activeVehicle.waitingSinceSec = 12;
+    activeVehicle.blockingVehicleId = 'SH-01';
+    activeVehicle.blockingReservationId = null;
+
+    const stationContracts = ShuttleSimStateSchema.parse(sim.getState()).traffic.shadowLedger.stationContracts;
+    const station = stationContracts.stations.find((candidate) => candidate.stationId === 'lift-01-inbound');
+
+    expect(station).toMatchObject({
+      stationId: 'lift-01-inbound',
+      activeServiceDepth: 2,
+      activeServiceBlockedCount: 1,
+      activeServiceBlockedReasonCounts: {
+        'inbound-column-predecessor-wait': 1
+      },
+      longestActiveServiceWaitSec: 30,
+      serviceTransition: {
+        gap: 'active-service-blocked',
+        activeServiceVehicleId: 'SH-02',
+        activeServiceTaskId: 'blocked-service-task'
+      }
+    });
+    expect(station?.vehicleCommitments).toContainEqual(expect.objectContaining({
+      vehicleId: 'SH-02',
+      kind: 'activeInboundService',
+      waitReason: 'inbound-column-predecessor-wait',
+      currentWaitSec: 30,
+      blockingVehicleId: 'SH-01',
+      blockingReservationId: null,
+      predecessorTaskId: 'predecessor-service-task',
+      predecessorVehicleId: 'SH-01',
+      predecessorDropoffNodeId: 'storage-r03-c08',
+      predecessorState: 'in-progress',
+      predecessorLoaded: true,
+      predecessorWaitReason: null,
+      predecessorCurrentNodeId: 'storage-r03-c08',
+      predecessorTargetNodeId: null,
+      predecessorQueueSlot: null
+    }));
+    expect(station?.vehicleCommitments).toContainEqual(expect.objectContaining({
+      vehicleId: 'SH-03',
+      kind: 'activeInboundService',
+      waitReason: null,
+      predecessorTaskId: null
+    }));
+    const stationKernelSummary = stationContracts.stationKernel.stationSummaries.find((candidate) =>
+      candidate.stationId === 'lift-01-inbound'
+    );
+    expect(stationKernelSummary).toMatchObject({
+      reserveTargetDepth: 2,
+      physicalReserveCoverageDepth: 2,
+      reserveCoverageDepth: 1,
+      reserveCoverageGap: 1
+    });
+  });
+
+  it('yields a vertical spine endpoint when the no-stop winner needs to clear through middle', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    }));
+
+    sim.setVehicleRouteForTest('SH-01', [
+      'module-02-spine-bottom-a',
+      'module-02-spine-middle',
+      'module-02-spine-top-b'
+    ]);
+    sim.setVehicleRouteForTest('SH-02', [
+      'module-02-spine-top-b',
+      'module-02-spine-middle',
+      'module-02-spine-bottom-a'
+    ]);
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        state: string;
+        currentNodeId: string;
+        targetNodeId: string | null;
+        waitReason: string | null;
+        blockingVehicleId: string | null;
+        waitingSinceSec: number | null;
+        routeNodeIds: string[];
+        localRouteReason: string | null;
+      }>;
+      tryYieldTopLiftSpineEndpointForNoStopWinner(
+        blocker: any,
+        requester: any,
+        middleNodeId: string
+      ): boolean;
+    };
+    const requester = internals.vehicles.find((vehicle) => vehicle.id === 'SH-01')!;
+    const blocker = internals.vehicles.find((vehicle) => vehicle.id === 'SH-02')!;
+    requester.state = 'waiting-blocked';
+    requester.waitReason = 'no-stop-continuation-blocked';
+    requester.blockingVehicleId = blocker.id;
+    requester.waitingSinceSec = 10;
+    blocker.state = 'waiting-blocked';
+    blocker.waitReason = 'top-lift-spine-opposing-claim';
+    blocker.blockingVehicleId = requester.id;
+    blocker.waitingSinceSec = 10;
+
+    expect(internals.tryYieldTopLiftSpineEndpointForNoStopWinner(
+      blocker,
+      requester,
+      'module-02-spine-middle'
+    )).toBe(true);
+    expect(blocker.targetNodeId).toBe('module-02-spine-top-a');
+    expect(blocker.routeNodeIds.slice(0, 2)).toEqual([
+      'module-02-spine-top-b',
+      'module-02-spine-top-a'
+    ]);
+    expect(blocker.waitReason).toBeNull();
+    expect(blocker.localRouteReason).toBe('temporary-yield');
+    expect(requester.targetNodeId).toBe('module-02-spine-middle');
+  });
+
+  it('lets a top-b no-stop winner yield aside when the bottom-a blocker has no lateral pocket', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 3 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 2
+      }
+    }));
+    sim.addLoadForTest({ id: 'boundary-bottom-blocker-source-load', state: 'waiting', nodeId: 'lift-02-inbound-buffer-03', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'boundary-top-winner-pickup-load', state: 'stored', nodeId: 'storage-r14-c20', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'boundary-top-winner-outbound-task',
+      kind: 'outbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r14-c20',
+      dropoffNodeId: 'column-bottom-b-c22',
+      loadId: 'boundary-top-winner-pickup-load',
+      vehicleId: 'SH-02',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'boundary-bottom-blocker-inbound-task',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 1,
+      assignedAtSec: 1,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c22',
+      dropoffNodeId: 'storage-r02-c21',
+      loadId: 'boundary-bottom-blocker-source-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', [
+      'module-boundary-01-spine-bottom-a',
+      'module-boundary-01-spine-middle',
+      'module-boundary-01-spine-top-b',
+      'column-top-b-c15',
+      'column-top-b-c16',
+      'column-top-b-c17',
+      'column-top-b-c18',
+      'column-top-b-c19',
+      'column-top-b-c20',
+      'column-top-b-c21',
+      'module-02-spine-top-b',
+      'column-top-b-c22',
+      'column-top-a-c22'
+    ]);
+    sim.setVehicleTaskForTest('SH-01', 'boundary-bottom-blocker-inbound-task', false);
+    sim.setVehicleWaitingForTest('SH-01', {
+      targetNodeId: 'module-boundary-01-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-02',
+      waitingSinceSec: 10
+    });
+    sim.setVehicleRouteForTest('SH-02', [
+      'module-boundary-01-spine-top-b',
+      'module-boundary-01-spine-middle',
+      'module-boundary-01-spine-bottom-a',
+      'column-bottom-a-c15',
+      'column-bottom-a-c16',
+      'column-bottom-a-c17',
+      'column-bottom-a-c18',
+      'column-bottom-a-c19',
+      'column-bottom-a-c20',
+      'storage-r14-c20'
+    ]);
+    sim.setVehicleTaskForTest('SH-02', 'boundary-top-winner-outbound-task', false);
+    sim.setVehicleWaitingForTest('SH-02', {
+      targetNodeId: 'module-boundary-01-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-01',
+      waitingSinceSec: 10
+    });
+    sim.setVehicleRouteForTest('SH-03', ['module-boundary-01-spine-bottom-b']);
+    sim.setVehicleTaskForTest('SH-03', null, false);
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        targetNodeId: string | null;
+        routeNodeIds: string[];
+        waitReason: string | null;
+        localRouteReason: string | null;
+      }>;
+      tryYieldTopLiftSpineEndpointForNoStopWinner(
+        blocker: unknown,
+        requester: unknown,
+        middleNodeId: string
+      ): boolean;
+    };
+    const blocker = internals.vehicles.find((vehicle) => vehicle.id === 'SH-01')!;
+    const requester = internals.vehicles.find((vehicle) => vehicle.id === 'SH-02')!;
+
+    expect(internals.tryYieldTopLiftSpineEndpointForNoStopWinner(
+      blocker,
+      requester,
+      'module-boundary-01-spine-middle'
+    )).toBe(true);
+    expect(blocker.targetNodeId).toBe('module-boundary-01-spine-middle');
+    expect(requester.routeNodeIds.slice(0, 2)).toEqual([
+      'module-boundary-01-spine-top-b',
+      'module-boundary-01-spine-top-a'
+    ]);
+    expect(requester.targetNodeId).toBe('module-boundary-01-spine-top-a');
+    expect(requester.waitReason).toBeNull();
+    expect(requester.localRouteReason).toBe('temporary-yield');
   });
 
   it('station kernel models source supply as arrival intent without task demand', () => {
@@ -2012,10 +3522,16 @@ describe('shuttle phase 0 SimCore', () => {
     sim.setVehicleTaskForTest('SH-01', 'shadow-busy-outbound-task', false);
 
     const state = ShuttleSimStateSchema.parse(sim.getState());
-    const station = state.traffic.shadowLedger.stationContracts.stations.find((candidate) =>
+    const stationContracts = state.traffic.shadowLedger.stationContracts;
+    const station = stationContracts.stations.find((candidate) =>
       candidate.stationId === 'lift-01-inbound'
     );
 
+    expect(stationContracts.invariantCounts.demandWithoutCoverage).toBe(0);
+    expect(stationContracts.violations).not.toContainEqual(expect.objectContaining({
+      code: 'station-demand-without-near-coverage',
+      stationId: 'lift-01-inbound'
+    }));
     expect(station?.headReservationSupply).toMatchObject({
       mode: 'shadow',
       gap: 'fleet-busy',
@@ -2339,6 +3855,20 @@ describe('shuttle phase 0 SimCore', () => {
       stationId: 'lift-01-inbound',
       leaseCount: 1,
       reserveCoverageGap: 1
+    }));
+
+    internals.assignQueuedTasks(0.2);
+
+    expect(task.state).toBe('queued');
+    expect(task.vehicleId).toBeNull();
+    expect(task.waitReason).toBe('route-unavailable');
+    expect(vehicle.taskId).toBeNull();
+    expect(vehicle.localRouteReason).toBe('inbound-queue-standby');
+    expect(sim.getEventLog()).not.toContainEqual(expect.objectContaining({
+      eventType: 'station-queue-lease-transition',
+      vehicleId: 'SH-01',
+      taskId: 'station-admission-outbound',
+      reason: 'released-to-task-assignment'
     }));
 
     sim.addTaskForTest({
@@ -2906,6 +4436,103 @@ describe('shuttle phase 0 SimCore', () => {
     expect(stateVehicle?.routeNodeIds.at(-1)).toBe(stateVehicle?.plannedGoalNodeId);
   });
 
+  it('does not preempt a storage-origin post-dropoff clearance route with new inbound work', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 3600,
+        outboundRatePerHour: 3600,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 4,
+        initialStorageFillPolicy: 'zone-balanced-50',
+        maxTasks: 1
+      },
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh'
+      }
+    }));
+    sim.addLoadForTest({
+      id: 'post-dropoff-clearance-load',
+      state: 'waiting',
+      nodeId: 'lift-02-inbound-buffer-03',
+      vehicleId: null,
+      weightKg: 100
+    });
+    sim.addTaskForTest({
+      id: 'post-dropoff-clearance-task',
+      kind: 'inbound',
+      state: 'queued',
+      createdAtSec: 0,
+      assignedAtSec: null,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c22',
+      dropoffNodeId: 'storage-r06-c26',
+      loadId: 'post-dropoff-clearance-load',
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: null
+    });
+
+    const clearanceRoute = [
+      'storage-r07-c26',
+      'column-middle-c26',
+      'column-middle-c27',
+      'column-middle-c28',
+      'storage-r07-c28'
+    ];
+    sim.setVehicleRouteForTest('SH-01', clearanceRoute);
+    const internals = sim as unknown as {
+      tasks: Array<{ id: string; state: string; vehicleId: string | null; waitReason: string | null }>;
+      vehicles: Array<{
+        id: string;
+        taskId: string | null;
+        currentNodeId: string;
+        plannedGoalNodeId: string | null;
+        plannedRouteNodeIds: string[];
+        localRouteNodeIds: string[];
+        localRouteReason: string | null;
+        routeNodeIds: string[];
+      }>;
+      assignQueuedTasks(dtSec: number): void;
+    };
+    const vehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    vehicle.plannedGoalNodeId = clearanceRoute.at(-1)!;
+    vehicle.plannedRouteNodeIds = [...clearanceRoute];
+    vehicle.localRouteNodeIds = clearanceRoute.slice(0, 4);
+    vehicle.localRouteReason = 'post-dropoff-column-exit';
+
+    internals.assignQueuedTasks(0.2);
+    const protectedTask = internals.tasks.find((candidate) => candidate.id === 'post-dropoff-clearance-task');
+    const protectedVehicle = sim.getState().vehicles.find((candidate) => candidate.id === 'SH-01');
+
+    expect(protectedTask?.state).toBe('queued');
+    expect(protectedTask?.vehicleId).toBeNull();
+    expect(protectedTask?.waitReason).toBe('route-unavailable');
+    expect(protectedVehicle?.taskId).toBeNull();
+    expect(protectedVehicle?.localRouteReason).toBe('post-dropoff-column-exit');
+    expect(protectedVehicle?.routeNodeIds).toEqual(clearanceRoute);
+
+    sim.setVehicleRouteForTest('SH-01', [clearanceRoute.at(-1)!]);
+    const releasedVehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    releasedVehicle.plannedGoalNodeId = clearanceRoute.at(-1)!;
+    releasedVehicle.plannedRouteNodeIds = [clearanceRoute.at(-1)!];
+    releasedVehicle.localRouteReason = 'post-dropoff-column-exit';
+
+    internals.assignQueuedTasks(0.2);
+    const assignedTask = internals.tasks.find((candidate) => candidate.id === 'post-dropoff-clearance-task');
+    const assignedVehicle = sim.getState().vehicles.find((candidate) => candidate.id === 'SH-01');
+
+    expect(assignedTask?.state).toBe('assigned');
+    expect(assignedTask?.vehicleId).toBe('SH-01');
+    expect(assignedVehicle?.taskId).toBe('post-dropoff-clearance-task');
+    expect(assignedVehicle?.localRouteReason).toBeNull();
+  });
+
   it('binds an inbound dropoff vehicle from storage to queued lift work in mixed flow', () => {
     const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
       vehicles: { count: 1 },
@@ -3203,6 +4830,104 @@ describe('shuttle phase 0 SimCore', () => {
     };
 
     expect(internals.selectTopLiftInboundStorageNodeForLift('lift-01-inbound')).toMatch(/^storage-r\d{2}-c09$/);
+  });
+
+  it('does not allocate a top-side inbound dropoff behind an occupied storage prefix', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.start();
+    addStoredLoadsForAllStorageExcept(sim, scenario, new Set(['storage-r03-c02']), 'prefix-blocker');
+
+    const internals = sim as unknown as {
+      storageNodeLoadOccupancy(includePendingInbound: boolean): Map<string, string>;
+      topLiftInboundStorageNodeReachableFromLift(nodeId: string, liftNodeId: string, occupancy: Map<string, string>): boolean;
+      selectTopLiftInboundStorageNodeForLift(liftNodeId: string): string | null;
+    };
+    const occupancy = internals.storageNodeLoadOccupancy(true);
+
+    expect(internals.topLiftInboundStorageNodeReachableFromLift('storage-r03-c02', 'lift-01-inbound', occupancy)).toBe(false);
+    expect(internals.selectTopLiftInboundStorageNodeForLift('lift-01-inbound')).toBeNull();
+  });
+
+  it('leases the alternate-side storage prefix for an active inbound dropoff', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 2
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.start();
+    addStoredLoadsForAllStorageExcept(
+      sim,
+      scenario,
+      new Set([
+        'storage-r03-c02',
+        'storage-r04-c02',
+        'storage-r05-c02',
+        'storage-r06-c02',
+        'storage-r07-c02',
+        'storage-r08-c02'
+      ]),
+      'middle-prefix-open'
+    );
+
+    const internals = sim as unknown as {
+      storageNodeLoadOccupancy(includePendingInbound: boolean): Map<string, string>;
+      topLiftInboundStorageAllocationOccupancy(excludeTaskId?: string | null): Map<string, string>;
+      topLiftInboundStorageNodeReachableFromLift(nodeId: string, liftNodeId: string, occupancy: Map<string, string>): boolean;
+      selectTopLiftInboundStorageNodeForLift(liftNodeId: string): string | null;
+    };
+    expect(internals.topLiftInboundStorageNodeReachableFromLift(
+      'storage-r03-c02',
+      'lift-01-inbound',
+      internals.storageNodeLoadOccupancy(true)
+    )).toBe(true);
+
+    sim.addLoadForTest({
+      id: 'middle-prefix-active-load',
+      state: 'waiting',
+      nodeId: 'lift-01-inbound-buffer-03',
+      vehicleId: null,
+      weightKg: 100
+    });
+    sim.addTaskForTest({
+      id: 'middle-prefix-active-task',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r03-c02',
+      loadId: 'middle-prefix-active-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleTaskForTest('SH-01', 'middle-prefix-active-task', false);
+
+    const allocationOccupancy = internals.topLiftInboundStorageAllocationOccupancy();
+    for (const leasedNodeId of ['storage-r04-c02', 'storage-r05-c02', 'storage-r06-c02', 'storage-r07-c02']) {
+      expect(allocationOccupancy.get(leasedNodeId)).toBe('middle-prefix-active-load:access-lease');
+    }
+    expect(['storage-r04-c02', 'storage-r05-c02', 'storage-r06-c02', 'storage-r07-c02']).not.toContain(
+      internals.selectTopLiftInboundStorageNodeForLift('lift-01-inbound')
+    );
   });
 
   it('can assign an inbound task to a shuttle already standing on its queue goal', () => {
@@ -3875,11 +5600,18 @@ describe('shuttle phase 0 SimCore', () => {
     expect(state.traffic.physicalViolationCount).toBe(0);
   });
 
-  it('dispatches top-lift inbound work into lift-side pickup and queue positions at startup', () => {
+  it('dispatches bounded prefetch top-lift inbound work at startup', () => {
     const scenario = createInboundMvpBaselineScenario();
     const sim = new ShuttleSimCore(scenario);
 
-    expect(sim.getState().tasks.filter((task) => task.kind === 'inbound')).toHaveLength(8);
+    const initialInboundTasks = sim.getState().tasks.filter((task) => task.kind === 'inbound');
+    expect(initialInboundTasks).toHaveLength(4);
+    expect(initialInboundTasks.map((task) => task.pickupNodeId)).toEqual([
+      'column-top-a-c08',
+      'column-top-a-c22',
+      'column-top-a-c08',
+      'column-top-a-c22'
+    ]);
 
     sim.start();
     const state = sim.step(0.25);
@@ -3887,33 +5619,24 @@ describe('shuttle phase 0 SimCore', () => {
     const queuedInboundTasks = state.tasks.filter((task) => task.kind === 'inbound' && task.state === 'queued');
     const movingVehicles = state.vehicles.filter((vehicle) => vehicle.currentEdgeId !== null);
 
-    expect(assignedInboundTasks).toHaveLength(6);
-    expect(queuedInboundTasks).toHaveLength(2);
+    expect(assignedInboundTasks).toHaveLength(4);
+    expect(queuedInboundTasks).toHaveLength(0);
     expect(assignedInboundTasks.map((task) => task.dropoffNodeId)).toEqual([
       'storage-r14-c01',
       'storage-r14-c15',
       'storage-r13-c01',
-      'storage-r13-c15',
-      'storage-r12-c01',
-      'storage-r12-c15'
+      'storage-r13-c15'
     ]);
-    expect(queuedInboundTasks.map((task) => task.dropoffNodeId)).toEqual([
-      'storage-r11-c01',
-      'storage-r11-c15'
-    ]);
-    expect(queuedInboundTasks.every((task) => task.waitReason === 'inbound-lift-fifo-wait')).toBe(true);
-    expect(movingVehicles).toHaveLength(6);
+    expect(movingVehicles).toHaveLength(4);
     const taskGoals = new Map(state.vehicles.map((vehicle) => [vehicle.taskId, vehicle.plannedGoalNodeId]));
     expect(taskGoals.get('task-0001')).toBe('column-top-a-c08');
     expect(taskGoals.get('task-0002')).toBe('column-top-a-c22');
     expect(taskGoals.get('task-0003')).toBe('column-top-a-c10');
     expect(taskGoals.get('task-0004')).toBe('column-top-a-c24');
-    expect(taskGoals.get('task-0005')).toBe('column-top-a-c11');
-    expect(taskGoals.get('task-0006')).toBe('column-top-a-c25');
-    expect(taskGoals.get('task-0007')).toBeUndefined();
     expect(Array.from(taskGoals.values()).filter(Boolean).every((nodeId) =>
       /^column-top-a-c\d+$/.test(nodeId!)
     )).toBe(true);
+    expect(state.traffic.liftPorts.filter((port) => port.kind === 'inbound').map((port) => port.sourceBufferOccupancy)).toEqual([4, 4]);
   });
 
   it('adds compact tail wait slots beside each top-lift inbound pickup queue', () => {
@@ -6587,6 +8310,76 @@ describe('shuttle phase 0 SimCore', () => {
     });
   }, 10000);
 
+  it('keeps top-lift outbound demand generation independent from inbound AMR reserve pressure', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 3600,
+        outboundRatePerHour: 3600,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 32,
+        initialOutboundFullColumns: 2
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({
+      id: 'reserve-pressure-inbound-load',
+      state: 'waiting',
+      nodeId: 'lift-01-inbound-buffer-01',
+      vehicleId: null,
+      weightKg: 100
+    });
+    sim.addTaskForTest({
+      id: 'reserve-pressure-inbound',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r13-c03',
+      loadId: 'reserve-pressure-inbound-load',
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: null
+    });
+    for (let index = 0; index < 6; index += 1) {
+      sim.addTaskForTest({
+        id: `reserve-pressure-outbound-${index}`,
+        kind: 'outbound',
+        state: 'assigned',
+        createdAtSec: 0,
+        assignedAtSec: 0,
+        startedAtSec: null,
+        completedAtSec: null,
+        pickupNodeId: `storage-r14-c${String(index + 1).padStart(2, '0')}`,
+        dropoffNodeId: index % 2 === 0 ? 'lift-01-outbound' : 'lift-02-outbound',
+        loadId: `reserve-pressure-outbound-load-${index}`,
+        vehicleId: null,
+        replanCount: 0,
+        waitReason: null
+      });
+    }
+    const internals = sim as unknown as {
+      selectTopLiftOutboundTaskSelection: () => { nodeId: string; liftNodeId: string; loadId: string } | { reason: string };
+      topLiftMixedFlowOutboundReservedForInbound: () => boolean;
+    };
+
+    expect(internals.topLiftMixedFlowOutboundReservedForInbound()).toBe(true);
+    const selection = internals.selectTopLiftOutboundTaskSelection();
+    if ('reason' in selection) {
+      throw new Error(selection.reason);
+    }
+    expect(selection.liftNodeId).toMatch(/^lift-\d+-outbound$/);
+    expect(selection.nodeId).toMatch(/^storage-r14-c(?:01|15)$/);
+  }, 10000);
+
   it('creates top-lift outbound work against the nearest yellow-grid dock', () => {
     const scenario = createInboundOutboundDemoScenario({
       vehicles: { count: 1 },
@@ -6915,21 +8708,424 @@ describe('shuttle phase 0 SimCore', () => {
     expect(recoveredLoad.vehicleId).toBe('SH-01');
   });
 
-  it('does not retarget a loaded inbound dropoff into an outbound-locked column', () => {
-    const scenario = createDefaultShuttleScenario({
+  it('blocks loaded lift-complete route admission when the first target is already actively claimed', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
       layoutProfile: {
         layoutKind: 'top-lift-column',
         liftPairCount: 2
       },
+      vehicles: { count: 2 },
+      physicsParams: {
+        liftTimeSec: 0.01
+      },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2,
+        initialOutboundFullColumns: 0
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true
+      }
+    }));
+    sim.addLoadForTest({ id: 'lift-admission-load', state: 'waiting', nodeId: 'column-top-a-c22', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'lift-admission-task',
+      kind: 'inbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c22',
+      dropoffNodeId: 'storage-r05-c26',
+      loadId: 'lift-admission-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', ['column-top-a-c22']);
+    sim.setVehicleTaskForTest('SH-01', 'lift-admission-task', false);
+    sim.setVehicleRouteForTest('SH-02', ['column-top-b-c23', 'column-top-b-c22']);
+
+    type TestVehicle = Record<string, unknown> & {
+      id: string;
+      state: string;
+      loaded: boolean;
+      phaseRemainingSec: number;
+      targetNodeId: string | null;
+      plannedGoalNodeId: string | null;
+      plannedRouteNodeIds: string[];
+      routeNodeIds: string[];
+      routeIndex: number;
+      localRouteNodeIds: string[];
+      localRouteReason: string | null;
+      waitReason: string | null;
+      blockingVehicleId: string | null;
+    };
+    const internals = sim as unknown as {
+      vehicles: TestVehicle[];
+      installAgentRefreshPlannedRoute: (vehicle: TestVehicle, task: unknown, goalNodeId: string) => string[];
+      advanceTimedPhase: (vehicle: TestVehicle, dtSec: number) => void;
+    };
+    const loadedVehicle = internals.vehicles.find((vehicle) => vehicle.id === 'SH-01')!;
+    const claimant = internals.vehicles.find((vehicle) => vehicle.id === 'SH-02')!;
+    const blockedRoute = [
+      'column-top-a-c22',
+      'column-top-b-c22',
+      'column-top-b-c23',
+      'column-top-b-c24',
+      'column-top-b-c25',
+      'column-top-b-c26',
+      'storage-r05-c26'
+    ];
+    Object.assign(loadedVehicle, {
+      state: 'lifting',
+      phaseRemainingSec: 0.01
+    });
+    Object.assign(claimant, {
+      state: 'moving-to-pickup',
+      targetNodeId: 'column-top-b-c22',
+      plannedGoalNodeId: 'column-top-b-c22',
+      plannedRouteNodeIds: ['column-top-b-c23', 'column-top-b-c22']
+    });
+    internals.installAgentRefreshPlannedRoute = (vehicle, _task, goalNodeId) => {
+      vehicle.routeNodeIds = blockedRoute;
+      vehicle.routeIndex = 0;
+      vehicle.targetNodeId = blockedRoute[1] ?? null;
+      vehicle.plannedGoalNodeId = goalNodeId;
+      vehicle.plannedRouteNodeIds = blockedRoute;
+      vehicle.localRouteNodeIds = [];
+      vehicle.localRouteReason = null;
+      return blockedRoute;
+    };
+
+    internals.advanceTimedPhase(loadedVehicle, 0.02);
+
+    const parsed = ShuttleSimStateSchema.parse(sim.getState());
+    const blockedVehicle = parsed.vehicles.find((vehicle) => vehicle.id === 'SH-01')!;
+    const carriedLoad = parsed.loads.find((load) => load.id === 'lift-admission-load')!;
+
+    expect(blockedVehicle.loaded).toBe(true);
+    expect(blockedVehicle.state).toBe('waiting-blocked');
+    expect(blockedVehicle.waitReason).toBe('node-target-near');
+    expect(blockedVehicle.blockingVehicleId).toBe('SH-02');
+    expect(blockedVehicle.plannedRouteNodeIds).toEqual(blockedRoute);
+    expect(carriedLoad.state).toBe('carried');
+    expect(carriedLoad.vehicleId).toBe('SH-01');
+    expect(parsed.traffic.shadowLedger.invariantCounts.duplicateResourceOwner).toBe(0);
+  });
+
+  it('blocks unloaded vehicles from entering an active outbound dock protected node', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2,
+        initialOutboundFullColumns: 0
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true
+      }
+    }));
+    sim.addLoadForTest({ id: 'dock-head-load', state: 'carried', nodeId: null, vehicleId: 'SH-02', weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'dock-head-task',
+      kind: 'outbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r03-c18',
+      dropoffNodeId: 'column-bottom-b-c22',
+      loadId: 'dock-head-load',
+      vehicleId: 'SH-02',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addLoadForTest({ id: 'empty-cross-load', state: 'stored', nodeId: 'storage-r01-c04', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'empty-cross-task',
+      kind: 'outbound',
+      state: 'assigned',
+      createdAtSec: 1,
+      assignedAtSec: 1,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r01-c04',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'empty-cross-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', ['column-bottom-b-c21', 'column-bottom-b-c20', 'column-bottom-b-c19']);
+    sim.setVehicleTaskForTest('SH-01', 'empty-cross-task', false);
+    sim.setVehicleRouteForTest('SH-02', ['column-bottom-a-c20', 'column-bottom-b-c20', 'column-bottom-b-c21', 'module-02-spine-bottom-b', 'column-bottom-b-c22']);
+    sim.setVehicleTaskForTest('SH-02', 'dock-head-task', true);
+
+    const internals = sim as unknown as {
+      vehicles: Array<{ id: string }>;
+      agentRefreshMoveBlocker: (
+        vehicle: unknown,
+        toNodeId: string,
+        candidateRouteNodeIds?: string[] | null
+      ) => { reason: string; blockingVehicleId: string | null } | null;
+    };
+    const emptyVehicle = internals.vehicles.find((vehicle) => vehicle.id === 'SH-01')!;
+
+    expect(internals.agentRefreshMoveBlocker(emptyVehicle, 'column-bottom-b-c20', [
+      'column-bottom-b-c21',
+      'column-bottom-b-c20',
+      'column-bottom-b-c19'
+    ])).toEqual({
+      reason: 'outbound-lift-dock-protected',
+      blockingVehicleId: 'SH-02'
+    });
+
+    sim.setVehicleRouteForTest('SH-01', ['column-bottom-a-c21', 'column-bottom-a-c20']);
+    sim.setVehicleTaskForTest('SH-01', 'empty-cross-task', false);
+    const bottomAEmptyVehicle = internals.vehicles.find((vehicle) => vehicle.id === 'SH-01')!;
+    expect(internals.agentRefreshMoveBlocker(bottomAEmptyVehicle, 'column-bottom-a-c20', [
+      'column-bottom-a-c21',
+      'column-bottom-a-c20'
+    ])).not.toEqual(expect.objectContaining({
+      reason: 'outbound-lift-dock-protected'
+    }));
+  });
+
+  it('lets an empty outbound yielder already in protected bottom-b corridor clear forward for loaded outbound', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2,
+        initialOutboundFullColumns: 0
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true
+      }
+    }));
+    sim.addLoadForTest({ id: 'loaded-outbound-load', state: 'carried', nodeId: null, vehicleId: 'SH-02', weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'loaded-outbound-task',
+      kind: 'outbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r14-c15',
+      dropoffNodeId: 'column-bottom-b-c22',
+      loadId: 'loaded-outbound-load',
+      vehicleId: 'SH-02',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addLoadForTest({ id: 'empty-yielder-load', state: 'stored', nodeId: 'storage-r12-c20', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'empty-yielder-task',
+      kind: 'outbound',
+      state: 'assigned',
+      createdAtSec: 1,
+      assignedAtSec: 1,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r12-c20',
+      dropoffNodeId: 'column-bottom-b-c22',
+      loadId: 'empty-yielder-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    const emptyClearanceRoute = [
+      'column-bottom-b-c15',
+      'column-bottom-b-c16',
+      'column-bottom-b-c17',
+      'column-bottom-b-c18',
+      'column-bottom-b-c19',
+      'column-bottom-b-c20',
+      'column-bottom-a-c20',
+      'storage-r12-c20'
+    ];
+    sim.setVehicleRouteForTest('SH-01', emptyClearanceRoute);
+    sim.setVehicleTaskForTest('SH-01', 'empty-yielder-task', false);
+    sim.setVehicleRouteForTest('SH-02', [
+      'column-bottom-a-c15',
+      'column-bottom-b-c15',
+      'column-bottom-b-c16',
+      'column-bottom-b-c17',
+      'column-bottom-b-c18',
+      'column-bottom-b-c19',
+      'column-bottom-b-c20',
+      'column-bottom-b-c21',
+      'module-02-spine-bottom-b',
+      'column-bottom-b-c22'
+    ]);
+    sim.setVehicleTaskForTest('SH-02', 'loaded-outbound-task', true);
+    sim.setVehicleWaitingForTest('SH-01', {
+      targetNodeId: 'column-bottom-b-c16',
+      waitReason: 'outbound-lift-dock-protected',
+      blockingVehicleId: 'SH-02',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleWaitingForTest('SH-02', {
+      targetNodeId: 'column-bottom-b-c15',
+      waitReason: 'node-occupied',
+      blockingVehicleId: 'SH-01',
+      waitingSinceSec: 0
+    });
+
+    const internals = sim as unknown as {
+      vehicles: Array<{ id: string }>;
+      agentRefreshMoveBlocker: (
+        vehicle: unknown,
+        toNodeId: string,
+        candidateRouteNodeIds?: string[] | null
+      ) => { reason: string; blockingVehicleId: string | null } | null;
+    };
+    const emptyVehicle = internals.vehicles.find((vehicle) => vehicle.id === 'SH-01')!;
+
+    expect(internals.agentRefreshMoveBlocker(emptyVehicle, 'column-bottom-b-c16', emptyClearanceRoute)).toBeNull();
+  });
+
+  it('lets an unloaded inbound yielder occupying a loaded outbound target back out of protected bottom-b', () => {
+    const sim = new ShuttleSimCore(createInboundOutboundDemoScenario({
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2,
+        initialOutboundFullColumns: 0
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true
+      }
+    }));
+    sim.addLoadForTest({ id: 'loaded-target-load', state: 'carried', nodeId: null, vehicleId: 'SH-02', weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'loaded-target-task',
+      kind: 'outbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r14-c19',
+      dropoffNodeId: 'column-bottom-b-c22',
+      loadId: 'loaded-target-load',
+      vehicleId: 'SH-02',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addLoadForTest({ id: 'target-yielder-load', state: 'waiting', nodeId: 'column-top-a-c10', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'target-yielder-task',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 1,
+      assignedAtSec: 1,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c10',
+      dropoffNodeId: 'storage-r02-c10',
+      loadId: 'target-yielder-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    const emptyRetreatRoute = [
+      'column-bottom-b-c19',
+      'column-bottom-b-c18',
+      'column-bottom-b-c17',
+      'column-bottom-b-c16',
+      'column-bottom-b-c15',
+      'module-boundary-01-spine-bottom-b',
+      'module-boundary-01-spine-bottom-a',
+      'module-boundary-01-spine-middle',
+      'module-boundary-01-spine-top-b',
+      'module-boundary-01-spine-top-a',
+      'column-top-a-c14',
+      'column-top-a-c13',
+      'column-top-a-c12',
+      'column-top-a-c11',
+      'column-top-a-c10',
+      'storage-r02-c10'
+    ];
+    sim.setVehicleRouteForTest('SH-01', emptyRetreatRoute);
+    sim.setVehicleTaskForTest('SH-01', 'target-yielder-task', false);
+    sim.setVehicleRouteForTest('SH-02', [
+      'column-bottom-a-c19',
+      'column-bottom-b-c19',
+      'column-bottom-b-c20',
+      'column-bottom-b-c21',
+      'module-02-spine-bottom-b',
+      'column-bottom-b-c22'
+    ]);
+    sim.setVehicleTaskForTest('SH-02', 'loaded-target-task', true);
+    sim.setVehicleWaitingForTest('SH-01', {
+      targetNodeId: 'column-bottom-b-c18',
+      waitReason: 'outbound-lift-dock-protected',
+      blockingVehicleId: 'SH-02',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleWaitingForTest('SH-02', {
+      targetNodeId: 'column-bottom-b-c19',
+      waitReason: 'node-occupied',
+      blockingVehicleId: 'SH-01',
+      waitingSinceSec: 0
+    });
+
+    const internals = sim as unknown as {
+      vehicles: Array<{ id: string }>;
+      agentRefreshMoveBlocker: (
+        vehicle: unknown,
+        toNodeId: string,
+        candidateRouteNodeIds?: string[] | null
+      ) => { reason: string; blockingVehicleId: string | null } | null;
+    };
+    const emptyVehicle = internals.vehicles.find((vehicle) => vehicle.id === 'SH-01')!;
+
+    expect(internals.agentRefreshMoveBlocker(emptyVehicle, 'column-bottom-b-c18', emptyRetreatRoute)).toBeNull();
+  });
+
+  it('does not retarget a loaded inbound dropoff into an outbound-locked column', () => {
+    const scenario = createInboundOutboundDemoScenario({
       vehicles: { count: 1 },
       taskGeneration: {
-        inboundRatePerHour: 3600,
-        outboundRatePerHour: 3600,
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
         inboundOutboundMix: 0.5,
         arrivalDistribution: 'deterministic',
         maxTasks: 8,
-        initialOutboundFullColumns: 4,
-        initialStorageFillPolicy: 'zone-balanced-50'
+        initialOutboundFullColumns: 0
       },
       trafficPolicy: {
         controllerMode: 'agent-refresh'
@@ -8154,12 +10350,12 @@ describe('shuttle phase 0 SimCore', () => {
       traffic: { findEdge: (fromNodeId: string, toNodeId: string) => { id: string; lengthM: number } | null };
     };
     const vehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
-    const reverseEdge = internals.traffic.findEdge(
-      'column-bottom-b-c07',
-      'column-bottom-b-c08'
+    const staleExitEdge = internals.traffic.findEdge(
+      'lift-01-outbound-queue-01-service-exit',
+      'lift-01-outbound-queue-01-entry-access'
     )!;
     vehicle.state = 'loaded-moving';
-    vehicle.currentEdgeId = reverseEdge.id;
+    vehicle.currentEdgeId = staleExitEdge.id;
     vehicle.targetNodeId = 'lift-01-outbound-queue-01-entry-access';
     vehicle.legRemainingM = 1;
     vehicle.legElapsedSec = 1;
@@ -11799,6 +13995,387 @@ describe('shuttle phase 0 SimCore', () => {
     expectRouteHopsAdjacent(scenario, emptyOutbound.routeNodeIds);
   });
 
+  it('lets an empty inbound middle-aisle swap yielder use a side pocket outside the loaded inbound route', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 8,
+        initialOutboundFullColumns: 0
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({ id: 'loaded-inbound-side-pocket-load', state: 'carried', nodeId: null, vehicleId: 'SH-01', weightKg: 100 });
+    sim.addLoadForTest({ id: 'empty-inbound-side-pocket-load', state: 'waiting', nodeId: 'column-top-a-c08', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'loaded-inbound-side-pocket',
+      kind: 'inbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c22',
+      dropoffNodeId: 'storage-r09-c28',
+      loadId: 'loaded-inbound-side-pocket-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'empty-inbound-side-pocket',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r02-c13',
+      loadId: 'empty-inbound-side-pocket-load',
+      vehicleId: 'SH-04',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', [
+      'column-middle-c27',
+      'column-middle-c28',
+      'storage-r08-c28',
+      'storage-r09-c28'
+    ]);
+    sim.setVehicleTaskForTest('SH-01', 'loaded-inbound-side-pocket', true);
+    sim.setVehicleWaitingForTest('SH-01', {
+      targetNodeId: 'column-middle-c28',
+      waitReason: 'node-occupied',
+      blockingVehicleId: 'SH-04',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleRouteForTest('SH-04', [
+      'column-middle-c28',
+      'column-middle-c27',
+      'storage-r07-c27',
+      'storage-r06-c27',
+      'storage-r05-c27',
+      'storage-r04-c27',
+      'storage-r03-c27',
+      'storage-r02-c27',
+      'storage-r01-c27',
+      'column-top-b-c27',
+      'column-top-a-c27',
+      'column-top-a-c26',
+      'column-top-a-c25',
+      'column-top-a-c24',
+      'column-top-a-c23',
+      'column-top-a-c22',
+      'module-02-spine-top-a',
+      'column-top-a-c21',
+      'column-top-a-c20',
+      'column-top-a-c19',
+      'column-top-a-c18',
+      'column-top-a-c17',
+      'column-top-a-c16',
+      'column-top-a-c15',
+      'module-boundary-01-spine-top-a',
+      'column-top-a-c14',
+      'column-top-a-c13',
+      'column-top-a-c12',
+      'column-top-a-c11',
+      'column-top-a-c10'
+    ]);
+    sim.setVehicleTaskForTest('SH-04', 'empty-inbound-side-pocket', false);
+    sim.setVehicleWaitingForTest('SH-04', {
+      targetNodeId: 'column-middle-c27',
+      waitReason: 'node-occupied',
+      blockingVehicleId: 'SH-01',
+      waitingSinceSec: 0
+    });
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        routeNodeIds: string[];
+        targetNodeId: string | null;
+        waitReason: string | null;
+        localRouteReason: string | null;
+      }>;
+      tryInstallAgentRefreshTopLiftAdjacentNodeSwapYieldForPair(first: unknown, second: unknown): { id: string } | null;
+    };
+    const loadedInbound = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    const emptyInbound = internals.vehicles.find((candidate) => candidate.id === 'SH-04')!;
+    const installedYielder = internals.tryInstallAgentRefreshTopLiftAdjacentNodeSwapYieldForPair(loadedInbound, emptyInbound);
+
+    expect(installedYielder?.id).toBe('SH-04');
+    expect(emptyInbound.routeNodeIds).toEqual(['column-middle-c28', 'storage-r07-c28']);
+    expect(emptyInbound.routeNodeIds).not.toContain('storage-r08-c28');
+    expect(emptyInbound.targetNodeId).toBe('storage-r07-c28');
+    expect(emptyInbound.waitReason).toBeNull();
+    expect(emptyInbound.localRouteReason).toBe('temporary-yield');
+    expectRouteHopsAdjacent(scenario, emptyInbound.routeNodeIds);
+  });
+
+  it('retreats a loaded inbound middle-aisle swap when the empty inbound service has no clear side pocket', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 8,
+        initialOutboundFullColumns: 0
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({ id: 'loaded-inbound-no-pocket-load', state: 'carried', nodeId: null, vehicleId: 'SH-01', weightKg: 100 });
+    sim.addLoadForTest({ id: 'empty-inbound-no-pocket-load', state: 'waiting', nodeId: 'column-top-a-c08', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'side-pocket-occupied-load', state: 'stored', nodeId: 'storage-r07-c28', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'loaded-inbound-no-pocket',
+      kind: 'inbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c22',
+      dropoffNodeId: 'storage-r09-c28',
+      loadId: 'loaded-inbound-no-pocket-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'empty-inbound-no-pocket',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r02-c13',
+      loadId: 'empty-inbound-no-pocket-load',
+      vehicleId: 'SH-04',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', [
+      'column-middle-c27',
+      'column-middle-c28',
+      'storage-r08-c28',
+      'storage-r09-c28'
+    ]);
+    sim.setVehicleTaskForTest('SH-01', 'loaded-inbound-no-pocket', true);
+    sim.setVehicleWaitingForTest('SH-01', {
+      targetNodeId: 'column-middle-c28',
+      waitReason: 'node-occupied',
+      blockingVehicleId: 'SH-04',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleRouteForTest('SH-04', [
+      'column-middle-c28',
+      'column-middle-c27',
+      'storage-r07-c27',
+      'storage-r06-c27',
+      'storage-r05-c27',
+      'storage-r04-c27',
+      'storage-r03-c27',
+      'storage-r02-c27',
+      'storage-r01-c27',
+      'column-top-b-c27',
+      'column-top-a-c27',
+      'column-top-a-c26',
+      'column-top-a-c25',
+      'column-top-a-c24',
+      'column-top-a-c23',
+      'column-top-a-c22',
+      'module-02-spine-top-a',
+      'column-top-a-c21',
+      'column-top-a-c20',
+      'column-top-a-c19',
+      'column-top-a-c18',
+      'column-top-a-c17',
+      'column-top-a-c16',
+      'column-top-a-c15',
+      'module-boundary-01-spine-top-a',
+      'column-top-a-c14',
+      'column-top-a-c13',
+      'column-top-a-c12',
+      'column-top-a-c11',
+      'column-top-a-c10'
+    ]);
+    sim.setVehicleTaskForTest('SH-04', 'empty-inbound-no-pocket', false);
+    sim.setVehicleWaitingForTest('SH-04', {
+      targetNodeId: 'column-middle-c27',
+      waitReason: 'node-occupied',
+      blockingVehicleId: 'SH-01',
+      waitingSinceSec: 0
+    });
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        routeNodeIds: string[];
+        targetNodeId: string | null;
+        waitReason: string | null;
+        localRouteReason: string | null;
+      }>;
+      tryInstallAgentRefreshTopLiftAdjacentNodeSwapYieldForPair(first: unknown, second: unknown): { id: string } | null;
+    };
+    const loadedInbound = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    const emptyInbound = internals.vehicles.find((candidate) => candidate.id === 'SH-04')!;
+    const installedYielder = internals.tryInstallAgentRefreshTopLiftAdjacentNodeSwapYieldForPair(loadedInbound, emptyInbound);
+
+    expect(installedYielder?.id).toBe('SH-01');
+    expect(loadedInbound.routeNodeIds[0]).toBe('column-middle-c27');
+    expect(loadedInbound.routeNodeIds[1]).toBe('column-middle-c26');
+    expect(loadedInbound.routeNodeIds).not.toContain('column-middle-c28');
+    expect(loadedInbound.targetNodeId).toBe('column-middle-c26');
+    expect(loadedInbound.waitReason).toBeNull();
+    expect(loadedInbound.localRouteReason).toBe('loaded-middle-faceoff-retreat');
+    expect(emptyInbound.waitReason).toBe('node-occupied');
+    expectRouteHopsAdjacent(scenario, loadedInbound.routeNodeIds);
+  });
+
+  it('retargets a loaded inbound away from an empty outbound middle-aisle faceoff', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 8,
+        initialOutboundFullColumns: 0
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({ id: 'boundary-inbound-load', state: 'carried', nodeId: null, vehicleId: 'SH-08', weightKg: 100 });
+    sim.addLoadForTest({ id: 'boundary-outbound-load', state: 'stored', nodeId: 'storage-r09-c03', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'boundary-loaded-inbound',
+      kind: 'inbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r08-c01',
+      loadId: 'boundary-inbound-load',
+      vehicleId: 'SH-08',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'boundary-empty-outbound',
+      kind: 'outbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r09-c03',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'boundary-outbound-load',
+      vehicleId: 'SH-05',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-08', ['column-middle-c02', 'column-middle-c01', 'storage-r08-c01']);
+    sim.setVehicleTaskForTest('SH-08', 'boundary-loaded-inbound', true);
+    sim.setVehicleWaitingForTest('SH-08', {
+      targetNodeId: 'column-middle-c01',
+      waitReason: 'node-occupied',
+      blockingVehicleId: 'SH-05',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleRouteForTest('SH-05', [
+      'column-middle-c01',
+      'column-middle-c02',
+      'column-middle-c03',
+      'column-middle-c04',
+      'column-middle-c05',
+      'column-middle-c06',
+      'column-middle-c07',
+      'module-01-spine-middle',
+      'module-01-spine-bottom-a',
+      'column-bottom-a-c07',
+      'column-bottom-a-c06',
+      'column-bottom-a-c05',
+      'column-bottom-a-c04',
+      'column-bottom-a-c03',
+      'storage-r14-c03',
+      'storage-r13-c03',
+      'storage-r12-c03',
+      'storage-r11-c03',
+      'storage-r10-c03',
+      'storage-r09-c03'
+    ]);
+    sim.setVehicleTaskForTest('SH-05', 'boundary-empty-outbound', false);
+    sim.setVehicleWaitingForTest('SH-05', {
+      targetNodeId: 'column-middle-c02',
+      waitReason: 'node-occupied',
+      blockingVehicleId: 'SH-08',
+      waitingSinceSec: 0
+    });
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        state: string;
+        routeNodeIds: string[];
+        targetNodeId: string | null;
+        waitReason: string | null;
+        blockingVehicleId: string | null;
+        plannedGoalNodeId: string | null;
+      }>;
+      agentRefreshHandleMoveBlock(
+        vehicle: unknown,
+        blockedTargetNodeId: string,
+        block: { reason: string; blockingVehicleId: string | null }
+      ): boolean;
+    };
+    const loadedInbound = internals.vehicles.find((vehicle) => vehicle.id === 'SH-08')!;
+
+    expect(internals.agentRefreshHandleMoveBlock(loadedInbound, 'column-middle-c01', {
+      reason: 'node-occupied',
+      blockingVehicleId: 'SH-05'
+    })).toBe(true);
+
+    const retargetedTask = sim.getState().tasks.find((task) => task.id === 'boundary-loaded-inbound')!;
+    expect(retargetedTask.dropoffNodeId).not.toBe('storage-r08-c01');
+    expect(loadedInbound.state).toBe('loaded-moving');
+    expect(loadedInbound.routeNodeIds[0]).toBe('column-middle-c02');
+    expect(loadedInbound.routeNodeIds[1]).not.toBe('column-middle-c01');
+    expect(loadedInbound.targetNodeId).toBe(loadedInbound.routeNodeIds[1]);
+    expect(loadedInbound.plannedGoalNodeId).toBe(retargetedTask.dropoffNodeId);
+    expect(loadedInbound.waitReason).toBeNull();
+    expect(loadedInbound.blockingVehicleId).toBeNull();
+    expectRouteHopsAdjacent(scenario, loadedInbound.routeNodeIds);
+    expect(sim.getEventLog()).toContainEqual(expect.objectContaining({
+      eventType: 'route-replanned',
+      vehicleId: 'SH-08',
+      taskId: 'boundary-loaded-inbound',
+      reason: 'loaded-inbound-retarget-reachable-dropoff'
+    }));
+  });
+
   it('retreats a loaded inbound middle faceoff along the yellow line when storage pockets are full', () => {
     const scenario = createInboundOutboundDemoScenario({
       vehicles: { count: 8 },
@@ -13070,6 +15647,731 @@ describe('shuttle phase 0 SimCore', () => {
     expect(blocker.routeNodeIds).toEqual(['column-middle-c22', blocker.targetNodeId]);
     expect(blocker.localRouteReason).toBe('temporary-yield');
     expect(blocker.waitReason).toBeNull();
+  });
+
+  it('extends an empty middle access no-stop cycle yield to a legal hold pocket', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 8,
+        initialOutboundFullColumns: 0
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({ id: 'loaded-no-stop-cycle-load', state: 'carried', nodeId: null, vehicleId: 'SH-07', weightKg: 100 });
+    sim.addLoadForTest({ id: 'empty-no-stop-cycle-load', state: 'waiting', nodeId: 'lift-01-inbound-buffer-03', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'middle-c07-upper-block', state: 'stored', nodeId: 'storage-r07-c07', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'middle-c07-lower-block', state: 'stored', nodeId: 'storage-r08-c07', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'loaded-no-stop-cycle-task',
+      kind: 'inbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r08-c05',
+      loadId: 'loaded-no-stop-cycle-load',
+      vehicleId: 'SH-07',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'empty-no-stop-cycle-task',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 1,
+      assignedAtSec: 1,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r01-c05',
+      loadId: 'empty-no-stop-cycle-load',
+      vehicleId: 'SH-06',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-07', [
+      'module-01-spine-top-b',
+      'module-01-spine-middle',
+      'column-middle-c07',
+      'column-middle-c06',
+      'column-middle-c05',
+      'storage-r08-c05'
+    ]);
+    sim.setVehicleTaskForTest('SH-07', 'loaded-no-stop-cycle-task', true);
+    sim.setVehicleWaitingForTest('SH-07', {
+      targetNodeId: 'module-01-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-06',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleRouteForTest('SH-06', [
+      'column-middle-c07',
+      'module-01-spine-middle',
+      'module-01-spine-top-b',
+      'column-top-b-c08'
+    ]);
+    sim.setVehicleTaskForTest('SH-06', 'empty-no-stop-cycle-task', false);
+    sim.setVehicleWaitingForTest('SH-06', {
+      targetNodeId: 'module-01-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-07',
+      waitingSinceSec: 0
+    });
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        targetNodeId: string | null;
+        routeNodeIds: string[];
+        localRouteReason: string | null;
+        waitReason: string | null;
+      }>;
+      tryBreakAgentRefreshWaitCycle(candidateVehicleIds: string[]): boolean;
+    };
+
+    expect(internals.tryBreakAgentRefreshWaitCycle(['SH-06', 'SH-07'])).toBe(true);
+    const yielder = internals.vehicles.find((vehicle) => vehicle.id === 'SH-06')!;
+    expect(yielder.routeNodeIds[0]).toBe('column-middle-c07');
+    expect(yielder.routeNodeIds[1]).toBe('column-middle-c06');
+    expect(yielder.routeNodeIds.at(-1)).toMatch(/^storage-r0[78]-c06$/);
+    expect(yielder.targetNodeId).toBe('column-middle-c06');
+    expect(yielder.localRouteReason).toBe('temporary-yield');
+    expect(yielder.waitReason).toBeNull();
+  });
+
+  it('clears an empty middle access no-stop blocker across the spine when same-side hold pockets are full', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 8,
+        initialOutboundFullColumns: 0
+      },
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true,
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    let loadIndex = 0;
+    for (const column of [6, 7]) {
+      for (const row of [7, 8, 9, 10, 11, 12, 13, 14, 6, 5, 4, 3, 2, 1]) {
+        sim.addLoadForTest({
+          id: `occupied-middle-cross-yield-${++loadIndex}`,
+          state: 'stored',
+          nodeId: `storage-r${String(row).padStart(2, '0')}-c${String(column).padStart(2, '0')}`,
+          vehicleId: null,
+          weightKg: 100
+        });
+      }
+    }
+    sim.addLoadForTest({ id: 'cross-spine-loaded-inbound-load', state: 'carried', nodeId: null, vehicleId: 'SH-05', weightKg: 100 });
+    sim.addLoadForTest({ id: 'cross-spine-empty-inbound-load', state: 'waiting', nodeId: 'lift-01-inbound-buffer-03', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'cross-spine-loaded-inbound-task',
+      kind: 'inbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r13-c01',
+      loadId: 'cross-spine-loaded-inbound-load',
+      vehicleId: 'SH-05',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'cross-spine-empty-inbound-task',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 1,
+      assignedAtSec: 1,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r06-c01',
+      loadId: 'cross-spine-empty-inbound-load',
+      vehicleId: 'SH-07',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-05', [
+      'module-01-spine-top-b',
+      'module-01-spine-middle',
+      'column-middle-c07',
+      'column-middle-c06',
+      'column-middle-c05',
+      'column-middle-c04',
+      'column-middle-c03',
+      'column-middle-c02',
+      'column-middle-c01',
+      'storage-r08-c01',
+      'storage-r09-c01',
+      'storage-r10-c01',
+      'storage-r11-c01',
+      'storage-r12-c01',
+      'storage-r13-c01'
+    ]);
+    sim.setVehicleTaskForTest('SH-05', 'cross-spine-loaded-inbound-task', true);
+    sim.setVehicleWaitingForTest('SH-05', {
+      targetNodeId: 'module-01-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-07',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleRouteForTest('SH-07', [
+      'column-middle-c07',
+      'module-01-spine-middle',
+      'module-01-spine-top-b',
+      'column-top-b-c08',
+      'column-top-b-c09',
+      'column-top-b-c10',
+      'column-top-b-c11',
+      'column-top-a-c11'
+    ]);
+    sim.setVehicleTaskForTest('SH-07', 'cross-spine-empty-inbound-task', false);
+    sim.setVehicleWaitingForTest('SH-07', {
+      targetNodeId: 'module-01-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-05',
+      waitingSinceSec: 0
+    });
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        targetNodeId: string | null;
+        routeNodeIds: string[];
+        localRouteReason: string | null;
+        waitReason: string | null;
+      }>;
+      tryBreakAgentRefreshWaitCycle(candidateVehicleIds: string[]): boolean;
+    };
+
+    expect(internals.tryBreakAgentRefreshWaitCycle(['SH-05', 'SH-07'])).toBe(true);
+    const yielder = internals.vehicles.find((vehicle) => vehicle.id === 'SH-07')!;
+    expect(yielder.routeNodeIds).toEqual([
+      'column-middle-c07',
+      'module-01-spine-middle',
+      'column-middle-c08',
+      'storage-r07-c08'
+    ]);
+    expect(yielder.targetNodeId).toBe('module-01-spine-middle');
+    expect(yielder.localRouteReason).toBe('temporary-yield');
+    expect(yielder.waitReason).toBeNull();
+  });
+
+  it('searches past the module boundary for a legal cross-spine hold when local middle storage is full', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 8,
+        initialOutboundFullColumns: 0
+      },
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true,
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    let loadIndex = 0;
+    for (const column of [6, 7, 8, 9, 10, 11, 12, 13, 14]) {
+      for (const row of [7, 8, 9, 10, 11, 12, 13, 14, 6, 5, 4, 3, 2, 1]) {
+        sim.addLoadForTest({
+          id: `occupied-boundary-cross-yield-${++loadIndex}`,
+          state: 'stored',
+          nodeId: `storage-r${String(row).padStart(2, '0')}-c${String(column).padStart(2, '0')}`,
+          vehicleId: null,
+          weightKg: 100
+        });
+      }
+    }
+    sim.addLoadForTest({ id: 'boundary-cross-loaded-inbound-load', state: 'carried', nodeId: null, vehicleId: 'SH-05', weightKg: 100 });
+    sim.addLoadForTest({ id: 'boundary-cross-empty-inbound-load', state: 'waiting', nodeId: 'lift-01-inbound-buffer-03', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'boundary-cross-loaded-inbound-task',
+      kind: 'inbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r13-c01',
+      loadId: 'boundary-cross-loaded-inbound-load',
+      vehicleId: 'SH-05',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'boundary-cross-empty-inbound-task',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 1,
+      assignedAtSec: 1,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r06-c01',
+      loadId: 'boundary-cross-empty-inbound-load',
+      vehicleId: 'SH-07',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-05', [
+      'module-01-spine-top-b',
+      'module-01-spine-middle',
+      'column-middle-c07',
+      'column-middle-c06',
+      'column-middle-c05',
+      'column-middle-c04',
+      'column-middle-c03',
+      'column-middle-c02',
+      'column-middle-c01',
+      'storage-r08-c01',
+      'storage-r09-c01',
+      'storage-r10-c01',
+      'storage-r11-c01',
+      'storage-r12-c01',
+      'storage-r13-c01'
+    ]);
+    sim.setVehicleTaskForTest('SH-05', 'boundary-cross-loaded-inbound-task', true);
+    sim.setVehicleWaitingForTest('SH-05', {
+      targetNodeId: 'module-01-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-07',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleRouteForTest('SH-07', [
+      'column-middle-c07',
+      'module-01-spine-middle',
+      'module-01-spine-top-b',
+      'column-top-b-c08',
+      'column-top-b-c09',
+      'column-top-b-c10',
+      'column-top-b-c11',
+      'column-top-a-c11'
+    ]);
+    sim.setVehicleTaskForTest('SH-07', 'boundary-cross-empty-inbound-task', false);
+    sim.setVehicleWaitingForTest('SH-07', {
+      targetNodeId: 'module-01-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-05',
+      waitingSinceSec: 0
+    });
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        targetNodeId: string | null;
+        routeNodeIds: string[];
+        localRouteReason: string | null;
+        waitReason: string | null;
+      }>;
+      tryBreakAgentRefreshWaitCycle(candidateVehicleIds: string[]): boolean;
+    };
+
+    expect(internals.tryBreakAgentRefreshWaitCycle(['SH-05', 'SH-07'])).toBe(true);
+    const yielder = internals.vehicles.find((vehicle) => vehicle.id === 'SH-07')!;
+    expect(yielder.routeNodeIds).toContain('module-boundary-01-spine-middle');
+    expect(yielder.routeNodeIds.at(-1)).toBe('storage-r07-c15');
+    expect(yielder.localRouteReason).toBe('temporary-yield');
+    expect(yielder.waitReason).toBeNull();
+  });
+
+  it('clears a five-vehicle top-lift middle no-stop chain by moving a bottom-a follower first when hold pockets are full', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 8,
+        initialOutboundFullColumns: 0
+      },
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true,
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({ id: 'five-chain-sh01-load', state: 'carried', nodeId: null, vehicleId: 'SH-01', weightKg: 100 });
+    sim.addLoadForTest({ id: 'five-chain-sh04-load', state: 'carried', nodeId: null, vehicleId: 'SH-04', weightKg: 100 });
+    sim.addLoadForTest({ id: 'five-chain-sh07-load', state: 'carried', nodeId: null, vehicleId: 'SH-07', weightKg: 100 });
+    sim.addLoadForTest({ id: 'five-chain-sh05-load', state: 'waiting', nodeId: 'lift-02-inbound-buffer-03', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'five-chain-sh08-load', state: 'stored', nodeId: 'storage-r02-c04', vehicleId: null, weightKg: 100 });
+    for (const column of [8, 9, 10, 11, 12, 13, 14]) {
+      sim.addLoadForTest({
+        id: `five-chain-bottom-hold-blocker-c${column}`,
+        state: 'stored',
+        nodeId: `storage-r14-c${String(column).padStart(2, '0')}`,
+        vehicleId: null,
+        weightKg: 100
+      });
+    }
+    sim.addTaskForTest({
+      id: 'five-chain-sh01-inbound-task',
+      kind: 'inbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r14-c06',
+      loadId: 'five-chain-sh01-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'five-chain-sh04-outbound-task',
+      kind: 'outbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r04-c03',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'five-chain-sh04-load',
+      vehicleId: 'SH-04',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'five-chain-sh07-inbound-task',
+      kind: 'inbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r09-c02',
+      loadId: 'five-chain-sh07-load',
+      vehicleId: 'SH-07',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'five-chain-sh05-inbound-task',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c22',
+      dropoffNodeId: 'storage-r11-c19',
+      loadId: 'five-chain-sh05-load',
+      vehicleId: 'SH-05',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'five-chain-sh08-outbound-task',
+      kind: 'outbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r02-c04',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'five-chain-sh08-load',
+      vehicleId: 'SH-08',
+      replanCount: 0,
+      waitReason: null
+    });
+
+    sim.setVehicleRouteForTest('SH-01', [
+      'module-01-spine-top-a',
+      'module-01-spine-top-b',
+      'module-01-spine-middle',
+      'module-01-spine-bottom-a',
+      'column-bottom-a-c07',
+      'column-bottom-a-c06',
+      'storage-r14-c06'
+    ]);
+    sim.setVehicleTaskForTest('SH-01', 'five-chain-sh01-inbound-task', true);
+    sim.setVehicleWaitingForTest('SH-01', {
+      targetNodeId: 'module-01-spine-top-b',
+      waitReason: 'node-occupied',
+      blockingVehicleId: 'SH-07',
+      waitingSinceSec: 0
+    });
+
+    sim.setVehicleRouteForTest('SH-04', [
+      'column-middle-c07',
+      'module-01-spine-middle',
+      'module-01-spine-bottom-a',
+      'module-01-spine-bottom-b',
+      'column-bottom-b-c08'
+    ]);
+    sim.setVehicleTaskForTest('SH-04', 'five-chain-sh04-outbound-task', true);
+    sim.setVehicleWaitingForTest('SH-04', {
+      targetNodeId: 'module-01-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-08',
+      waitingSinceSec: 0
+    });
+
+    sim.setVehicleRouteForTest('SH-05', [
+      'column-bottom-a-c07',
+      'module-01-spine-bottom-a',
+      'column-bottom-a-c08',
+      'column-bottom-a-c09',
+      'column-bottom-a-c10',
+      'column-bottom-a-c11',
+      'column-bottom-a-c12',
+      'column-bottom-a-c13',
+      'column-bottom-a-c14',
+      'module-boundary-01-spine-bottom-a',
+      'column-bottom-a-c15',
+      'column-bottom-a-c16',
+      'column-bottom-a-c17',
+      'column-bottom-a-c18',
+      'column-bottom-a-c19',
+      'column-bottom-a-c20',
+      'column-bottom-a-c21',
+      'module-02-spine-bottom-a',
+      'module-02-spine-middle',
+      'module-02-spine-top-b',
+      'module-02-spine-top-a',
+      'column-top-a-c22',
+      'column-top-a-c23'
+    ]);
+    sim.setVehicleTaskForTest('SH-05', 'five-chain-sh05-inbound-task', false);
+    sim.setVehicleWaitingForTest('SH-05', {
+      targetNodeId: 'module-01-spine-bottom-a',
+      waitReason: 'node-occupied',
+      blockingVehicleId: 'SH-08',
+      waitingSinceSec: 0
+    });
+
+    sim.setVehicleRouteForTest('SH-02', [
+      'column-bottom-a-c15',
+      'storage-r14-c15',
+      'storage-r13-c15'
+    ]);
+    sim.setVehicleTaskForTest('SH-02', null, false);
+
+    sim.setVehicleRouteForTest('SH-07', [
+      'module-01-spine-top-b',
+      'module-01-spine-middle',
+      'column-middle-c07',
+      'column-middle-c06',
+      'column-middle-c05',
+      'column-middle-c04',
+      'column-middle-c03',
+      'column-middle-c02',
+      'storage-r08-c02',
+      'storage-r09-c02'
+    ]);
+    sim.setVehicleTaskForTest('SH-07', 'five-chain-sh07-inbound-task', true);
+    sim.setVehicleWaitingForTest('SH-07', {
+      targetNodeId: 'module-01-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-04',
+      waitingSinceSec: 0
+    });
+
+    sim.setVehicleRouteForTest('SH-08', [
+      'module-01-spine-bottom-a',
+      'module-01-spine-middle',
+      'column-middle-c07',
+      'column-middle-c06',
+      'column-middle-c05',
+      'column-middle-c04',
+      'storage-r07-c04',
+      'storage-r06-c04',
+      'storage-r05-c04',
+      'storage-r04-c04',
+      'storage-r03-c04',
+      'storage-r02-c04'
+    ]);
+    sim.setVehicleTaskForTest('SH-08', 'five-chain-sh08-outbound-task', false);
+    sim.setVehicleWaitingForTest('SH-08', {
+      targetNodeId: 'module-01-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-04',
+      waitingSinceSec: 0
+    });
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        targetNodeId: string | null;
+        routeNodeIds: string[];
+        localRouteReason: string | null;
+        waitReason: string | null;
+      }>;
+      tryBreakAgentRefreshWaitCycle(candidateVehicleIds: string[]): boolean;
+    };
+
+    expect(internals.tryBreakAgentRefreshWaitCycle(['SH-04', 'SH-07', 'SH-08'])).toBe(true);
+    const follower = internals.vehicles.find((vehicle) => vehicle.id === 'SH-05')!;
+    expect(follower.waitReason).toBeNull();
+    expect(follower.targetNodeId).not.toBe('module-01-spine-bottom-a');
+    expect(follower.localRouteReason).toBe('temporary-yield');
+    expect(follower.routeNodeIds.length).toBeGreaterThan(1);
+
+    const bottomYielder = internals.vehicles.find((vehicle) => vehicle.id === 'SH-08')!;
+    expect(bottomYielder.waitReason).toBe('no-stop-continuation-blocked');
+    expect(bottomYielder.targetNodeId).toBe('module-01-spine-middle');
+  });
+
+  it('lets an empty middle access vehicle clear a reciprocal empty no-stop faceoff through protected transit', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 8,
+        initialOutboundFullColumns: 0
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({ id: 'empty-empty-inbound-source-load', state: 'waiting', nodeId: 'lift-01-inbound-buffer-03', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'empty-empty-outbound-pickup-load', state: 'stored', nodeId: 'storage-r08-c06', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'middle-c07-upper-block-empty-empty', state: 'stored', nodeId: 'storage-r07-c07', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'middle-c07-lower-block-empty-empty', state: 'stored', nodeId: 'storage-r08-c07', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'middle-c06-upper-block-empty-empty', state: 'stored', nodeId: 'storage-r07-c06', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'empty-empty-inbound-task',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r01-c04',
+      loadId: 'empty-empty-inbound-source-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'empty-empty-outbound-task',
+      kind: 'outbound',
+      state: 'assigned',
+      createdAtSec: 1,
+      assignedAtSec: 1,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r08-c06',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'empty-empty-outbound-pickup-load',
+      vehicleId: 'SH-02',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', [
+      'column-middle-c07',
+      'module-01-spine-middle',
+      'module-01-spine-top-b',
+      'column-top-b-c08',
+      'column-top-b-c09',
+      'column-top-b-c10',
+      'column-top-a-c10'
+    ]);
+    sim.setVehicleTaskForTest('SH-01', 'empty-empty-inbound-task', false);
+    sim.setVehicleWaitingForTest('SH-01', {
+      targetNodeId: 'module-01-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-02',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleRouteForTest('SH-02', [
+      'module-01-spine-top-b',
+      'module-01-spine-middle',
+      'column-middle-c07',
+      'column-middle-c06',
+      'storage-r08-c06'
+    ]);
+    sim.setVehicleTaskForTest('SH-02', 'empty-empty-outbound-task', false);
+    sim.setVehicleWaitingForTest('SH-02', {
+      targetNodeId: 'module-01-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-01',
+      waitingSinceSec: 0
+    });
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        targetNodeId: string | null;
+        routeNodeIds: string[];
+        localRouteReason: string | null;
+        waitReason: string | null;
+      }>;
+      tryYieldEmptyMiddleAccessAwayFromWaitCycle(
+        yielder: unknown,
+        requester: unknown,
+        blockedTargetNodeId: string
+      ): boolean;
+    };
+    const yielder = internals.vehicles.find((vehicle) => vehicle.id === 'SH-01')!;
+    const requester = internals.vehicles.find((vehicle) => vehicle.id === 'SH-02')!;
+
+    expect(internals.tryYieldEmptyMiddleAccessAwayFromWaitCycle(
+      yielder,
+      requester,
+      'module-01-spine-middle'
+    )).toBe(true);
+    expect(yielder.routeNodeIds.slice(0, 3)).toEqual([
+      'column-middle-c07',
+      'column-middle-c06',
+      'column-middle-c05'
+    ]);
+    expect(yielder.routeNodeIds.at(-1)).toMatch(/^storage-r0[78]-c05$/);
+    expect(yielder.targetNodeId).toBe('column-middle-c06');
+    expect(yielder.localRouteReason).toBe('temporary-yield');
+    expect(yielder.waitReason).toBeNull();
   });
 
   it('does not pre-stage a taskless inbound standby through a projected loaded inbound route', () => {
@@ -14560,6 +17862,643 @@ describe('shuttle phase 0 SimCore', () => {
 
     expect(internals.agentRefreshMoveBlocker(spineOccupant, 'module-01-spine-middle')?.reason)
       .not.toBe('middle-aisle-opposing-claim');
+  });
+
+  it('prioritizes a loaded middle-access no-stop faceoff before lower-lane wait-cycle distractions', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 8,
+        initialOutboundFullColumns: 0
+      },
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true,
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({ id: 'spine-cycle-inbound-load', state: 'carried', nodeId: null, vehicleId: 'SH-03', weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'spine-cycle-inbound',
+      kind: 'inbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r14-c06',
+      loadId: 'spine-cycle-inbound-load',
+      vehicleId: 'SH-03',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addLoadForTest({ id: 'spine-cycle-outbound-load', state: 'carried', nodeId: null, vehicleId: 'SH-04', weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'spine-cycle-outbound',
+      kind: 'outbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r07-c03',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'spine-cycle-outbound-load',
+      vehicleId: 'SH-04',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addLoadForTest({ id: 'distractor-inbound-load', state: 'waiting', nodeId: 'column-top-a-c24', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'distractor-inbound',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c24',
+      dropoffNodeId: 'storage-r07-c18',
+      loadId: 'distractor-inbound-load',
+      vehicleId: 'SH-05',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addLoadForTest({ id: 'distractor-outbound-load', state: 'stored', nodeId: 'storage-r14-c01', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'distractor-outbound',
+      kind: 'outbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r14-c01',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'distractor-outbound-load',
+      vehicleId: 'SH-06',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addLoadForTest({ id: 'distractor-outbound-2-load', state: 'stored', nodeId: 'storage-r11-c05', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'distractor-outbound-2',
+      kind: 'outbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r11-c05',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'distractor-outbound-2-load',
+      vehicleId: 'SH-07',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-03', [
+      'module-01-spine-top-b',
+      'module-01-spine-middle',
+      'column-middle-c07',
+      'column-middle-c06',
+      'storage-r08-c06',
+      'storage-r09-c06',
+      'storage-r10-c06',
+      'storage-r11-c06',
+      'storage-r12-c06',
+      'storage-r13-c06',
+      'storage-r14-c06'
+    ]);
+    sim.setVehicleTaskForTest('SH-03', 'spine-cycle-inbound', true);
+    sim.setVehicleWaitingForTest('SH-03', {
+      targetNodeId: 'module-01-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-04',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleRouteForTest('SH-04', [
+      'column-middle-c07',
+      'module-01-spine-middle',
+      'module-01-spine-top-b',
+      'column-top-b-c08',
+      'column-top-b-c09',
+      'column-top-b-c10',
+      'column-top-b-c11',
+      'column-top-b-c12',
+      'column-top-b-c13',
+      'column-top-b-c14',
+      'module-boundary-01-spine-top-b',
+      'module-boundary-01-spine-middle',
+      'module-boundary-01-spine-bottom-a',
+      'module-boundary-01-spine-bottom-b',
+      'column-bottom-b-c14',
+      'column-bottom-b-c13',
+      'column-bottom-b-c12',
+      'column-bottom-b-c11',
+      'column-bottom-b-c10',
+      'column-bottom-b-c09',
+      'column-bottom-b-c08'
+    ]);
+    sim.setVehicleTaskForTest('SH-04', 'spine-cycle-outbound', true);
+    sim.setVehicleWaitingForTest('SH-04', {
+      targetNodeId: 'module-01-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-03',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleRouteForTest('SH-05', [
+      'column-bottom-a-c07',
+      'module-01-spine-bottom-a',
+      'column-bottom-a-c08',
+      'column-bottom-a-c09',
+      'column-bottom-a-c10',
+      'column-bottom-a-c11',
+      'column-bottom-a-c12',
+      'column-bottom-a-c13',
+      'column-bottom-a-c14',
+      'module-boundary-01-spine-bottom-a',
+      'column-bottom-a-c15',
+      'column-bottom-a-c16',
+      'column-bottom-a-c17',
+      'column-bottom-a-c18',
+      'column-bottom-a-c19',
+      'column-bottom-a-c20',
+      'column-bottom-a-c21',
+      'module-02-spine-bottom-a',
+      'module-02-spine-middle',
+      'module-02-spine-top-b',
+      'module-02-spine-top-a',
+      'column-top-a-c22',
+      'column-top-a-c23',
+      'column-top-a-c24'
+    ]);
+    sim.setVehicleTaskForTest('SH-05', 'distractor-inbound', false);
+    sim.setVehicleWaitingForTest('SH-05', {
+      targetNodeId: 'module-01-spine-bottom-a',
+      waitReason: 'node-occupied',
+      blockingVehicleId: 'SH-06',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleRouteForTest('SH-06', [
+      'module-01-spine-bottom-a',
+      'module-01-spine-bottom-b',
+      'column-bottom-b-c07',
+      'column-bottom-b-c06',
+      'column-bottom-b-c05',
+      'column-bottom-b-c04',
+      'column-bottom-b-c03',
+      'column-bottom-b-c02',
+      'column-bottom-b-c01',
+      'column-bottom-a-c01',
+      'storage-r14-c01'
+    ]);
+    sim.setVehicleTaskForTest('SH-06', 'distractor-outbound', false);
+    sim.setVehicleWaitingForTest('SH-06', {
+      targetNodeId: 'module-01-spine-bottom-b',
+      waitReason: 'outbound-lift-dock-protected',
+      blockingVehicleId: 'SH-04',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleRouteForTest('SH-07', ['column-bottom-a-c08', 'column-bottom-b-c08']);
+    sim.setVehicleTaskForTest('SH-07', 'distractor-outbound-2', false);
+    sim.setVehicleWaitingForTest('SH-07', {
+      targetNodeId: 'column-bottom-b-c08',
+      waitReason: 'outbound-lift-dock-protected',
+      blockingVehicleId: 'SH-04',
+      waitingSinceSec: 0
+    });
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        targetNodeId: string | null;
+        waitReason: string | null;
+        localRouteReason: string | null;
+        routeNodeIds: string[];
+      }>;
+      tryBreakAgentRefreshWaitCycle(candidateVehicleIds: string[]): boolean;
+    };
+
+    expect(internals.tryBreakAgentRefreshWaitCycle([
+      'SH-03',
+      'SH-04',
+      'SH-05',
+      'SH-06',
+      'SH-07'
+    ])).toBe(true);
+    const loadedOutboundYielder = internals.vehicles.find((vehicle) => vehicle.id === 'SH-04')!;
+
+    expect(loadedOutboundYielder.waitReason).toBeNull();
+    expect(loadedOutboundYielder.localRouteReason).toBe('loaded-middle-access-storage-yield');
+    expect(loadedOutboundYielder.targetNodeId).toBe('storage-r08-c07');
+    expect(loadedOutboundYielder.routeNodeIds).toEqual(['column-middle-c07', 'storage-r08-c07']);
+  });
+
+  it('lets a loaded inbound top-b spine vehicle clear when middle-access storage pockets are occupied', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 8,
+        initialOutboundFullColumns: 0
+      },
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true,
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({ id: 'topb-cycle-inbound-load', state: 'carried', nodeId: null, vehicleId: 'SH-03', weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'topb-cycle-inbound',
+      kind: 'inbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r14-c06',
+      loadId: 'topb-cycle-inbound-load',
+      vehicleId: 'SH-03',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addLoadForTest({ id: 'topb-cycle-outbound-load', state: 'carried', nodeId: null, vehicleId: 'SH-04', weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'topb-cycle-outbound',
+      kind: 'outbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r07-c03',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'topb-cycle-outbound-load',
+      vehicleId: 'SH-04',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addLoadForTest({ id: 'occupied-middle-front-pocket', state: 'stored', nodeId: 'storage-r07-c07', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'occupied-middle-rear-pocket', state: 'stored', nodeId: 'storage-r08-c07', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'distractor-inbound-load-2', state: 'waiting', nodeId: 'column-top-a-c24', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'distractor-inbound-2',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c24',
+      dropoffNodeId: 'storage-r07-c18',
+      loadId: 'distractor-inbound-load-2',
+      vehicleId: 'SH-05',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addLoadForTest({ id: 'distractor-outbound-load-3', state: 'stored', nodeId: 'storage-r14-c01', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'distractor-outbound-3',
+      kind: 'outbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r14-c01',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'distractor-outbound-load-3',
+      vehicleId: 'SH-06',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addLoadForTest({ id: 'distractor-outbound-4-load', state: 'stored', nodeId: 'storage-r11-c05', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'distractor-outbound-4',
+      kind: 'outbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r11-c05',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'distractor-outbound-4-load',
+      vehicleId: 'SH-07',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', ['column-top-b-c07']);
+    sim.setVehicleRouteForTest('SH-03', [
+      'module-01-spine-top-b',
+      'module-01-spine-middle',
+      'column-middle-c07',
+      'column-middle-c06',
+      'storage-r08-c06',
+      'storage-r09-c06',
+      'storage-r10-c06',
+      'storage-r11-c06',
+      'storage-r12-c06',
+      'storage-r13-c06',
+      'storage-r14-c06'
+    ]);
+    sim.setVehicleTaskForTest('SH-03', 'topb-cycle-inbound', true);
+    sim.setVehicleWaitingForTest('SH-03', {
+      targetNodeId: 'module-01-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-04',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleRouteForTest('SH-04', [
+      'column-middle-c07',
+      'module-01-spine-middle',
+      'module-01-spine-top-b',
+      'column-top-b-c08',
+      'column-top-b-c09',
+      'column-top-b-c10',
+      'column-top-b-c11',
+      'column-top-b-c12',
+      'column-top-b-c13',
+      'column-top-b-c14',
+      'module-boundary-01-spine-top-b',
+      'module-boundary-01-spine-middle',
+      'module-boundary-01-spine-bottom-a',
+      'module-boundary-01-spine-bottom-b',
+      'column-bottom-b-c14',
+      'column-bottom-b-c13',
+      'column-bottom-b-c12',
+      'column-bottom-b-c11',
+      'column-bottom-b-c10',
+      'column-bottom-b-c09',
+      'column-bottom-b-c08'
+    ]);
+    sim.setVehicleTaskForTest('SH-04', 'topb-cycle-outbound', true);
+    sim.setVehicleWaitingForTest('SH-04', {
+      targetNodeId: 'module-01-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-03',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleRouteForTest('SH-05', [
+      'column-bottom-a-c07',
+      'module-01-spine-bottom-a',
+      'column-bottom-a-c08',
+      'column-bottom-a-c09',
+      'column-bottom-a-c10',
+      'column-bottom-a-c11',
+      'column-bottom-a-c12',
+      'column-bottom-a-c13',
+      'column-bottom-a-c14',
+      'module-boundary-01-spine-bottom-a',
+      'column-bottom-a-c15',
+      'column-bottom-a-c16',
+      'column-bottom-a-c17',
+      'column-bottom-a-c18',
+      'column-bottom-a-c19',
+      'column-bottom-a-c20',
+      'column-bottom-a-c21',
+      'module-02-spine-bottom-a',
+      'module-02-spine-middle',
+      'module-02-spine-top-b',
+      'module-02-spine-top-a',
+      'column-top-a-c22',
+      'column-top-a-c23',
+      'column-top-a-c24'
+    ]);
+    sim.setVehicleTaskForTest('SH-05', 'distractor-inbound-2', false);
+    sim.setVehicleWaitingForTest('SH-05', {
+      targetNodeId: 'module-01-spine-bottom-a',
+      waitReason: 'node-occupied',
+      blockingVehicleId: 'SH-06',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleRouteForTest('SH-06', [
+      'module-01-spine-bottom-a',
+      'module-01-spine-bottom-b',
+      'column-bottom-b-c07',
+      'column-bottom-b-c06',
+      'column-bottom-b-c05',
+      'column-bottom-b-c04',
+      'column-bottom-b-c03',
+      'column-bottom-b-c02',
+      'column-bottom-b-c01',
+      'column-bottom-a-c01',
+      'storage-r14-c01'
+    ]);
+    sim.setVehicleTaskForTest('SH-06', 'distractor-outbound-3', false);
+    sim.setVehicleWaitingForTest('SH-06', {
+      targetNodeId: 'module-01-spine-bottom-b',
+      waitReason: 'outbound-lift-dock-protected',
+      blockingVehicleId: 'SH-04',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleRouteForTest('SH-07', ['column-bottom-a-c08', 'column-bottom-b-c08']);
+    sim.setVehicleTaskForTest('SH-07', 'distractor-outbound-4', false);
+    sim.setVehicleWaitingForTest('SH-07', {
+      targetNodeId: 'column-bottom-b-c08',
+      waitReason: 'outbound-lift-dock-protected',
+      blockingVehicleId: 'SH-04',
+      waitingSinceSec: 0
+    });
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        targetNodeId: string | null;
+        waitReason: string | null;
+        localRouteReason: string | null;
+        routeNodeIds: string[];
+      }>;
+      tryBreakAgentRefreshWaitCycle(candidateVehicleIds: string[]): boolean;
+    };
+
+    expect(internals.tryBreakAgentRefreshWaitCycle([
+      'SH-03',
+      'SH-04',
+      'SH-05',
+      'SH-06',
+      'SH-07'
+    ])).toBe(true);
+    const loadedInboundYielder = internals.vehicles.find((vehicle) => vehicle.id === 'SH-03')!;
+    const loadedOutbound = internals.vehicles.find((vehicle) => vehicle.id === 'SH-04')!;
+
+    expect(loadedInboundYielder.waitReason).toBeNull();
+    expect(loadedInboundYielder.localRouteReason).toBe('loaded-inbound-topb-spine-storage-yield');
+    expect(loadedInboundYielder.targetNodeId).toBe('column-top-b-c08');
+    expect(loadedInboundYielder.routeNodeIds).toEqual([
+      'module-01-spine-top-b',
+      'column-top-b-c08',
+      'storage-r01-c08'
+    ]);
+    expect(loadedOutbound.waitReason).toBe('no-stop-continuation-blocked');
+  });
+
+  it('routes a loaded inbound top-b spine yielder through top-a when the only storage pocket is behind an empty top-b claimant', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 8,
+        initialOutboundFullColumns: 0
+      },
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true,
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({ id: 'topa-bypass-inbound-load', state: 'carried', nodeId: null, vehicleId: 'SH-03', weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'topa-bypass-inbound',
+      kind: 'inbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c08',
+      dropoffNodeId: 'storage-r14-c06',
+      loadId: 'topa-bypass-inbound-load',
+      vehicleId: 'SH-03',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addLoadForTest({ id: 'topa-bypass-outbound-load', state: 'carried', nodeId: null, vehicleId: 'SH-04', weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'topa-bypass-outbound',
+      kind: 'outbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r07-c03',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'topa-bypass-outbound-load',
+      vehicleId: 'SH-04',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addLoadForTest({ id: 'occupied-topa-middle-front', state: 'stored', nodeId: 'storage-r07-c07', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'occupied-topa-middle-rear', state: 'stored', nodeId: 'storage-r08-c07', vehicleId: null, weightKg: 100 });
+    for (const column of [1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]) {
+      sim.addLoadForTest({
+        id: `occupied-top-row-c${String(column).padStart(2, '0')}`,
+        state: 'stored',
+        nodeId: `storage-r01-c${String(column).padStart(2, '0')}`,
+        vehicleId: null,
+        weightKg: 100
+      });
+    }
+    sim.setVehicleRouteForTest('SH-01', ['column-top-b-c04', 'column-top-b-c05']);
+    sim.setVehicleRouteForTest('SH-03', [
+      'module-01-spine-top-b',
+      'module-01-spine-middle',
+      'column-middle-c07',
+      'column-middle-c06',
+      'storage-r08-c06',
+      'storage-r09-c06',
+      'storage-r10-c06',
+      'storage-r11-c06',
+      'storage-r12-c06',
+      'storage-r13-c06',
+      'storage-r14-c06'
+    ]);
+    sim.setVehicleTaskForTest('SH-03', 'topa-bypass-inbound', true);
+    sim.setVehicleWaitingForTest('SH-03', {
+      targetNodeId: 'module-01-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-04',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleRouteForTest('SH-04', [
+      'column-middle-c07',
+      'module-01-spine-middle',
+      'module-01-spine-top-b',
+      'column-top-b-c08',
+      'column-top-b-c09',
+      'column-top-b-c10',
+      'column-top-b-c11',
+      'column-top-b-c12',
+      'column-top-b-c13',
+      'column-top-b-c14',
+      'module-boundary-01-spine-top-b',
+      'module-boundary-01-spine-middle',
+      'module-boundary-01-spine-bottom-a',
+      'module-boundary-01-spine-bottom-b',
+      'column-bottom-b-c14',
+      'column-bottom-b-c13',
+      'column-bottom-b-c12',
+      'column-bottom-b-c11',
+      'column-bottom-b-c10',
+      'column-bottom-b-c09',
+      'column-bottom-b-c08'
+    ]);
+    sim.setVehicleTaskForTest('SH-04', 'topa-bypass-outbound', true);
+    sim.setVehicleWaitingForTest('SH-04', {
+      targetNodeId: 'module-01-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-03',
+      waitingSinceSec: 0
+    });
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        targetNodeId: string | null;
+        waitReason: string | null;
+        localRouteReason: string | null;
+        routeNodeIds: string[];
+      }>;
+      tryBreakAgentRefreshWaitCycle(candidateVehicleIds: string[]): boolean;
+    };
+
+    expect(internals.tryBreakAgentRefreshWaitCycle(['SH-03', 'SH-04'])).toBe(true);
+    const loadedInboundYielder = internals.vehicles.find((vehicle) => vehicle.id === 'SH-03')!;
+
+    expect(loadedInboundYielder.waitReason).toBeNull();
+    expect(loadedInboundYielder.localRouteReason).toBe('loaded-inbound-topb-spine-storage-yield');
+    expect(loadedInboundYielder.routeNodeIds).toEqual([
+      'module-01-spine-top-b',
+      'module-01-spine-top-a',
+      'column-top-a-c07',
+      'column-top-a-c06',
+      'column-top-a-c05',
+      'column-top-a-c04',
+      'column-top-a-c03',
+      'column-top-a-c02',
+      'column-top-b-c02',
+      'storage-r01-c02'
+    ]);
+    expect(loadedInboundYielder.targetNodeId).toBe('module-01-spine-top-a');
   });
 
   it('immediately moves an empty top-lift spine blocker sideways for a loaded shuttle', () => {
@@ -17054,8 +20993,471 @@ describe('shuttle phase 0 SimCore', () => {
     expect(internals.topLiftOutboundDockCorridorBlocker(requester, 'module-01-spine-bottom-b')).toBeNull();
   });
 
-  it('retreats a loaded outbound gate entrant so an empty queue shuttle can exit first', () => {
+  it('moves an empty bottom-b dock blocker when a loaded outbound shuttle is node-blocked at the spine', () => {
     const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 3 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 2,
+        initialOutboundFullColumns: 0
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({ id: 'loaded-dock-node-blocked-load', state: 'carried', nodeId: null, vehicleId: 'SH-01', weightKg: 100 });
+    sim.addLoadForTest({ id: 'empty-node-dock-blocker-load', state: 'waiting', nodeId: 'lift-02-inbound-buffer-03', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'loaded-dock-node-blocked',
+      kind: 'outbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r06-c02',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'loaded-dock-node-blocked-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'empty-node-dock-blocker',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 1,
+      assignedAtSec: 1,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c22',
+      dropoffNodeId: 'storage-r04-c21',
+      loadId: 'empty-node-dock-blocker-load',
+      vehicleId: 'SH-02',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', [
+      'module-01-spine-bottom-a',
+      'module-01-spine-bottom-b',
+      'column-bottom-b-c08'
+    ]);
+    sim.setVehicleTaskForTest('SH-01', 'loaded-dock-node-blocked', true);
+    sim.setVehicleRouteForTest('SH-02', [
+      'module-01-spine-bottom-b',
+      'column-bottom-b-c08',
+      'column-bottom-b-c09',
+      'column-bottom-b-c10',
+      'column-bottom-b-c11',
+      'column-bottom-b-c12',
+      'column-bottom-b-c13',
+      'column-bottom-b-c14',
+      'module-boundary-01-spine-bottom-b',
+      'module-boundary-01-spine-bottom-a',
+      'module-boundary-01-spine-middle',
+      'module-boundary-01-spine-top-b'
+    ]);
+    sim.setVehicleTaskForTest('SH-02', 'empty-node-dock-blocker', false);
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        routeNodeIds: string[];
+        targetNodeId: string | null;
+        localRouteReason: string | null;
+        waitReason: string | null;
+      }>;
+      agentRefreshHandleMoveBlock(vehicle: unknown, blockedTargetNodeId: string, block: { reason: string; blockingVehicleId: string | null }): boolean;
+      topLiftOutboundDockCorridorBlocker(vehicle: unknown, toNodeId: string): string | null;
+    };
+    const requester = internals.vehicles.find((vehicle) => vehicle.id === 'SH-01')!;
+    const blocker = internals.vehicles.find((vehicle) => vehicle.id === 'SH-02')!;
+
+    expect(internals.agentRefreshHandleMoveBlock(requester, 'module-01-spine-bottom-b', {
+      reason: 'node-occupied',
+      blockingVehicleId: 'SH-02'
+    })).toBe(false);
+
+    expect(blocker.routeNodeIds[0]).toBe('module-01-spine-bottom-b');
+    expect(blocker.targetNodeId).not.toBe('column-bottom-b-c08');
+    expect(blocker.targetNodeId).not.toBe('module-01-spine-bottom-b');
+    expect(blocker.localRouteReason).toBe('temporary-yield');
+    expect(blocker.waitReason).toBeNull();
+    expect(internals.topLiftOutboundDockCorridorBlocker(requester, 'module-01-spine-bottom-b')).toBeNull();
+  });
+
+  it('retries dock-throat recovery from the physical tick node-occupied path', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 4,
+        initialOutboundFullColumns: 0
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({ id: 'physical-dock-outbound-load', state: 'carried', nodeId: null, vehicleId: 'SH-08', weightKg: 100 });
+    sim.addLoadForTest({ id: 'physical-dock-inbound-load', state: 'waiting', nodeId: 'lift-02-inbound-buffer-03', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'physical-dock-outbound',
+      kind: 'outbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r06-c02',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'physical-dock-outbound-load',
+      vehicleId: 'SH-08',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'physical-dock-inbound',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 1,
+      assignedAtSec: 1,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c22',
+      dropoffNodeId: 'storage-r04-c21',
+      loadId: 'physical-dock-inbound-load',
+      vehicleId: 'SH-04',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', ['column-bottom-a-c08']);
+    sim.setVehicleTaskForTest('SH-01', null, false);
+    sim.setVehicleRouteForTest('SH-02', ['column-top-a-c01']);
+    sim.setVehicleTaskForTest('SH-02', null, true);
+    sim.setVehicleRouteForTest('SH-04', [
+      'module-01-spine-bottom-b',
+      'column-bottom-b-c08',
+      'column-bottom-b-c09',
+      'column-bottom-b-c10',
+      'column-bottom-b-c11',
+      'column-bottom-b-c12',
+      'column-bottom-b-c13',
+      'column-bottom-b-c14',
+      'module-boundary-01-spine-bottom-b'
+    ]);
+    sim.setVehicleTaskForTest('SH-04', 'physical-dock-inbound', false);
+    sim.setVehicleRouteForTest('SH-08', [
+      'module-01-spine-bottom-a',
+      'module-01-spine-bottom-b',
+      'column-bottom-b-c08'
+    ]);
+    sim.setVehicleTaskForTest('SH-08', 'physical-dock-outbound', true);
+
+    const internals = sim as unknown as {
+      simTimeSec: number;
+      vehicles: Array<{
+        id: string;
+        routeNodeIds: string[];
+        targetNodeId: string | null;
+        localRouteReason: string | null;
+        waitReason: string | null;
+      }>;
+      strictMoveSafetyBlocker(vehicle: unknown, toNodeId: string): { reason: string; blockingVehicleId: string | null } | null;
+      startNextLeg(vehicle: unknown, dtSec: number): void;
+    };
+    internals.simTimeSec = 120;
+    sim.setVehicleWaitingForTest('SH-04', {
+      targetNodeId: 'column-bottom-b-c08',
+      waitReason: 'outbound-lift-dock-protected',
+      blockingVehicleId: 'SH-08',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleWaitingForTest('SH-08', {
+      targetNodeId: 'module-01-spine-bottom-b',
+      waitReason: 'node-occupied',
+      blockingVehicleId: 'SH-04',
+      waitingSinceSec: 0
+    });
+
+    const requester = internals.vehicles.find((vehicle) => vehicle.id === 'SH-08')!;
+    expect(internals.strictMoveSafetyBlocker(requester, 'module-01-spine-bottom-b')).toEqual({
+      reason: 'node-occupied',
+      blockingVehicleId: 'SH-04'
+    });
+
+    internals.startNextLeg(requester, 0.2);
+
+    const blocker = internals.vehicles.find((vehicle) => vehicle.id === 'SH-04')!;
+    expect(blocker.routeNodeIds[0]).toBe('module-01-spine-bottom-b');
+    expect(blocker.routeNodeIds[1]).not.toBe('column-bottom-b-c08');
+    expect(blocker.routeNodeIds.at(-1)).toMatch(/^storage-/);
+    expect(blocker.routeNodeIds).not.toContain('column-bottom-b-c08');
+    expect(blocker.routeNodeIds).not.toContain('module-01-spine-bottom-a');
+    expect(blocker.targetNodeId).not.toBe('column-bottom-b-c08');
+    expect(blocker.localRouteReason).toBe('temporary-yield');
+    expect(blocker.waitReason).toBeNull();
+    expectRouteHopsAdjacent(scenario, blocker.routeNodeIds);
+  });
+
+  it('self-clears an empty dock-throat service vehicle when the loaded outbound waits behind it', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 4,
+        initialOutboundFullColumns: 0
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({ id: 'self-clear-outbound-load', state: 'carried', nodeId: null, vehicleId: 'SH-08', weightKg: 100 });
+    sim.addLoadForTest({ id: 'self-clear-inbound-load', state: 'waiting', nodeId: 'lift-02-inbound-buffer-03', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'self-clear-outbound',
+      kind: 'outbound',
+      state: 'in-progress',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: 0,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r06-c02',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'self-clear-outbound-load',
+      vehicleId: 'SH-08',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'self-clear-inbound',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 1,
+      assignedAtSec: 1,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c22',
+      dropoffNodeId: 'storage-r04-c21',
+      loadId: 'self-clear-inbound-load',
+      vehicleId: 'SH-04',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-04', [
+      'module-01-spine-bottom-b',
+      'column-bottom-b-c08',
+      'column-bottom-b-c09',
+      'column-bottom-b-c10',
+      'column-bottom-b-c11',
+      'column-bottom-b-c12',
+      'column-bottom-b-c13',
+      'column-bottom-b-c14',
+      'module-boundary-01-spine-bottom-b'
+    ]);
+    sim.setVehicleTaskForTest('SH-04', 'self-clear-inbound', false);
+    sim.setVehicleRouteForTest('SH-08', [
+      'module-01-spine-bottom-a',
+      'module-01-spine-bottom-b',
+      'column-bottom-b-c08'
+    ]);
+    sim.setVehicleTaskForTest('SH-08', 'self-clear-outbound', true);
+
+    const internals = sim as unknown as {
+      simTimeSec: number;
+      vehicles: Array<{
+        id: string;
+        routeNodeIds: string[];
+        targetNodeId: string | null;
+        localRouteReason: string | null;
+        waitReason: string | null;
+      }>;
+      agentRefreshHandleMoveBlock(vehicle: unknown, blockedTargetNodeId: string, block: { reason: string; blockingVehicleId: string | null }): boolean;
+      startNextLeg(vehicle: unknown, dtSec: number): void;
+    };
+    internals.simTimeSec = 12920;
+    sim.setVehicleWaitingForTest('SH-04', {
+      targetNodeId: 'column-bottom-b-c08',
+      waitReason: 'outbound-lift-dock-protected',
+      blockingVehicleId: 'SH-08',
+      waitingSinceSec: 12784.8
+    });
+    sim.setVehicleWaitingForTest('SH-08', {
+      targetNodeId: 'module-01-spine-bottom-b',
+      waitReason: 'node-occupied',
+      blockingVehicleId: 'SH-04',
+      waitingSinceSec: 12837.8
+    });
+
+    const serviceVehicle = internals.vehicles.find((vehicle) => vehicle.id === 'SH-04')!;
+    expect(internals.agentRefreshHandleMoveBlock(serviceVehicle, 'column-bottom-b-c08', {
+      reason: 'outbound-lift-dock-protected',
+      blockingVehicleId: 'SH-08'
+    })).toBe(true);
+
+    expect(serviceVehicle.routeNodeIds[0]).toBe('module-01-spine-bottom-b');
+    expect(serviceVehicle.routeNodeIds[1]).not.toBe('column-bottom-b-c08');
+    expect(serviceVehicle.routeNodeIds).not.toContain('module-01-spine-bottom-a');
+    expect(serviceVehicle.routeNodeIds.at(-1)).toMatch(/^storage-/);
+    expect(serviceVehicle.targetNodeId).not.toBe('column-bottom-b-c08');
+    expect(serviceVehicle.localRouteReason).toBe('temporary-yield');
+    expect(serviceVehicle.waitReason).toBeNull();
+    expectRouteHopsAdjacent(scenario, serviceVehicle.routeNodeIds);
+  });
+
+  it('recovers an active access-clearance edge that has zero target speed', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 1 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['column-top-b-c21', 'column-top-a-c21']);
+
+    const edge = scenario.layout.edges.find((candidate) =>
+      (candidate.from === 'column-top-b-c21' && candidate.to === 'column-top-a-c21') ||
+      (candidate.from === 'column-top-a-c21' && candidate.to === 'column-top-b-c21')
+    )!;
+    const fromNode = scenario.layout.nodes.find((node) => node.id === 'column-top-b-c21')!;
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        state: string;
+        currentNodeId: string;
+        targetNodeId: string | null;
+        currentEdgeId: string | null;
+        routeNodeIds: string[];
+        routeIndex: number;
+        legRemainingM: number;
+        legElapsedSec: number;
+        legTravelSec: number;
+        legMotionMode: 'profile' | 'cruise';
+        targetSpeedMps: number;
+        speedMps: number;
+        x: number;
+        z: number;
+        waitReason: string | null;
+        blockingVehicleId: string | null;
+        legStartYaw: number;
+        yaw: number;
+      }>;
+      advanceMovement(vehicle: unknown, dtSec: number): void;
+    };
+    const vehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    vehicle.state = 'returning';
+    vehicle.currentNodeId = 'column-top-b-c21';
+    vehicle.targetNodeId = 'column-top-a-c21';
+    vehicle.currentEdgeId = edge.id;
+    vehicle.routeNodeIds = ['column-top-b-c21', 'column-top-a-c21'];
+    vehicle.routeIndex = 0;
+    vehicle.legRemainingM = edge.lengthM;
+    vehicle.legElapsedSec = 0;
+    vehicle.legTravelSec = edge.lengthM;
+    vehicle.legMotionMode = 'cruise';
+    vehicle.targetSpeedMps = 0;
+    vehicle.speedMps = 0;
+    vehicle.x = fromNode.x;
+    vehicle.z = fromNode.z;
+    vehicle.waitReason = null;
+    vehicle.blockingVehicleId = null;
+    vehicle.legStartYaw = vehicle.yaw;
+
+    internals.advanceMovement(vehicle, 0.2);
+
+    expect(vehicle.targetSpeedMps).toBeGreaterThan(0);
+    expect(vehicle.legRemainingM).toBeLessThan(edge.lengthM);
+    expect(vehicle.waitReason).toBeNull();
+  });
+
+	  it('keeps an active access-blocker clearance route from being reinstalled', () => {
+	    const scenario = createInboundOutboundDemoScenario({
+	      vehicles: { count: 1 },
+	      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    const route = [
+      'column-top-b-c21',
+      'column-top-a-c21',
+      'module-02-spine-top-a',
+      'column-top-a-c22',
+      'column-top-a-c23'
+    ];
+    const edge = scenario.layout.edges.find((candidate) =>
+      (candidate.from === route[0] && candidate.to === route[1]) ||
+      (candidate.from === route[1] && candidate.to === route[0])
+    )!;
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        state: string;
+        currentNodeId: string;
+        targetNodeId: string | null;
+        currentEdgeId: string | null;
+        routeNodeIds: string[];
+        localRouteNodeIds: string[];
+        localRouteReason: string | null;
+        legRemainingM: number;
+        waitReason: string | null;
+      }>;
+      agentRefreshTemporaryRouteAlreadyActive(vehicle: unknown, routeNodeIds: string[]): boolean;
+      agentRefreshTemporaryYieldShouldContinue(vehicle: unknown, blockedNodeId: string): boolean;
+      agentRefreshClearanceRouteInProgressAwayFrom(vehicle: unknown, blockedNodeId: string): boolean;
+    };
+    const vehicle = internals.vehicles.find((candidate) => candidate.id === 'SH-01')!;
+    vehicle.state = 'moving-to-pickup';
+    vehicle.currentNodeId = route[0]!;
+    vehicle.targetNodeId = route[1]!;
+    vehicle.currentEdgeId = edge.id;
+    vehicle.routeNodeIds = route;
+    vehicle.localRouteNodeIds = route;
+    vehicle.localRouteReason = 'access-blocker-clearance';
+    vehicle.legRemainingM = edge.lengthM;
+    vehicle.waitReason = null;
+
+    expect(internals.agentRefreshTemporaryRouteAlreadyActive(vehicle, route)).toBe(true);
+    expect(internals.agentRefreshTemporaryYieldShouldContinue(vehicle, route[0]!)).toBe(true);
+
+    vehicle.currentEdgeId = null;
+	    vehicle.legRemainingM = 0;
+	    expect(internals.agentRefreshClearanceRouteInProgressAwayFrom(vehicle, route[0]!)).toBe(true);
+	  });
+
+	  it('retreats a loaded outbound gate entrant so an empty queue shuttle can exit first', () => {
+	    const scenario = createInboundOutboundDemoScenario({
       vehicles: { count: 2 },
       taskGeneration: {
         inboundRatePerHour: 0,
@@ -19588,6 +23990,84 @@ describe('shuttle phase 0 SimCore', () => {
       blockingVehicleId: 'SH-01'
     });
     expect(internals.agentRefreshYieldPocketAllowed(yielder, 'column-top-b-c25')).toBe(false);
+  });
+
+  it('drops stale temporary-yield claims after the active route no longer follows the local route', () => {
+    const scenario = createInboundMvpBaselineScenario({
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 1,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 1
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        dynamicAvoidanceClearanceM: 0.5
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['column-top-a-c25', 'column-top-a-c24']);
+    sim.setVehicleRouteForTest('SH-02', ['column-top-b-c24', 'column-top-b-c25', 'column-top-b-c26']);
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        localRouteNodeIds: string[];
+        localRouteReason: string | null;
+        yieldHoldUntilSec: number | null;
+        yieldHoldNodeId: string | null;
+      }>;
+      localRouteNodeClaimBlocker: (nodeId: string, vehicleId: string) => string | null;
+      agentMinimalMoveBlocker: (vehicle: unknown, toNodeId: string) => { reason: string; blockingVehicleId: string | null } | null;
+    };
+    const yielder = internals.vehicles.find((vehicle) => vehicle.id === 'SH-01')!;
+    const other = internals.vehicles.find((vehicle) => vehicle.id === 'SH-02')!;
+    yielder.localRouteNodeIds = ['column-top-a-c25', 'column-top-b-c25'];
+    yielder.localRouteReason = 'temporary-yield';
+    yielder.yieldHoldUntilSec = 120;
+    yielder.yieldHoldNodeId = 'column-top-b-c25';
+
+    expect(internals.localRouteNodeClaimBlocker('column-top-b-c25', 'SH-02')).toBeNull();
+    expect(internals.agentMinimalMoveBlocker(other, 'column-top-b-c25')).toBeNull();
+  });
+
+  it('rejects adjacent-swap clear-through routes through another shuttle target node', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        initialOutboundFullColumns: 0,
+        maxTasks: 1
+      },
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 1
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['column-top-b-c08']);
+    sim.setVehicleRouteForTest('SH-02', ['column-top-a-c09', 'column-top-a-c08']);
+
+    const internals = sim as unknown as {
+      vehicles: Array<{ id: string }>;
+      agentRefreshAdjacentSwapRouteClear(vehicle: unknown, routeNodeIds: string[]): boolean;
+    };
+    const yielder = internals.vehicles.find((vehicle) => vehicle.id === 'SH-01')!;
+    const routeThroughOtherTarget = [
+      'column-top-b-c08',
+      'module-01-spine-top-b',
+      'module-01-spine-top-a',
+      'column-top-a-c08',
+      'column-top-a-c09',
+      'column-top-a-c10',
+      'column-top-a-c11'
+    ];
+
+    expect(internals.agentRefreshAdjacentSwapRouteClear(yielder, routeThroughOtherTarget)).toBe(false);
   });
 
   it('agent-refresh makes an empty lift-column faceoff use the current row pocket before crossing the blocker', () => {
@@ -23037,6 +27517,213 @@ describe('shuttle phase 0 SimCore', () => {
     expectRouteHopsAdjacent(scenario, emptyYielder.routeNodeIds);
   });
 
+  it('clears an occupied bottom-a yield pocket before resolving an empty no-stop faceoff', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 8,
+        initialOutboundFullColumns: 0
+      },
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true,
+        dynamicAvoidanceClearanceM: 0.5,
+        deadlockDetectSec: 120
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    for (const [vehicleId, nodeId] of [
+      ['SH-03', 'column-top-a-c01'],
+      ['SH-04', 'column-top-a-c02'],
+      ['SH-05', 'column-top-a-c03'],
+      ['SH-06', 'column-top-a-c04'],
+      ['SH-08', 'column-top-a-c05']
+    ] as const) {
+      sim.setVehicleRouteForTest(vehicleId, [nodeId]);
+    }
+    sim.addLoadForTest({ id: 'bottom-a-yielder-outbound-load', state: 'stored', nodeId: 'storage-r06-c18', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'middle-requester-outbound-load', state: 'stored', nodeId: 'storage-r02-c02', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'pocket-occupant-inbound-load', state: 'waiting', nodeId: 'lift-02-inbound-buffer-03', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'bottom-a-yielder-outbound',
+      kind: 'outbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r06-c18',
+      dropoffNodeId: 'column-bottom-b-c22',
+      loadId: 'bottom-a-yielder-outbound-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'middle-requester-outbound',
+      kind: 'outbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r02-c02',
+      dropoffNodeId: 'column-bottom-b-c22',
+      loadId: 'middle-requester-outbound-load',
+      vehicleId: 'SH-02',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.addTaskForTest({
+      id: 'pocket-occupant-inbound',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c22',
+      dropoffNodeId: 'storage-r01-c22',
+      loadId: 'pocket-occupant-inbound-load',
+      vehicleId: 'SH-07',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', [
+      'module-02-spine-bottom-a',
+      'module-02-spine-middle',
+      'column-middle-c21',
+      'column-middle-c20',
+      'column-middle-c19',
+      'column-middle-c18',
+      'storage-r06-c18'
+    ]);
+    sim.setVehicleTaskForTest('SH-01', 'bottom-a-yielder-outbound', false);
+    sim.setVehicleWaitingForTest('SH-01', {
+      targetNodeId: 'module-02-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-02',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleRouteForTest('SH-02', [
+      'column-middle-c21',
+      'module-02-spine-middle',
+      'module-02-spine-bottom-a',
+      'column-bottom-a-c21',
+      'column-bottom-a-c20',
+      'column-bottom-a-c19',
+      'column-bottom-a-c18',
+      'column-bottom-a-c17',
+      'column-bottom-a-c16',
+      'column-bottom-a-c15',
+      'column-bottom-a-c14',
+      'column-bottom-a-c13',
+      'column-bottom-a-c12',
+      'column-bottom-a-c11',
+      'column-bottom-a-c10',
+      'column-bottom-a-c09',
+      'column-bottom-a-c08',
+      'module-01-spine-bottom-a',
+      'column-bottom-a-c07',
+      'column-bottom-a-c06',
+      'column-bottom-a-c05',
+      'column-bottom-a-c04',
+      'column-bottom-a-c03',
+      'column-bottom-a-c02',
+      'storage-r02-c02'
+    ]);
+    sim.setVehicleTaskForTest('SH-02', 'middle-requester-outbound', false);
+    sim.setVehicleWaitingForTest('SH-02', {
+      targetNodeId: 'module-02-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-01',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleRouteForTest('SH-04', [
+      'module-02-spine-top-b',
+      'module-02-spine-middle',
+      'module-02-spine-bottom-a',
+      'column-bottom-a-c22',
+      'storage-r14-c22'
+    ]);
+    sim.setVehicleWaitingForTest('SH-04', {
+      targetNodeId: 'module-02-spine-middle',
+      waitReason: 'no-stop-continuation-blocked',
+      blockingVehicleId: 'SH-01',
+      waitingSinceSec: 0
+    });
+    sim.setVehicleRouteForTest('SH-07', [
+      'column-bottom-a-c21',
+      'module-02-spine-bottom-a',
+      'module-02-spine-middle',
+      'module-02-spine-top-b',
+      'column-top-b-c22',
+      'column-top-a-c22'
+    ]);
+    sim.setVehicleTaskForTest('SH-07', 'pocket-occupant-inbound', false);
+    sim.setVehicleWaitingForTest('SH-07', {
+      targetNodeId: 'module-02-spine-bottom-a',
+      waitReason: 'node-occupied',
+      blockingVehicleId: 'SH-01',
+      waitingSinceSec: 0
+    });
+
+    const internals = sim as unknown as {
+      vehicles: Array<{
+        id: string;
+        currentNodeId: string;
+        targetNodeId: string | null;
+        routeNodeIds: string[];
+        waitReason: string | null;
+        blockingVehicleId: string | null;
+        localRouteReason: string | null;
+      }>;
+      layoutNode(nodeId: string): { noStop?: boolean; noParking?: boolean } | null;
+      tryYieldEmptyBottomASpineAwayFromNoStopCycle(
+        vehicle: unknown,
+        blocker: unknown,
+        session: null
+      ): boolean;
+    };
+    const yielder = internals.vehicles.find((vehicle) => vehicle.id === 'SH-01')!;
+    const requester = internals.vehicles.find((vehicle) => vehicle.id === 'SH-02')!;
+    const pocketOccupant = internals.vehicles.find((vehicle) => vehicle.id === 'SH-07')!;
+
+    expect(internals.tryYieldEmptyBottomASpineAwayFromNoStopCycle(yielder, requester, null)).toBe(true);
+    expect(pocketOccupant.currentNodeId).toBe('column-bottom-a-c21');
+    expect(pocketOccupant.targetNodeId).toMatch(/^column-bottom-a-c(?:20|22)$/);
+    expect(pocketOccupant.routeNodeIds.slice(0, 2)).toEqual(['column-bottom-a-c21', pocketOccupant.targetNodeId]);
+    expect(pocketOccupant.localRouteReason).toBe('temporary-yield');
+    expect(pocketOccupant.waitReason).toBeNull();
+    expect(pocketOccupant.blockingVehicleId).toBeNull();
+
+    const clearedPocketNodeId = pocketOccupant.routeNodeIds.at(-1)!;
+    expect(clearedPocketNodeId).not.toBe('column-bottom-a-c21');
+    expect(internals.layoutNode(clearedPocketNodeId)?.noStop).not.toBe(true);
+    expect(internals.layoutNode(clearedPocketNodeId)?.noParking).not.toBe(true);
+    sim.setVehicleRouteForTest('SH-07', [clearedPocketNodeId]);
+    sim.setVehicleTaskForTest('SH-07', 'pocket-occupant-inbound', false);
+
+    expect(internals.tryYieldEmptyBottomASpineAwayFromNoStopCycle(yielder, requester, null)).toBe(true);
+    expect(yielder.routeNodeIds.slice(0, 2)).toEqual([
+      'module-02-spine-bottom-a',
+      'column-bottom-a-c21'
+    ]);
+    expect(yielder.targetNodeId).toBe('column-bottom-a-c21');
+    expect(yielder.localRouteReason).toBe('temporary-yield');
+    expect(yielder.waitReason).toBeNull();
+    expect(yielder.blockingVehicleId).toBeNull();
+    expectRouteHopsAdjacent(scenario, yielder.routeNodeIds);
+  });
+
   it('agent-refresh clears empty same-column storage swaps by using stored-load cells as pass-through pockets', () => {
     const scenario = createInboundOutboundDemoScenario({
       vehicles: { count: 2 },
@@ -25137,6 +29824,272 @@ describe('shuttle phase 0 SimCore', () => {
     )).toBe(false);
   });
 
+  it('does not count paused planned routes while a temporary local route is active', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 4,
+        initialOutboundFullColumns: 0
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.setVehicleRouteForTest('SH-01', ['column-bottom-a-c17', 'storage-r14-c17']);
+    sim.setVehicleRouteForTest('SH-02', ['column-bottom-b-c10', 'column-bottom-b-c11']);
+
+    const internals = sim as unknown as {
+      vehicles: Array<Record<string, unknown>>;
+    };
+    const yielder = internals.vehicles.find((vehicle) => vehicle.id === 'SH-01')!;
+    const clearance = internals.vehicles.find((vehicle) => vehicle.id === 'SH-02')!;
+    Object.assign(yielder, {
+      state: 'moving-to-pickup',
+      taskId: 'paused-planned-route-task',
+      loaded: false,
+      targetNodeId: 'storage-r14-c17',
+      plannedGoalNodeId: 'column-top-a-c24',
+      plannedRouteNodeIds: [
+        'column-bottom-b-c11',
+        'column-bottom-b-c12',
+        'column-bottom-b-c13',
+        'column-bottom-b-c14',
+        'module-boundary-01-spine-bottom-b',
+        'column-bottom-b-c15',
+        'column-bottom-b-c16',
+        'column-bottom-b-c17',
+        'column-bottom-b-c18',
+        'column-bottom-b-c19',
+        'column-bottom-b-c20',
+        'column-bottom-b-c21',
+        'module-02-spine-bottom-b',
+        'module-02-spine-bottom-a',
+        'module-02-spine-middle',
+        'module-02-spine-top-b',
+        'module-02-spine-top-a',
+        'column-top-a-c22',
+        'column-top-a-c23',
+        'column-top-a-c24'
+      ],
+      localRouteNodeIds: [
+        'column-bottom-b-c18',
+        'column-bottom-b-c17',
+        'column-bottom-a-c17',
+        'storage-r14-c17'
+      ],
+      localRouteReason: 'temporary-yield',
+      yieldHoldUntilSec: 30,
+      yieldHoldNodeId: 'storage-r14-c17'
+    });
+    Object.assign(clearance, {
+      state: 'returning',
+      taskId: null,
+      loaded: false,
+      targetNodeId: 'column-bottom-b-c11',
+      plannedGoalNodeId: 'column-bottom-b-c11',
+      plannedRouteNodeIds: ['column-bottom-b-c08', 'column-bottom-b-c09', 'column-bottom-b-c10', 'column-bottom-b-c11'],
+      localRouteNodeIds: ['column-bottom-b-c08', 'column-bottom-b-c09', 'column-bottom-b-c10', 'column-bottom-b-c11'],
+      localRouteReason: 'outbound-lift-clearance'
+    });
+
+    const parsed = ShuttleSimStateSchema.parse(sim.getState());
+
+    expect(parsed.traffic.shadowLedger.violations).not.toContainEqual(expect.objectContaining({
+      code: 'duplicate-resource-owner',
+      resourceKey: 'node:column-bottom-b-c11'
+    }));
+  });
+
+  it('does not treat shared post-target planned routes as duplicate hard resource owners', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      vehicles: { count: 8 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 4,
+        initialOutboundFullColumns: 0
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({
+      id: 'shared-planned-route-load',
+      state: 'waiting',
+      nodeId: 'column-top-a-c24',
+      vehicleId: null,
+      weightKg: 100
+    });
+    sim.addTaskForTest({
+      id: 'shared-planned-route-task',
+      kind: 'inbound',
+      state: 'assigned',
+      createdAtSec: 0,
+      assignedAtSec: 0,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'column-top-a-c24',
+      dropoffNodeId: 'storage-r08-c24',
+      loadId: 'shared-planned-route-load',
+      vehicleId: 'SH-04',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-03', [
+      'module-02-spine-bottom-a',
+      'module-02-spine-middle',
+      'module-02-spine-top-b',
+      'module-02-spine-top-a',
+      'column-top-a-c22',
+      'column-top-a-c23',
+      'column-top-a-c24',
+      'column-top-a-c25'
+    ]);
+    sim.setVehicleRouteForTest('SH-04', [
+      'column-bottom-a-c21',
+      'module-02-spine-bottom-a',
+      'module-02-spine-middle',
+      'module-02-spine-top-b',
+      'module-02-spine-top-a',
+      'column-top-a-c22',
+      'column-top-a-c23',
+      'column-top-a-c24'
+    ]);
+
+    const internals = sim as unknown as {
+      vehicles: Array<Record<string, unknown>>;
+      currentNodeOccupancy: Map<string, string>;
+    };
+    const standby = internals.vehicles.find((vehicle) => vehicle.id === 'SH-03')!;
+    const assigned = internals.vehicles.find((vehicle) => vehicle.id === 'SH-04')!;
+    Object.assign(standby, {
+      state: 'returning',
+      loaded: false,
+      taskId: null,
+      targetNodeId: 'module-02-spine-middle',
+      currentEdgeId: 'module-02-spine-middle-module-02-spine-bottom-a',
+      plannedGoalNodeId: 'column-top-a-c25',
+      localRouteNodeIds: ['module-02-spine-bottom-a', 'module-02-spine-middle'],
+      localRouteReason: 'inbound-queue-standby'
+    });
+    Object.assign(assigned, {
+      state: 'moving-to-pickup',
+      loaded: false,
+      taskId: 'shared-planned-route-task',
+      targetNodeId: 'module-02-spine-bottom-a',
+      currentEdgeId: 'column-bottom-a-c21-module-02-spine-bottom-a',
+      plannedGoalNodeId: 'column-top-a-c24',
+      localRouteNodeIds: [],
+      localRouteReason: null
+    });
+    internals.currentNodeOccupancy.delete('module-02-spine-bottom-a');
+    internals.currentNodeOccupancy.delete('column-bottom-a-c21');
+
+    const parsed = ShuttleSimStateSchema.parse(sim.getState());
+    expect(parsed.traffic.shadowLedger.invariantCounts.duplicateResourceOwner).toBe(0);
+    expect(parsed.traffic.shadowLedger.violations.some((violation) =>
+      violation.code === 'duplicate-resource-owner' &&
+      (
+        violation.resourceKey === 'node:module-02-spine-middle' ||
+        violation.resourceKey === 'node:module-02-spine-top-b' ||
+        violation.resourceKey === 'node:module-02-spine-top-a' ||
+        violation.resourceKey === 'node:column-top-a-c22'
+      )
+    )).toBe(false);
+  });
+
+  it('does not report lift FIFO inversion when the older queued task has no available vehicle', () => {
+    const scenario = createInboundOutboundDemoScenario({
+      layoutProfile: {
+        layoutKind: 'top-lift-column',
+        liftPairCount: 2
+      },
+      vehicles: { count: 2 },
+      taskGeneration: {
+        inboundRatePerHour: 0,
+        outboundRatePerHour: 0,
+        inboundOutboundMix: 0.5,
+        arrivalDistribution: 'deterministic',
+        maxTasks: 4,
+        initialOutboundFullColumns: 0
+      },
+      trafficPolicy: {
+        controllerMode: 'agent-refresh',
+        collisionAvoidanceEnabled: true
+      }
+    });
+    const sim = new ShuttleSimCore(scenario);
+    sim.addLoadForTest({ id: 'older-outbound-load', state: 'stored', nodeId: 'storage-r14-c01', vehicleId: null, weightKg: 100 });
+    sim.addLoadForTest({ id: 'younger-outbound-load', state: 'stored', nodeId: 'storage-r07-c04', vehicleId: null, weightKg: 100 });
+    sim.addTaskForTest({
+      id: 'older-outbound-task',
+      kind: 'outbound',
+      state: 'queued',
+      createdAtSec: 0,
+      assignedAtSec: null,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r14-c01',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'older-outbound-load',
+      vehicleId: null,
+      replanCount: 0,
+      waitReason: 'vehicle-unavailable'
+    });
+    sim.addTaskForTest({
+      id: 'younger-outbound-task',
+      kind: 'outbound',
+      state: 'assigned',
+      createdAtSec: 1,
+      assignedAtSec: 1,
+      startedAtSec: null,
+      completedAtSec: null,
+      pickupNodeId: 'storage-r07-c04',
+      dropoffNodeId: 'column-bottom-b-c08',
+      loadId: 'younger-outbound-load',
+      vehicleId: 'SH-01',
+      replanCount: 0,
+      waitReason: null
+    });
+    sim.setVehicleRouteForTest('SH-01', ['column-middle-c03', 'column-middle-c04', 'storage-r07-c04']);
+    sim.setVehicleTaskForTest('SH-01', 'younger-outbound-task', false);
+
+    const internals = sim as unknown as {
+      vehicles: Array<Record<string, unknown>>;
+    };
+    const unavailableVehicle = internals.vehicles.find((vehicle) => vehicle.id === 'SH-02')!;
+    Object.assign(unavailableVehicle, {
+      loaded: true,
+      state: 'loaded-moving',
+      currentNodeId: 'column-top-a-c08',
+      targetNodeId: 'module-01-spine-top-a',
+      routeNodeIds: ['column-top-a-c08', 'module-01-spine-top-a'],
+      plannedRouteNodeIds: ['column-top-a-c08', 'module-01-spine-top-a']
+    });
+
+    const parsed = ShuttleSimStateSchema.parse(sim.getState());
+    expect(parsed.traffic.shadowLedger.invariantCounts.liftFifoInversion).toBe(0);
+    expect(parsed.traffic.shadowLedger.violations.some((violation) => violation.code === 'lift-fifo-inversion')).toBe(false);
+  });
+
   it('reports blocked waiters that still own future reservations in the shadow resource ledger', () => {
     const scenario = createInboundOutboundDemoScenario({
       layoutProfile: {
@@ -25375,11 +30328,11 @@ describe('shuttle phase 0 SimCore', () => {
     expect((crossTraffic.routeNodeIds as string[])[1]).not.toBe('column-top-a-c08');
   });
 
-  it('keeps a projected inbound queue entrant near the lift when a loaded shuttle exits', () => {
-    const scenario = createInboundOutboundDemoScenario({
-      layoutProfile: {
-        layoutKind: 'top-lift-column',
-        liftPairCount: 2
+	  it('keeps a projected inbound queue entrant near the lift when a loaded shuttle exits', () => {
+	    const scenario = createInboundOutboundDemoScenario({
+	      layoutProfile: {
+	        layoutKind: 'top-lift-column',
+	        liftPairCount: 2
       },
       vehicles: { count: 2 },
       taskGeneration: {
@@ -25463,11 +30416,258 @@ describe('shuttle phase 0 SimCore', () => {
     expect(entrant.localRouteReason).toBe('temporary-yield');
     expect(entrant.routeNodeIds).toEqual(['column-top-b-c08', 'module-01-spine-top-b', 'column-top-b-c07']);
     expect(entrant.routeNodeIds).not.toContain('storage-r01-c06');
-    expect(entrant.routeNodeIds).not.toContain('storage-r01-c08');
-  });
+	    expect(entrant.routeNodeIds).not.toContain('storage-r01-c08');
+	  });
 
-  it('agent-refresh does not send a loaded lift departure through a blocker to reach a forward pocket', () => {
-    const scenario = createDefaultShuttleScenario({
+	  it('does not interrupt an active access-blocker clearance edge for a loaded lift exit', () => {
+	    const scenario = createInboundOutboundDemoScenario({
+	      layoutProfile: {
+	        layoutKind: 'top-lift-column',
+	        liftPairCount: 2
+	      },
+	      vehicles: { count: 2 },
+	      taskGeneration: {
+	        inboundRatePerHour: 0,
+	        outboundRatePerHour: 0,
+	        inboundOutboundMix: 0.5,
+	        arrivalDistribution: 'deterministic',
+	        maxTasks: 4,
+	        initialOutboundFullColumns: 0
+	      },
+	      trafficPolicy: {
+	        controllerMode: 'agent-refresh',
+	        collisionAvoidanceEnabled: true
+	      }
+	    });
+	    const sim = new ShuttleSimCore(scenario);
+
+	    sim.addLoadForTest({ id: 'loaded-exit-load', state: 'carried', nodeId: null, vehicleId: 'SH-01', weightKg: 100 });
+	    sim.addTaskForTest({
+	      id: 'loaded-exit-task',
+	      kind: 'inbound',
+	      state: 'in-progress',
+	      createdAtSec: 0,
+	      assignedAtSec: 0,
+	      startedAtSec: 0,
+	      completedAtSec: null,
+	      pickupNodeId: 'column-top-a-c08',
+	      dropoffNodeId: 'storage-r04-c08',
+	      loadId: 'loaded-exit-load',
+	      vehicleId: 'SH-01',
+	      replanCount: 0,
+	      waitReason: null
+	    });
+	    sim.setVehicleRouteForTest('SH-01', [
+	      'column-top-b-c09',
+	      'column-top-b-c08',
+	      'storage-r01-c08',
+	      'storage-r02-c08',
+	      'storage-r03-c08',
+	      'storage-r04-c08'
+	    ]);
+	    sim.setVehicleTaskForTest('SH-01', 'loaded-exit-task', true);
+
+	    sim.addLoadForTest({ id: 'entrant-load', state: 'waiting', nodeId: 'lift-01-inbound', vehicleId: null, weightKg: 100 });
+	    sim.addTaskForTest({
+	      id: 'entrant-task',
+	      kind: 'inbound',
+	      state: 'assigned',
+	      createdAtSec: 1,
+	      assignedAtSec: 1,
+	      startedAtSec: null,
+	      completedAtSec: null,
+	      pickupNodeId: 'column-top-a-c08',
+	      dropoffNodeId: 'storage-r02-c08',
+	      loadId: 'entrant-load',
+	      vehicleId: 'SH-02',
+	      replanCount: 0,
+	      waitReason: null
+	    });
+	    sim.setVehicleTaskForTest('SH-02', 'entrant-task', false);
+
+	    const clearanceRoute = [
+	      'column-top-b-c08',
+	      'column-top-a-c08',
+	      'module-01-spine-top-a',
+	      'column-top-a-c09'
+	    ];
+	    const edge = scenario.layout.edges.find((candidate) =>
+	      (candidate.from === clearanceRoute[0] && candidate.to === clearanceRoute[1]) ||
+	      (candidate.from === clearanceRoute[1] && candidate.to === clearanceRoute[0])
+	    )!;
+	    const internals = sim as unknown as {
+	      vehicles: Array<{
+	        id: string;
+	        state: string;
+	        currentNodeId: string;
+	        targetNodeId: string | null;
+	        currentEdgeId: string | null;
+	        routeNodeIds: string[];
+	        localRouteNodeIds: string[];
+	        localRouteReason: string | null;
+	        legRemainingM: number;
+	        waitReason: string | null;
+	      }>;
+	      tryYieldInboundQueueEntrantAwayFromLoadedExit(entrant: unknown, exiting: unknown): boolean;
+	    };
+	    const exiting = internals.vehicles.find((vehicle) => vehicle.id === 'SH-01')!;
+	    const entrant = internals.vehicles.find((vehicle) => vehicle.id === 'SH-02')!;
+	    entrant.state = 'moving-to-pickup';
+	    entrant.currentNodeId = clearanceRoute[0]!;
+	    entrant.targetNodeId = clearanceRoute[1]!;
+	    entrant.currentEdgeId = edge.id;
+	    entrant.routeNodeIds = clearanceRoute;
+	    entrant.localRouteNodeIds = clearanceRoute;
+	    entrant.localRouteReason = 'access-blocker-clearance';
+	    entrant.legRemainingM = edge.lengthM;
+	    entrant.waitReason = null;
+
+	    expect(internals.tryYieldInboundQueueEntrantAwayFromLoadedExit(entrant, exiting)).toBe(true);
+	    expect(entrant.currentEdgeId).toBe(edge.id);
+	    expect(entrant.targetNodeId).toBe(clearanceRoute[1]);
+	    expect(entrant.localRouteReason).toBe('access-blocker-clearance');
+	    expect(entrant.routeNodeIds).toEqual(clearanceRoute);
+	    expect(entrant.localRouteNodeIds).toEqual(clearanceRoute);
+	  });
+
+	  it('lets an empty storage yield holder leave when a loaded winner needs its current node', () => {
+	    const scenario = createInboundOutboundDemoScenario({
+	      layoutProfile: {
+	        layoutKind: 'top-lift-column',
+	        liftPairCount: 2
+	      },
+	      vehicles: { count: 2 },
+	      taskGeneration: {
+	        inboundRatePerHour: 0,
+	        outboundRatePerHour: 0,
+	        inboundOutboundMix: 0.5,
+	        arrivalDistribution: 'deterministic',
+	        maxTasks: 2,
+	        initialOutboundFullColumns: 0
+	      },
+	      trafficPolicy: {
+	        controllerMode: 'agent-refresh',
+	        collisionAvoidanceEnabled: true
+	      }
+	    });
+	    const sim = new ShuttleSimCore(scenario);
+	    const node = (nodeId: string) => scenario.layout.nodes.find((candidate) => candidate.id === nodeId)!;
+
+	    sim.addLoadForTest({ id: 'outbound-load', state: 'waiting', nodeId: 'storage-r10-c15', vehicleId: null, weightKg: 100 });
+	    sim.addTaskForTest({
+	      id: 'yielder-task',
+	      kind: 'outbound',
+	      state: 'assigned',
+	      createdAtSec: 0,
+	      assignedAtSec: 0,
+	      startedAtSec: null,
+	      completedAtSec: null,
+	      pickupNodeId: 'storage-r10-c15',
+	      dropoffNodeId: 'column-bottom-b-c22',
+	      loadId: 'outbound-load',
+	      vehicleId: 'SH-02',
+	      replanCount: 0,
+	      waitReason: null
+	    });
+	    sim.setVehicleTaskForTest('SH-02', 'yielder-task', false);
+
+	    const internals = sim as unknown as {
+	      simTimeSec: number;
+	      vehicles: Array<{
+	        id: string;
+	        state: string;
+	        loaded: boolean;
+	        taskId: string | null;
+	        currentNodeId: string;
+	        targetNodeId: string | null;
+	        plannedGoalNodeId: string | null;
+	        currentEdgeId: string | null;
+	        routeNodeIds: string[];
+	        plannedRouteNodeIds: string[];
+	        localRouteNodeIds: string[];
+	        localRouteReason: string | null;
+	        waitReason: string | null;
+	        blockingVehicleId: string | null;
+	        blockingReservationId: string | null;
+	        waitingSinceSec: number | null;
+	        legRemainingM: number;
+	        phaseRemainingSec: number;
+	        yieldHoldUntilSec: number | null;
+	        yieldHoldNodeId: string | null;
+	        x: number;
+	        z: number;
+	      }>;
+	      tasks: Array<{ id: string }>;
+	      agentRefreshYieldHoldBlocker(vehicle: unknown, task: unknown): { reason: string; blockingVehicleId: string | null } | null;
+	    };
+	    internals.simTimeSec = 8400;
+	    const winner = internals.vehicles.find((vehicle) => vehicle.id === 'SH-01')!;
+	    winner.loaded = true;
+	    winner.currentNodeId = 'storage-r06-c21';
+	    winner.targetNodeId = null;
+	    winner.routeNodeIds = [
+	      'storage-r06-c21',
+	      'storage-r07-c21',
+	      'column-middle-c21',
+	      'module-02-spine-middle'
+	    ];
+	    winner.plannedRouteNodeIds = winner.routeNodeIds;
+	    winner.currentEdgeId = null;
+	    winner.legRemainingM = 0;
+	    winner.phaseRemainingSec = 0;
+	    winner.x = node(winner.currentNodeId).x;
+	    winner.z = node(winner.currentNodeId).z;
+
+	    const yielder = internals.vehicles.find((vehicle) => vehicle.id === 'SH-02')!;
+	    yielder.state = 'waiting-blocked';
+	    yielder.loaded = false;
+	    yielder.taskId = 'yielder-task';
+	    yielder.currentNodeId = 'storage-r07-c21';
+	    yielder.targetNodeId = 'storage-r07-c21';
+	    yielder.plannedGoalNodeId = 'storage-r10-c15';
+	    yielder.currentEdgeId = null;
+	    yielder.routeNodeIds = ['column-middle-c21', 'storage-r07-c21'];
+	    yielder.plannedRouteNodeIds = [
+	      'storage-r07-c21',
+	      'column-middle-c21',
+	      'module-02-spine-middle',
+	      'module-02-spine-bottom-a',
+	      'column-bottom-a-c21',
+	      'column-bottom-a-c20',
+	      'column-bottom-a-c19',
+	      'column-bottom-a-c18',
+	      'column-bottom-a-c17',
+	      'column-bottom-a-c16',
+	      'column-bottom-a-c15',
+	      'storage-r14-c15',
+	      'storage-r13-c15',
+	      'storage-r12-c15',
+	      'storage-r11-c15',
+	      'storage-r10-c15'
+	    ];
+	    yielder.localRouteNodeIds = [];
+	    yielder.localRouteReason = null;
+	    yielder.waitReason = 'local-yield-hold';
+	    yielder.blockingVehicleId = 'SH-01';
+	    yielder.blockingReservationId = null;
+	    yielder.waitingSinceSec = 8300;
+	    yielder.legRemainingM = 0;
+	    yielder.phaseRemainingSec = 0;
+	    yielder.yieldHoldUntilSec = 8401;
+	    yielder.yieldHoldNodeId = 'storage-r07-c21';
+	    yielder.x = node(yielder.currentNodeId).x;
+	    yielder.z = node(yielder.currentNodeId).z;
+	    const task = internals.tasks.find((candidate) => candidate.id === 'yielder-task')!;
+
+	    expect(internals.agentRefreshYieldHoldBlocker(yielder, task)).toBeNull();
+	    expect(yielder.yieldHoldUntilSec).toBeNull();
+	    expect(yielder.yieldHoldNodeId).toBeNull();
+	    expect(yielder.waitReason).toBeNull();
+	    expect(yielder.blockingVehicleId).toBeNull();
+	  });
+
+	  it('agent-refresh does not send a loaded lift departure through a blocker to reach a forward pocket', () => {
+	    const scenario = createDefaultShuttleScenario({
       liftMode: 'all-inbound',
       vehicles: { count: 2 },
       taskGeneration: {

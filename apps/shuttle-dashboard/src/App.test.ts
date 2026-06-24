@@ -1,4 +1,4 @@
-import type { KpiSnapshot, ShuttleScenario, ShuttleSimState, VehicleState } from '@four-way-shuttle/schemas';
+import { ShadowResourceLedgerDiagnosticsSchema, type KpiSnapshot, type ShuttleScenario, type ShuttleSimState, type VehicleState } from '@four-way-shuttle/schemas';
 import { createDefaultShuttleScenario, createInboundMvpBaselineScenario, summarizeScenarioStaticSceneContract } from '@four-way-shuttle/sim-core';
 import { describe, expect, it } from 'vitest';
 
@@ -97,6 +97,10 @@ function kpis(overrides: Partial<KpiSnapshot> = {}): KpiSnapshot {
   };
 }
 
+function shadowLedger(): ShuttleSimState['traffic']['shadowLedger'] {
+  return ShadowResourceLedgerDiagnosticsSchema.parse({});
+}
+
 function state(overrides: Partial<ShuttleSimState> = {}): ShuttleSimState {
   return {
     schemaVersion: 'shuttle.phase0.state.v0',
@@ -124,6 +128,7 @@ function state(overrides: Partial<ShuttleSimState> = {}): ShuttleSimState {
       conflictSessions: [],
       liftPorts: [],
       deadlockCandidateVehicleIds: [],
+      shadowLedger: shadowLedger(),
       minVehicleSeparationM: null,
       maxObservedSpeedMps: 0,
       physicalViolationCount: 0
@@ -458,6 +463,7 @@ describe('dashboard resource utilization', () => {
           }
         ],
         deadlockCandidateVehicleIds: [],
+        shadowLedger: shadowLedger(),
         minVehicleSeparationM: null,
         maxObservedSpeedMps: 0,
         physicalViolationCount: 0
