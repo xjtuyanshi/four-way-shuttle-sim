@@ -146,6 +146,13 @@ type ShadowLedgerHotspot = {
 
 const MAX_SHADOW_LEDGER_VIOLATION_CHECKPOINTS = 12;
 
+type MotionIntentObservation = {
+  signature: string;
+  firstSec: number;
+  lastSec: number;
+  code: string;
+};
+
 type StationQueueLeaseTransitionSummary = {
   total: number;
   byReason: Array<{ reason: string; count: number }>;
@@ -228,7 +235,7 @@ const initialOutboundFullColumns = integerArg('--outbound-full-columns', 4);
 const initialStorageFillPolicy = enumArg('--initial-fill-policy', ['full-columns', 'zone-balanced-50'] as const, 'zone-balanced-50');
 const storageSelectionPolicy = enumArg('--storage-selection-policy', ['sequential', 'traffic-aware'] as const, 'sequential');
 const collisionAvoidance = enumArg('--collision-avoidance', ['on', 'off'] as const, 'on');
-const outputPath = resolve(stringArg('--out') ?? 'output/review/physical-24h-amr-audit.json');
+const outputPath = resolve(stringArg('--out') ?? stringArg('--output') ?? 'output/review/physical-24h-amr-audit.json');
 const checkpointDir = resolve(stringArg('--checkpoint-dir') ?? outputPath.replace(/\.json$/i, '-checkpoints'));
 const runChangeNote = stringArg('--change-note') ?? stringArg('--change-label') ?? 'unspecified change';
 const runReason = stringArg('--run-reason');
@@ -252,7 +259,8 @@ const thresholds = {
   longWaitSec: numberArg('--long-wait-sec', 300),
   zeroTaskMovingSec: numberArg('--zero-task-moving-sec', 300),
   confinedRunBboxM: numberArg('--confined-run-bbox-m', 3),
-  confinedRunCenterM: numberArg('--confined-run-center-m', 2)
+  confinedRunCenterM: numberArg('--confined-run-center-m', 2),
+  motionIntentGraceSec: numberArg('--motion-intent-grace-sec', 1)
 };
 
 if (renderRunLogOnly) {
@@ -319,6 +327,14 @@ const shadowLedgerDuplicateSourcePatternCounts = new Map<string, number>();
 const shadowLedgerDuplicateOwnerClassCounts = new Map<string, number>();
 const shadowLedgerViolationCheckpointKeys = new Set<string>();
 const assignedWithoutRouteAnomalyKeys = new Set<string>();
+const stationContractCriticalAnomalyKeys = new Set<string>();
+const stationContractCriticalByCode = new Map<string, number>();
+const motionContractAnomalyKeys = new Set<string>();
+const motionIntentObservations = new Map<string, MotionIntentObservation>();
+let stationContractCriticalFirstSec: number | null = null;
+let stationContractCriticalSampleCount = 0;
+let stationContractCriticalMax = 0;
+let maxMotionIntentWithoutExecutionSec = 0;
 
 sim.start();
 const initialState = sim.getState();
@@ -406,6 +422,10 @@ const noStopWaitCycleDecisionDiagnostics = summarizeNoStopWaitCycleDecisionDiagn
 const finalStationContractCriticalCount = finalState.traffic.shadowLedger.stationContracts.violations
   .filter((violation) => violation.severity === 'critical').length;
 const criticalAnomalyCount = anomalies.filter((anomaly) => anomaly.severity === 'critical').length + finalStationContractCriticalCount;
+const motionContractCriticalCount = anomalies.filter((anomaly) =>
+  anomaly.severity === 'critical' &&
+  (anomaly.code === 'moving-state-without-kinematics' || anomaly.code === 'route-intent-not-executed')
+).length;
 const reachedRequestedDuration = finalState.simTimeSec >= durationSec - 1e-9;
 const runStatus = criticalAnomalyCount > 0
     ? 'stopped-critical'
@@ -471,8 +491,27 @@ const result = {
     physicalViolations: finalState.traffic.physicalViolationCount,
     minVehicleSeparationM: finalState.traffic.minVehicleSeparationM,
     stationContractCriticalViolations: finalStationContractCriticalCount,
+    stationContractCriticalMax,
+    stationContractCriticalSampleCount,
+    stationContractCriticalFirstSec,
+    stationContractCriticalByCode: Object.fromEntries([...stationContractCriticalByCode.entries()].sort(([left], [right]) => left.localeCompare(right))),
     physicalViolationFirstSec,
     physicalViolationSessions
+  },
+  motionContract: {
+    motionContractCriticalCount,
+    maxMotionIntentWithoutExecutionSec: round(maxMotionIntentWithoutExecutionSec, 3),
+    activeMotionIntentObservations: [...motionIntentObservations.entries()]
+      .map(([vehicleId, observation]) => ({
+        vehicleId,
+        code: observation.code,
+        signature: observation.signature,
+        firstSec: round(observation.firstSec, 3),
+        lastSec: round(observation.lastSec, 3),
+        ageSec: round(Math.max(0, finalState.simTimeSec - observation.firstSec), 3)
+      }))
+      .sort((left, right) => right.ageSec - left.ageSec || left.vehicleId.localeCompare(right.vehicleId))
+      .slice(0, 12)
   },
   shadowLedger: summarizeShadowLedger(finalState),
   stationQueueLeaseTransitions,
@@ -521,10 +560,12 @@ console.log(JSON.stringify({
   inboundPph: result.pph.inbound,
   outboundPph: result.pph.outbound,
   anomalies: result.anomalies.length,
-  criticalAnomalies: result.anomalies.filter((anomaly) => anomaly.severity === 'critical').length
+  criticalAnomalies: result.anomalies.filter((anomaly) => anomaly.severity === 'critical').length,
+  stationContractCriticalViolations: result.traffic.stationContractCriticalViolations,
+  motionContractCriticalCount: result.motionContract.motionContractCriticalCount
 }, null, 2));
 
-if (result.anomalies.some((anomaly) => anomaly.severity === 'critical')) {
+if (result.anomalies.some((anomaly) => anomaly.severity === 'critical') || finalStationContractCriticalCount > 0) {
   process.exitCode = 1;
 }
 
@@ -552,8 +593,11 @@ function appendRollingRunLog(result: any): void {
     shadowLedgerSummary: summarizeRunShadowLedger(result.shadowLedger),
     narrative,
     runReason: narrative.runReason,
+    whyRerun: narrative.runReason,
     problemsObserved: narrative.problemsObserved,
+    problemsFound: narrative.problemsObserved,
     problemsSolved: narrative.problemsSolved,
+    problemsFixed: narrative.problemsSolved,
     decision: narrative.decision,
     hourlyPph: result.hourlyPph ?? [],
     tenMinuteWindows: result.tenMinuteWindows ?? [],
@@ -615,14 +659,28 @@ function normalizeRollingRunEntry(run: any): any {
   const enrichedRun = enrichRollingRunEntry(run);
   const inferred = inferRunNarrative(enrichedRun);
   const explicit = typeof enrichedRun.narrative === 'object' && enrichedRun.narrative !== null ? enrichedRun.narrative : {};
+  const withAliases = {
+    ...enrichedRun,
+    whyRerun: cleanText(enrichedRun.whyRerun) ?? cleanText(enrichedRun.runReason) ?? cleanText(explicit.runReason) ?? inferred.runReason,
+    problemsFound: Array.isArray(enrichedRun.problemsFound)
+      ? enrichedRun.problemsFound
+      : Array.isArray(enrichedRun.problemsObserved)
+        ? enrichedRun.problemsObserved
+        : cleanTextList(explicit.problemsObserved, inferred.problemsObserved),
+    problemsFixed: Array.isArray(enrichedRun.problemsFixed)
+      ? enrichedRun.problemsFixed
+      : Array.isArray(enrichedRun.problemsSolved)
+        ? enrichedRun.problemsSolved
+        : cleanTextList(explicit.problemsSolved, inferred.problemsSolved)
+  };
   if (shouldRefreshAutoNarrative(enrichedRun, explicit, inferred)) {
     return {
-      ...enrichedRun,
+      ...withAliases,
       narrative: inferred
     };
   }
   return {
-    ...enrichedRun,
+    ...withAliases,
     narrative: {
       runReason: cleanText(explicit.runReason) ?? inferred.runReason,
       problemsObserved: mergeNarrativeTextList(
@@ -1340,6 +1398,45 @@ function auditState(state: ShuttleSimState, dtSec: number): void {
         recordCheckpoint(state, state.simTimeSec);
       }
     }
+    const motionIssue = motionContractIssue(vehicle as VehicleRuntimeState);
+    if (motionIssue) {
+      const observationKey = vehicle.id;
+      const previous = motionIntentObservations.get(observationKey);
+      const observation = previous && previous.signature === motionIssue.signature
+        ? previous
+        : {
+            signature: motionIssue.signature,
+            firstSec: state.simTimeSec,
+            lastSec: state.simTimeSec,
+            code: motionIssue.code
+          };
+      observation.lastSec = state.simTimeSec;
+      observation.code = motionIssue.code;
+      motionIntentObservations.set(observationKey, observation);
+      const ageSec = Math.max(0, state.simTimeSec - observation.firstSec);
+      maxMotionIntentWithoutExecutionSec = Math.max(maxMotionIntentWithoutExecutionSec, ageSec);
+      if (motionIssue.immediateCritical || ageSec >= thresholds.motionIntentGraceSec) {
+        const anomalyKey = `${vehicle.id}|${motionIssue.code}|${motionIssue.signature}`;
+        if (!motionContractAnomalyKeys.has(anomalyKey)) {
+          motionContractAnomalyKeys.add(anomalyKey);
+          addAnomaly(
+            state.simTimeSec,
+            null,
+            vehicle.id,
+            'critical',
+            motionIssue.code,
+            `${motionIssue.detail}; observedForSec=${round(ageSec, 3)}`,
+            {
+              ...motionIssue.metrics,
+              observedForSec: round(ageSec, 3)
+            }
+          );
+          recordCheckpoint(state, state.simTimeSec);
+        }
+      }
+    } else {
+      motionIntentObservations.delete(vehicle.id);
+    }
     updateVehicleWindow(state, vehicle as VehicleRuntimeState, dtSec);
   }
 }
@@ -1420,6 +1517,38 @@ function auditShadowLedger(state: ShuttleSimState): void {
       shadowLedgerDuplicateOwnerClassCounts.set(
         className,
         (shadowLedgerDuplicateOwnerClassCounts.get(className) ?? 0) + 1
+      );
+    }
+  }
+  const stationCriticalViolations = ledger.stationContracts.violations
+    .filter((violation) => violation.severity === 'critical');
+  if (stationCriticalViolations.length > 0) {
+    stationContractCriticalSampleCount += 1;
+    stationContractCriticalFirstSec ??= state.simTimeSec;
+    stationContractCriticalMax = Math.max(stationContractCriticalMax, stationCriticalViolations.length);
+    checkpointNeeded = true;
+  }
+  for (const violation of stationCriticalViolations) {
+    stationContractCriticalByCode.set(
+      violation.code,
+      (stationContractCriticalByCode.get(violation.code) ?? 0) + 1
+    );
+    const anomalyKey = `${violation.code}|${violation.stationId ?? 'none'}|${violation.vehicleId ?? 'none'}|${violation.otherVehicleId ?? 'none'}|${violation.resourceKey ?? 'none'}`;
+    if (!stationContractCriticalAnomalyKeys.has(anomalyKey)) {
+      stationContractCriticalAnomalyKeys.add(anomalyKey);
+      addAnomaly(
+        state.simTimeSec,
+        null,
+        violation.vehicleId ?? null,
+        'critical',
+        'station-contract-critical',
+        `${violation.code}: ${violation.detail}`,
+        {
+          stationId: violation.stationId ?? null,
+          resourceKey: violation.resourceKey ?? null,
+          otherVehicleId: violation.otherVehicleId ?? null,
+          stationContractCode: violation.code
+        }
       );
     }
   }
@@ -1821,6 +1950,77 @@ function assignedWithoutRouteIssue(
       plannedRouteLength: vehicle.plannedRouteNodeIds.length
     }
   };
+}
+
+function motionContractIssue(
+  vehicle: VehicleRuntimeState
+): { code: string; detail: string; signature: string; immediateCritical: boolean; metrics: AmrAnomaly['metrics'] } | null {
+  if (
+    vehicle.currentEdgeId !== null ||
+    vehicle.legRemainingM > 1e-6 ||
+    vehicle.phaseRemainingSec > 1e-6 ||
+    vehicle.waitReason !== null ||
+    vehicle.speedMps > 0.02
+  ) {
+    return null;
+  }
+  const movingState = movingVehicleState(vehicle.state);
+  const routeTail = shadowVehicleRouteTail(vehicle, vehicle.routeNodeIds);
+  const localRouteTail = shadowVehicleRouteTail(vehicle, vehicle.localRouteNodeIds);
+  const nextRouteNodeId = routeTail[1] ?? localRouteTail[1] ?? vehicle.targetNodeId;
+  const hasExecutableRouteIntent = nextRouteNodeId !== null && nextRouteNodeId !== vehicle.currentNodeId;
+  const hasActiveWork = Boolean(vehicle.taskId || vehicle.loaded || movingState);
+  if (!hasActiveWork || vehicle.state === 'idle') {
+    return null;
+  }
+  const signature = [
+    vehicle.state,
+    vehicle.loaded ? 'loaded' : 'empty',
+    vehicle.taskId ?? 'no-task',
+    vehicle.currentNodeId,
+    vehicle.targetNodeId ?? 'no-target',
+    vehicle.localRouteReason ?? 'no-local-reason',
+    routeTail.slice(0, 4).join('>') || 'no-route',
+    localRouteTail.slice(0, 4).join('>') || 'no-local-route'
+  ].join('|');
+  const metrics = {
+    state: vehicle.state,
+    loaded: vehicle.loaded,
+    taskId: vehicle.taskId,
+    currentNodeId: vehicle.currentNodeId,
+    targetNodeId: vehicle.targetNodeId,
+    routeIndex: vehicle.routeIndex,
+    routeLength: vehicle.routeNodeIds.length,
+    routeTail: routeTail.slice(0, 8).join('>'),
+    localRouteReason: vehicle.localRouteReason,
+    localRouteLength: vehicle.localRouteNodeIds.length,
+    localRouteTail: localRouteTail.slice(0, 8).join('>'),
+    plannedGoalNodeId: vehicle.plannedGoalNodeId,
+    plannedRouteLength: vehicle.plannedRouteNodeIds.length
+  };
+  if (movingState) {
+    return {
+      code: 'moving-state-without-kinematics',
+      detail: `${vehicle.id} is ${vehicle.state} at ${vehicle.currentNodeId}, but has no active edge, no remaining leg, no phase, no wait reason, and no speed.`,
+      signature,
+      immediateCritical: true,
+      metrics
+    };
+  }
+  if (hasExecutableRouteIntent) {
+    return {
+      code: 'route-intent-not-executed',
+      detail: `${vehicle.id} has route/target intent from ${vehicle.currentNodeId} toward ${nextRouteNodeId}, but no edge has started and no wait reason is recorded.`,
+      signature,
+      immediateCritical: false,
+      metrics
+    };
+  }
+  return null;
+}
+
+function movingVehicleState(state: VehicleState['state']): boolean {
+  return state === 'loaded-moving' || state === 'moving-to-pickup' || state === 'returning';
 }
 
 function completedTasksForVehicle(state: ShuttleSimState, vehicleId: string, startSec: number, endSec: number) {

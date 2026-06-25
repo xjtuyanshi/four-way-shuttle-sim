@@ -2,6 +2,43 @@
 
 本文是给用户和下一位接手 AI 的中文说明，目标是讲清楚：现在到底哪里不对，为什么前几个小时看起来能跑、长时间以后又会坏，以及接下来应该从哪里改。
 
+## 11:16 PDT 最新结论
+
+当前最新 gate 已经不是凌晨文档里那个 `16200s` 失败点。今天上午连续修掉或绕过了几类更早的 audit stop：
+
+- `2115s` inbound station wait-for cycle
+- `2150s` moving-state-without-kinematics
+- `2345s` taskless inbound standby 双 station commitment
+- `2565s` fresh adjacent top-b wait-for cycle 被过早判 critical
+- `2810s` fresh outbound drainer cycle 被过早判 critical
+
+最新 1h gate 跑到 `3105s` 后停止：
+
+- 文件：`output/review/physical-1h-after-station-cycle-and-drainer-grace.json`
+- checkpoint：`output/review/physical-1h-after-station-cycle-and-drainer-grace-checkpoints/0012-3105s.json`
+- total PPH：`388.406`
+- inbound PPH：`270.145`
+- outbound PPH：`118.261`
+- physical violations：`0`
+- motion contract critical：`0`
+- station contract critical：`1`
+
+最新 P0 是：
+
+```text
+station-exclusive-lease-has-foreign-occupant:
+lift-02-outbound active pass outbound-station-pass:103 for SH-02 includes column-bottom-b-c22, but SH-03 occupies it.
+```
+
+这说明现在真正没收敛的是 `lift-02-outbound` bottom-b throat 的 station ownership：
+
+- `SH-02` 是 outbound active service，station pass 已经进入 `servicing`。
+- `SH-02` 的受保护路径包含 `column-bottom-b-c22`。
+- 但 `SH-03` 作为 inbound task 已经占在 `column-bottom-b-c22`。
+- `SH-06` 又在 `column-bottom-b-c23` 等着进 `c22`。
+
+所以不要再从“某一台车怎么让一下”切入。应该从 station coordinator 的 source-of-truth 切入：outbound active pass envelope 内不能有 foreign occupant，除非这个 foreign occupant 有明确的 station drain epoch，并且 active service 必须等它排空。
+
 ## 当前结论
 
 目前最可信的判断是：剩余问题不是单纯的路径规划错误，而是 `Lift station throat` 的资源所有权和状态机不统一。
@@ -128,4 +165,3 @@
 - commit：`d16e06c checkpoint: document traffic v2 station throat blocker`
 
 这个 commit 是“已保存、可继续分析”的状态，不是最终解决状态。
-

@@ -4,6 +4,160 @@ Local deadline set by the user: **2026-06-25 12:30 PDT**.
 
 If the 3D tick simulator is not fully fixed and verified by that time, stop feature/debug work and commit the best usable repo state, this handoff, all known issues, validation outputs, and next-step recommendations to GitHub.
 
+## Final Pre-Deadline Update - 2026-06-25 11:16 PDT
+
+Current branch: `codex/traffic-v2-flow-debug`.
+
+Current pre-commit HEAD: `ffc0eae`.
+
+This handoff update is the current source of truth. Older sections below describe earlier 2026-06-25 checkpoints and should be treated as historical context, not the latest validation result.
+
+### What Was Changed In The Latest Batch
+
+Tracked files changed:
+
+- `packages/shuttle-sim-core/src/index.ts`
+- `packages/shuttle-sim-core/src/index.test.ts`
+- `scripts/run-physical-24h-amr-audit.ts`
+
+Main changes:
+
+- Added station-kernel and shadow-contract guards so taskless `inbound-queue-standby` transfer only commits to one intended inbound station, instead of holding current and planned lift queues at the same time.
+- Added recovery for later inbound yield holders that block an earlier same-station inbound service route.
+- Changed temporary yield route installation so a shuttle is not marked as `loaded-moving` before a physical edge actually starts.
+- Added outbound throat and inbound predecessor side-yield protections from the current debug branch.
+- Added `--output` alias support to `scripts/run-physical-24h-amr-audit.ts`.
+- Rolling log entries now expose `whyRerun`, `problemsFound`, and `problemsFixed` aliases so the HTML log clearly explains why a run was repeated.
+- Changed station contract cycle severity:
+  - fresh `station-wait-for-cycle` is `warn`
+  - stale cycle after `deadlockDetectSec` is `critical`
+  - fresh `station-drainer-blocked-by-pending-owner` is `warn`
+  - stale drainer cycle after `deadlockDetectSec` is `critical`
+
+The severity change is intentionally narrow. It does not hide sustained station deadlocks; it prevents 0.2s to 1s transient wait-for cycles from killing the long audit before recovery can act.
+
+### Validation Just Completed
+
+Focused tests passed:
+
+```bash
+./node_modules/.bin/vitest run packages/shuttle-sim-core/src/index.test.ts -t "pending outbound owner blocks an incumbent drainer|side-yield a later inbound|retreats a later inbound|taskless inbound standby|loaded inbound top-b exit swaps|fresh station wait-for cycles" --maxWorkers=1 --reporter=dot
+```
+
+Result: `7 passed`.
+
+Typecheck passed:
+
+```bash
+pnpm -r --if-present typecheck
+```
+
+Latest 1h physical gate:
+
+```bash
+./node_modules/.bin/tsx scripts/run-physical-24h-amr-audit.ts \
+  --duration-sec 3600 \
+  --sample-interval-sec 600 \
+  --checkpoint-on-critical \
+  --stop-on-critical \
+  --output output/review/physical-1h-after-station-cycle-and-drainer-grace.json \
+  --checkpoint-dir output/review/physical-1h-after-station-cycle-and-drainer-grace-checkpoints \
+  --motion-intent-grace-sec 1
+```
+
+Result:
+
+- Run status: `stopped-critical`
+- Final simulated time: `3105s`
+- Total PPH: `388.406`
+- Inbound PPH: `270.145`
+- Outbound PPH: `118.261`
+- Physical violations: `0`
+- Minimum vehicle separation: `1.25m`
+- Motion contract critical count: `0`
+- Station contract critical violations: `1`
+
+The latest gate successfully passed these earlier stop points:
+
+- `2115s`: prior `lift-02-inbound` station wait-for cycle
+- `2150s`: prior `moving-state-without-kinematics`
+- `2345s`: prior duplicate inbound standby station commitment
+- `2565s`: prior fresh adjacent top-b wait-for cycle
+- `2810s`: prior fresh outbound drainer cycle
+
+It then stopped at `3105s`.
+
+### Current P0 Blocker At 3105s
+
+Latest evidence:
+
+- Summary file: `output/review/physical-1h-after-station-cycle-and-drainer-grace.json`
+- Checkpoint: `output/review/physical-1h-after-station-cycle-and-drainer-grace-checkpoints/0012-3105s.json`
+- Rolling log: `output/review/sim-run-rolling-log.html`
+
+Critical anomaly:
+
+```text
+station-exclusive-lease-has-foreign-occupant:
+lift-02-outbound active pass outbound-station-pass:103 for SH-02 includes column-bottom-b-c22, but SH-03 occupies it.
+```
+
+State at the failure:
+
+- `SH-02`
+  - outbound task `task-0343`
+  - loaded
+  - current node `column-bottom-b-c21`
+  - route `column-bottom-b-c21 -> module-02-spine-bottom-b -> column-bottom-b-c22`
+  - outbound station visit phase `servicing`
+  - active outbound service vehicle for `lift-02-outbound`
+- `SH-03`
+  - inbound task `task-0345`
+  - empty
+  - current node `column-bottom-b-c22`
+  - target node `column-bottom-a-c22`
+  - blocking/inside the outbound station protected throat
+- `SH-06`
+  - empty
+  - current node `column-bottom-b-c23`
+  - waiting to enter `column-bottom-b-c22`, blocked by `SH-03`
+
+Interpretation:
+
+The remaining P0 issue is no longer the earlier inbound queue transfer double-commitment or transient wait-for cycle. The active issue is outbound station throat ownership: the station active pass for `SH-02` can coexist with a foreign occupant `SH-03` already sitting inside `column-bottom-b-c22`. That means the outbound station coordinator is not yet the single source of truth for the bottom-b throat.
+
+Do not solve this by relaxing `station-exclusive-lease-has-foreign-occupant`. This one is a real ownership violation. The next fix should prevent an inbound/taskless vehicle from entering or remaining inside an outbound active pass envelope unless it has an explicit drain/clearance epoch owned by the station coordinator.
+
+### Current P1/P2 Issues
+
+- Outbound remains much lower than inbound.
+  - Latest gate at 3105s: inbound `270.145`, outbound `118.261`.
+  - `lift-01-outbound` is still nearly idle in many runs, often around `2-3 PPH`.
+- PPH trends decline through the first hour:
+  - 10m total `450`
+  - 20m total `432`
+  - 30m total `414`
+  - 40m total `421.5`
+  - 50m total `390`
+  - stop at 3105s total `388.406`
+- Shadow ledger still samples `liftFifoInversion`, especially outbound.
+- Audit wall-clock is very slow. The latest 3105s sim took about `2187s` wall-clock, so 24h validation is not practical without faster execution or lower-cost checkpoint replay.
+
+### Recommended Next Step For The Next AI
+
+Start with `lift-02-outbound` bottom-b throat, not with random AMR path tweaks.
+
+Implement or harden one station-owned rule:
+
+1. When an outbound active pass is in `servicing`, every node in its service envelope and protected throat must be either:
+   - occupied/targeted by the active service vehicle,
+   - empty, or
+   - occupied by a foreign vehicle with an explicit station drain epoch that moves outward and blocks new service grant until it clears.
+2. Inbound pickup, taskless standby, outbound reserve, and temporary yield routes must ask the station coordinator before entering `column-bottom-b-c22` and neighboring protected throat nodes.
+3. If a foreign occupant is already inside the active pass envelope, the coordinator should create a drain/clearance route first, not grant another service movement through it.
+
+After that fix, rerun the exact latest 1h command above. The first pass criterion is simply: get past `3105s` without `station-exclusive-lease-has-foreign-occupant`, while keeping physical violations at `0`.
+
 ## Repo State At Handoff Start
 
 - Repo: `git@github.com:xjtuyanshi/four-way-shuttle-sim.git`

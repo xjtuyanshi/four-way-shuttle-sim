@@ -1,0 +1,2418 @@
+{
+  "timeSec": 3105,
+  "status": "running",
+  "kpis": {
+    "inboundPph": 270.145,
+    "outboundPph": 118.261,
+    "totalPph": 388.406,
+    "windowInboundPph": 168,
+    "windowOutboundPph": 144,
+    "windowTotalPph": 312,
+    "pphWindowSec": 300,
+    "demandOutboundPph": 39.42,
+    "demandTotalPph": 309.565,
+    "completedInbound": 233,
+    "completedOutbound": 102,
+    "completedSeededOutbound": 68,
+    "completedDemandOutbound": 34,
+    "activeTasks": 4,
+    "queuedTasks": 6,
+    "averageTaskCycleSec": 71.306866,
+    "p95TaskCycleSec": 132.4,
+    "averageTaskWaitSec": 16.375522,
+    "vehicleUtilization": {
+      "SH-01": 0.894,
+      "SH-02": 0.8537,
+      "SH-03": 0.9123,
+      "SH-04": 0.8713,
+      "SH-05": 0.8283,
+      "SH-06": 0.8022,
+      "SH-07": 0.9307,
+      "SH-08": 0.8806
+    },
+    "vehicleUtilizationBreakdown": {
+      "SH-01": {
+        "busy": 0.894,
+        "productive": 0.6177,
+        "moving": 0.7303,
+        "handling": 0.0059,
+        "waiting": 0.1215,
+        "idle": 0.0432,
+        "tasklessTravel": 0.1185,
+        "queueReserveTravel": 0.0187,
+        "wasteReposition": 0.0998
+      },
+      "SH-02": {
+        "busy": 0.8537,
+        "productive": 0.5789,
+        "moving": 0.6696,
+        "handling": 0.005,
+        "waiting": 0.152,
+        "idle": 0.1196,
+        "tasklessTravel": 0.0957,
+        "queueReserveTravel": 0,
+        "wasteReposition": 0.0957
+      },
+      "SH-03": {
+        "busy": 0.9123,
+        "productive": 0.6157,
+        "moving": 0.7422,
+        "handling": 0.0054,
+        "waiting": 0.1295,
+        "idle": 0.0587,
+        "tasklessTravel": 0.132,
+        "queueReserveTravel": 0.0055,
+        "wasteReposition": 0.1264
+      },
+      "SH-04": {
+        "busy": 0.8713,
+        "productive": 0.5859,
+        "moving": 0.6881,
+        "handling": 0.0054,
+        "waiting": 0.1444,
+        "idle": 0.0575,
+        "tasklessTravel": 0.1076,
+        "queueReserveTravel": 0.0085,
+        "wasteReposition": 0.0991
+      },
+      "SH-05": {
+        "busy": 0.8283,
+        "productive": 0.5713,
+        "moving": 0.6478,
+        "handling": 0.0048,
+        "waiting": 0.1418,
+        "idle": 0.1351,
+        "tasklessTravel": 0.0813,
+        "queueReserveTravel": 0.0093,
+        "wasteReposition": 0.072
+      },
+      "SH-06": {
+        "busy": 0.8022,
+        "productive": 0.5794,
+        "moving": 0.6659,
+        "handling": 0.0049,
+        "waiting": 0.1007,
+        "idle": 0.1845,
+        "tasklessTravel": 0.0914,
+        "queueReserveTravel": 0.0074,
+        "wasteReposition": 0.084
+      },
+      "SH-07": {
+        "busy": 0.9307,
+        "productive": 0.6951,
+        "moving": 0.7884,
+        "handling": 0.0062,
+        "waiting": 0.1015,
+        "idle": 0.0406,
+        "tasklessTravel": 0.0995,
+        "queueReserveTravel": 0.0058,
+        "wasteReposition": 0.0937
+      },
+      "SH-08": {
+        "busy": 0.8806,
+        "productive": 0.6318,
+        "moving": 0.7261,
+        "handling": 0.0057,
+        "waiting": 0.1194,
+        "idle": 0.0763,
+        "tasklessTravel": 0.1,
+        "queueReserveTravel": 0.0039,
+        "wasteReposition": 0.0961
+      }
+    },
+    "liftPph": {
+      "lift-01-inbound": {
+        "kind": "inbound",
+        "completed": 93,
+        "pph": 107.826
+      },
+      "lift-01-outbound": {
+        "kind": "outbound",
+        "completed": 2,
+        "pph": 2.319
+      },
+      "lift-02-inbound": {
+        "kind": "inbound",
+        "completed": 140,
+        "pph": 162.319
+      },
+      "lift-02-outbound": {
+        "kind": "outbound",
+        "completed": 100,
+        "pph": 115.942
+      }
+    },
+    "blockedTimeByReasonSec": {
+      "inbound-column-predecessor-wait": 614.044771,
+      "inbound-lift-fifo-wait": 1755.738625,
+      "inbound-lift-source-assigned": 1345.2,
+      "loaded-route-precedence": 377.653639,
+      "local-yield-hold": 349.512113,
+      "middle-aisle-opposing-claim": 108.158114,
+      "middle-exit-precedence": 9,
+      "no-stop-continuation-blocked": 33.341447,
+      "node-clearing": 466.68842,
+      "node-occupied": 188.616221,
+      "node-target-near": 364.764467,
+      "outbound-lift-dock-corridor": 0.775,
+      "outbound-lift-dock-protected": 80.108117,
+      "outbound-lift-queue-full": 63,
+      "outbound-reserved-for-inbound": 2.4,
+      "outbound-station-await-transition": 36.328169,
+      "outbound-station-envelope-owned": 1.491876,
+      "route-unavailable": 11014.358117,
+      "storage-empty": 2575.6,
+      "storage-exit-precedence": 0.6,
+      "storage-full": 1129.2,
+      "top-lift-spine-opposing-claim": 148.744448,
+      "vehicle-unavailable": 8604.4
+    },
+    "reservationConflictCount": 11129,
+    "replanCount": 332,
+    "deadlockCount": 0,
+    "livelockCount": 0,
+    "eventLogHash": "ceeed09d9682c1560ea8975476237c331c1e346abe8d54f41ba88f403d950326",
+    "theoreticalCapacity": {
+      "kind": "top-lift-column",
+      "formulaVersion": "top-lift-four-bound-v1",
+      "shuttleCount": 8,
+      "singleShuttlePph": 63.5165,
+      "fleetPph": 508.132,
+      "idealCycleSec": 56.678,
+      "loadedTravelSec": 26.755,
+      "emptyReturnSec": 29.903,
+      "liftAndLowerSec": 0.02,
+      "averageLoadedDistanceM": 21.929,
+      "averageEmptyReturnDistanceM": 31.061,
+      "limitingBound": "shuttle-cycle",
+      "bounds": [
+        {
+          "kind": "shuttle-cycle",
+          "pph": 508.132,
+          "cycleSec": 56.678,
+          "utilizationBasis": "8 shared shuttle(s)",
+          "assumptions": [
+            "weighted by configured inbound/outbound demand split",
+            "uses legal top-lift service stop routes and configured speed/turn/lift timing"
+          ]
+        },
+        {
+          "kind": "network-min-cut",
+          "pph": 1207.487,
+          "cycleSec": 2.981,
+          "utilizationBasis": "module-spine-01-upper-vertical",
+          "assumptions": [
+            "network bound estimates the busiest legal route conflict-group occupancy from sampled ideal routes",
+            "this is a min-cut proxy and must be replaced by CAD-calibrated swept-envelope validation before customer PPH claims"
+          ]
+        },
+        {
+          "kind": "column-resource",
+          "pph": 3556.925,
+          "cycleSec": 4.048,
+          "utilizationBasis": "4/28 serviceable column(s), 14 positions per column",
+          "assumptions": [
+            "each SKU column is a mutex: a column cannot be filled and drained at the same time",
+            "parallelism is capped by active lift ports until explicit column assignment policy is proven"
+          ]
+        },
+        {
+          "kind": "lift-port",
+          "pph": 10212.766,
+          "cycleSec": 1.41,
+          "utilizationBasis": "2 inbound lift(s), 2 outbound lift(s)",
+          "assumptions": [
+            "service cycle includes lift/lower time, direction-change allowance, and reservation clearance",
+            "mixed-flow total capacity is limited by the requested inbound/outbound demand split"
+          ]
+        }
+      ],
+      "assumptions": [
+        "top-lift four-bound estimate: lift-port, shuttle-cycle, column-resource, and network-min-cut",
+        "not a customer PPH proof until CAD obstacle masks and lift workcell FSM gates are verified",
+        "inbound/outbound route samples use legal service stop and clear-through graph nodes, not legacy row-bank lift nodes"
+      ],
+      "achievedInboundPct": 53.164,
+      "achievedOutboundPct": 23.274,
+      "achievedTotalPct": 76.438,
+      "averageVehicleUtilizationPct": 87.164
+    }
+  },
+  "traffic": {
+    "trafficMode": "agent-refresh",
+    "safetyValidated": false,
+    "collisionAvoidanceEnabled": true,
+    "longHorizonReservationEnabled": false,
+    "clearThroughLookaheadEnabled": false,
+    "clearThroughMaxLookaheadLegs": 0,
+    "activeFutureGrantCount": 0,
+    "legacyZoneHoldEnabled": false,
+    "activeReservationCount": 0,
+    "waitingVehicles": [
+      {
+        "vehicleId": "SH-03",
+        "currentNodeId": "column-bottom-b-c22",
+        "targetNodeId": "column-bottom-a-c22",
+        "waitReason": "node-target-near",
+        "blockedTimeSec": 402.073027,
+        "waitingSinceSec": 3104.8,
+        "blockingReservationId": null,
+        "blockingVehicleId": "SH-01"
+      },
+      {
+        "vehicleId": "SH-06",
+        "currentNodeId": "column-bottom-b-c23",
+        "targetNodeId": "column-bottom-b-c22",
+        "waitReason": "node-occupied",
+        "blockedTimeSec": 312.673466,
+        "waitingSinceSec": 3096.6,
+        "blockingReservationId": null,
+        "blockingVehicleId": "SH-03"
+      }
+    ],
+    "conflictSessions": [
+      {
+        "id": "conflict-00316",
+        "kind": "pair",
+        "resourceKey": "node:column-bottom-a-c23:SH-01+SH-03",
+        "state": "open",
+        "participantVehicleIds": [
+          "SH-01",
+          "SH-03"
+        ],
+        "winnerVehicleId": "SH-03",
+        "yielderVehicleId": "SH-01",
+        "createdAtSec": 3099.6,
+        "createdAtTick": 15498,
+        "updatedAtSec": 3105,
+        "expiresAtSec": 3119.6,
+        "timeoutAtSec": 3111.6,
+        "trigger": "same-node",
+        "initialBlockerVehicleId": "SH-01",
+        "blockerVehicleId": "SH-03",
+        "yielderOriginalNodeId": "column-bottom-a-c23",
+        "yielderPocketNodeId": null,
+        "yielderLocalRouteNodeIds": [],
+        "resumeNodeId": "column-bottom-a-c23",
+        "clearancePolicy": "immediate-next-move",
+        "closeReason": null
+      },
+      {
+        "id": "conflict-00317",
+        "kind": "pair",
+        "resourceKey": "edge:column-bottom-a-c22-column-bottom-b-c22:SH-02+SH-03",
+        "state": "open",
+        "participantVehicleIds": [
+          "SH-02",
+          "SH-03"
+        ],
+        "winnerVehicleId": "SH-02",
+        "yielderVehicleId": "SH-03",
+        "createdAtSec": 3099.8,
+        "createdAtTick": 15499,
+        "updatedAtSec": 3104.8,
+        "expiresAtSec": 3119.8,
+        "timeoutAtSec": 3111.8,
+        "trigger": "deadlock-break",
+        "initialBlockerVehicleId": "SH-02",
+        "blockerVehicleId": "SH-02",
+        "yielderOriginalNodeId": "column-bottom-a-c22",
+        "yielderPocketNodeId": null,
+        "yielderLocalRouteNodeIds": [],
+        "resumeNodeId": "column-bottom-b-c22",
+        "clearancePolicy": "immediate-next-move",
+        "closeReason": null
+      },
+      {
+        "id": "conflict-00318",
+        "kind": "pair",
+        "resourceKey": "node:column-bottom-b-c22:SH-03+SH-06",
+        "state": "open",
+        "participantVehicleIds": [
+          "SH-03",
+          "SH-06"
+        ],
+        "winnerVehicleId": "SH-03",
+        "yielderVehicleId": "SH-06",
+        "createdAtSec": 3101.6,
+        "createdAtTick": 15508,
+        "updatedAtSec": 3105,
+        "expiresAtSec": 3121.6,
+        "timeoutAtSec": 3113.6,
+        "trigger": "same-node",
+        "initialBlockerVehicleId": "SH-03",
+        "blockerVehicleId": "SH-03",
+        "yielderOriginalNodeId": "column-bottom-b-c23",
+        "yielderPocketNodeId": null,
+        "yielderLocalRouteNodeIds": [],
+        "resumeNodeId": "column-bottom-b-c22",
+        "clearancePolicy": "immediate-next-move",
+        "closeReason": null
+      }
+    ],
+    "liftPorts": [
+      {
+        "nodeId": "lift-01-inbound",
+        "kind": "inbound",
+        "queueLength": 0,
+        "waitingTaskIds": [],
+        "activeTaskId": null,
+        "approachOccupancy": 0,
+        "approachCapacity": 4,
+        "sourceBufferOccupancy": 4,
+        "sourceBufferCapacity": 4,
+        "completedTasks": 93,
+        "pph": 107.826,
+        "utilization": 0.006
+      },
+      {
+        "nodeId": "lift-01-outbound",
+        "kind": "outbound",
+        "queueLength": 4,
+        "waitingTaskIds": [
+          "task-0002",
+          "task-0006",
+          "task-0015",
+          "task-0018"
+        ],
+        "activeTaskId": null,
+        "approachOccupancy": 0,
+        "approachCapacity": 4,
+        "sourceBufferOccupancy": 0,
+        "sourceBufferCapacity": 1,
+        "completedTasks": 2,
+        "pph": 2.319,
+        "utilization": 0.0001
+      },
+      {
+        "nodeId": "lift-02-inbound",
+        "kind": "inbound",
+        "queueLength": 0,
+        "waitingTaskIds": [],
+        "activeTaskId": null,
+        "approachOccupancy": 1,
+        "approachCapacity": 4,
+        "sourceBufferOccupancy": 4,
+        "sourceBufferCapacity": 4,
+        "completedTasks": 140,
+        "pph": 162.319,
+        "utilization": 0.0091
+      },
+      {
+        "nodeId": "lift-02-outbound",
+        "kind": "outbound",
+        "queueLength": 2,
+        "waitingTaskIds": [
+          "task-0174",
+          "task-0187"
+        ],
+        "activeTaskId": null,
+        "approachOccupancy": 2,
+        "approachCapacity": 4,
+        "sourceBufferOccupancy": 0,
+        "sourceBufferCapacity": 1,
+        "completedTasks": 100,
+        "pph": 115.942,
+        "utilization": 0.0064
+      }
+    ],
+    "deadlockCandidateVehicleIds": [],
+    "shadowLedger": {
+      "schemaVersion": "shadow-resource-ledger.v1",
+      "enabled": true,
+      "leaseCount": 10,
+      "currentOccupancyLeaseCount": 4,
+      "reservationLeaseCount": 0,
+      "futureClaimLeaseCount": 6,
+      "invariantCounts": {
+        "staleLocalRouteClaim": 0,
+        "blockedWaiterFutureClaim": 0,
+        "orphanedYieldHold": 0,
+        "intentWithoutRouteOrHold": 0,
+        "reservationOwnerMismatch": 0,
+        "duplicateResourceOwner": 0,
+        "plannedRouteOverlap": 0,
+        "conflictSessionMismatch": 0,
+        "liftFifoInversion": 1,
+        "columnModeConflict": 0,
+        "total": 1
+      },
+      "violations": [
+        {
+          "otherVehicleId": null,
+          "code": "lift-fifo-inversion",
+          "severity": "watch",
+          "resourceKey": "lift:outbound:lift-02-outbound",
+          "vehicleId": "SH-02",
+          "detail": "task-0343 is active while older eligible-looking task task-0174 remains queued."
+        }
+      ],
+      "vehicleIntents": [
+        {
+          "id": "vehicle-intent:SH-01",
+          "mode": "shadow",
+          "vehicleId": "SH-01",
+          "kind": "yield",
+          "phase": "executing",
+          "taskId": null,
+          "stationId": null,
+          "goalNodeId": "column-bottom-a-c22",
+          "currentNodeId": "column-bottom-a-c23",
+          "targetNodeId": "column-bottom-a-c22",
+          "plannedGoalNodeId": null,
+          "routeNodeIds": [
+            "column-bottom-a-c23",
+            "column-bottom-a-c22",
+            "module-02-spine-bottom-a",
+            "column-bottom-a-c21",
+            "column-bottom-a-c20",
+            "column-bottom-a-c19",
+            "column-bottom-a-c18",
+            "column-bottom-a-c17",
+            "column-bottom-a-c16",
+            "column-bottom-a-c15",
+            "module-boundary-01-spine-bottom-a",
+            "column-bottom-a-c14",
+            "column-bottom-a-c13",
+            "column-bottom-a-c12",
+            "column-bottom-a-c11",
+            "column-bottom-a-c10",
+            "column-bottom-a-c09",
+            "column-bottom-a-c08",
+            "column-bottom-b-c08",
+            "parking-03"
+          ],
+          "localRouteReason": null,
+          "waitReason": null,
+          "blockingVehicleId": null,
+          "blockingReservationId": null,
+          "stationLeaseIds": [],
+          "conflictSessionIds": [
+            "conflict-00316"
+          ],
+          "hasRunnableRoute": true,
+          "hasExplicitHold": false,
+          "hasStationLease": false,
+          "hasYieldConflict": true
+        },
+        {
+          "id": "vehicle-intent:SH-02",
+          "mode": "shadow",
+          "vehicleId": "SH-02",
+          "kind": "station-service",
+          "phase": "executing",
+          "taskId": "task-0343",
+          "stationId": "lift-02-outbound",
+          "goalNodeId": "module-02-spine-bottom-b",
+          "currentNodeId": "column-bottom-b-c21",
+          "targetNodeId": "module-02-spine-bottom-b",
+          "plannedGoalNodeId": null,
+          "routeNodeIds": [
+            "column-bottom-b-c21",
+            "module-02-spine-bottom-b",
+            "column-bottom-b-c22"
+          ],
+          "localRouteReason": null,
+          "waitReason": null,
+          "blockingVehicleId": null,
+          "blockingReservationId": null,
+          "stationLeaseIds": [
+            "station-lease:lift-02-outbound:SH-02:service-envelope"
+          ],
+          "conflictSessionIds": [
+            "conflict-00317"
+          ],
+          "hasRunnableRoute": true,
+          "hasExplicitHold": false,
+          "hasStationLease": true,
+          "hasYieldConflict": false
+        },
+        {
+          "id": "vehicle-intent:SH-03",
+          "mode": "shadow",
+          "vehicleId": "SH-03",
+          "kind": "yield",
+          "phase": "blocked",
+          "taskId": "task-0345",
+          "stationId": "lift-02-inbound",
+          "goalNodeId": "column-top-a-c23",
+          "currentNodeId": "column-bottom-b-c22",
+          "targetNodeId": "column-bottom-a-c22",
+          "plannedGoalNodeId": "column-top-a-c23",
+          "routeNodeIds": [
+            "column-bottom-b-c22",
+            "column-bottom-a-c22",
+            "module-02-spine-bottom-a",
+            "module-02-spine-middle",
+            "module-02-spine-top-b",
+            "module-02-spine-top-a",
+            "column-top-a-c22",
+            "column-top-a-c23"
+          ],
+          "localRouteReason": null,
+          "waitReason": "node-target-near",
+          "blockingVehicleId": "SH-01",
+          "blockingReservationId": null,
+          "stationLeaseIds": [
+            "station-lease:lift-02-inbound:SH-03:service"
+          ],
+          "conflictSessionIds": [
+            "conflict-00316",
+            "conflict-00317",
+            "conflict-00318"
+          ],
+          "hasRunnableRoute": true,
+          "hasExplicitHold": true,
+          "hasStationLease": true,
+          "hasYieldConflict": true
+        },
+        {
+          "id": "vehicle-intent:SH-04",
+          "mode": "shadow",
+          "vehicleId": "SH-04",
+          "kind": "idle",
+          "phase": "idle",
+          "taskId": null,
+          "stationId": null,
+          "goalNodeId": "column-bottom-b-c27",
+          "currentNodeId": "column-bottom-b-c27",
+          "targetNodeId": null,
+          "plannedGoalNodeId": "column-bottom-b-c27",
+          "routeNodeIds": [
+            "column-bottom-b-c27"
+          ],
+          "localRouteReason": "outbound-lift-clearance-hold",
+          "waitReason": null,
+          "blockingVehicleId": null,
+          "blockingReservationId": null,
+          "stationLeaseIds": [],
+          "conflictSessionIds": [],
+          "hasRunnableRoute": false,
+          "hasExplicitHold": false,
+          "hasStationLease": false,
+          "hasYieldConflict": false
+        },
+        {
+          "id": "vehicle-intent:SH-05",
+          "mode": "shadow",
+          "vehicleId": "SH-05",
+          "kind": "station-queue",
+          "phase": "committed",
+          "taskId": null,
+          "stationId": "lift-01-inbound",
+          "goalNodeId": "column-top-a-c09",
+          "currentNodeId": "column-top-a-c09",
+          "targetNodeId": null,
+          "plannedGoalNodeId": "column-top-a-c09",
+          "routeNodeIds": [
+            "column-top-a-c09"
+          ],
+          "localRouteReason": "inbound-queue-standby",
+          "waitReason": null,
+          "blockingVehicleId": null,
+          "blockingReservationId": null,
+          "stationLeaseIds": [
+            "station-lease:lift-01-inbound:SH-05:queue"
+          ],
+          "conflictSessionIds": [],
+          "hasRunnableRoute": false,
+          "hasExplicitHold": false,
+          "hasStationLease": true,
+          "hasYieldConflict": false
+        },
+        {
+          "id": "vehicle-intent:SH-06",
+          "mode": "shadow",
+          "vehicleId": "SH-06",
+          "kind": "yield",
+          "phase": "blocked",
+          "taskId": null,
+          "stationId": null,
+          "goalNodeId": "column-bottom-b-c22",
+          "currentNodeId": "column-bottom-b-c23",
+          "targetNodeId": "column-bottom-b-c22",
+          "plannedGoalNodeId": null,
+          "routeNodeIds": [
+            "column-bottom-b-c23",
+            "column-bottom-b-c22",
+            "parking-07"
+          ],
+          "localRouteReason": null,
+          "waitReason": "node-occupied",
+          "blockingVehicleId": "SH-03",
+          "blockingReservationId": null,
+          "stationLeaseIds": [],
+          "conflictSessionIds": [
+            "conflict-00318"
+          ],
+          "hasRunnableRoute": true,
+          "hasExplicitHold": true,
+          "hasStationLease": false,
+          "hasYieldConflict": true
+        },
+        {
+          "id": "vehicle-intent:SH-07",
+          "mode": "shadow",
+          "vehicleId": "SH-07",
+          "kind": "task",
+          "phase": "executing",
+          "taskId": "task-0344",
+          "stationId": "lift-02-outbound",
+          "goalNodeId": "storage-r12-c15",
+          "currentNodeId": "module-boundary-01-spine-bottom-a",
+          "targetNodeId": "column-bottom-a-c15",
+          "plannedGoalNodeId": "storage-r12-c15",
+          "routeNodeIds": [
+            "module-boundary-01-spine-bottom-a",
+            "column-bottom-a-c15",
+            "storage-r14-c15",
+            "storage-r13-c15",
+            "storage-r12-c15"
+          ],
+          "localRouteReason": null,
+          "waitReason": null,
+          "blockingVehicleId": null,
+          "blockingReservationId": null,
+          "stationLeaseIds": [],
+          "conflictSessionIds": [],
+          "hasRunnableRoute": true,
+          "hasExplicitHold": false,
+          "hasStationLease": false,
+          "hasYieldConflict": false
+        },
+        {
+          "id": "vehicle-intent:SH-08",
+          "mode": "shadow",
+          "vehicleId": "SH-08",
+          "kind": "task",
+          "phase": "executing",
+          "taskId": "task-0342",
+          "stationId": "lift-02-inbound",
+          "goalNodeId": "storage-r11-c22",
+          "currentNodeId": "module-02-spine-middle",
+          "targetNodeId": "column-middle-c22",
+          "plannedGoalNodeId": "storage-r11-c22",
+          "routeNodeIds": [
+            "module-02-spine-middle",
+            "column-middle-c22",
+            "storage-r08-c22",
+            "storage-r09-c22",
+            "storage-r10-c22",
+            "storage-r11-c22"
+          ],
+          "localRouteReason": null,
+          "waitReason": null,
+          "blockingVehicleId": null,
+          "blockingReservationId": null,
+          "stationLeaseIds": [],
+          "conflictSessionIds": [],
+          "hasRunnableRoute": true,
+          "hasExplicitHold": false,
+          "hasStationLease": false,
+          "hasYieldConflict": false
+        }
+      ],
+      "stationContracts": {
+        "schemaVersion": "shadow-station-contracts.v1",
+        "enabled": true,
+        "stationCount": 4,
+        "invariantCounts": {
+          "demandWithoutCoverage": 0,
+          "queueReservationOverTarget": 0,
+          "physicalDepthOverTarget": 0,
+          "activeServiceWithoutDemand": 0,
+          "duplicateVehicleCommitment": 0,
+          "duplicateRouteLease": 1,
+          "kernelQueueLeaseWithoutRouteLease": 0,
+          "routeLeaseWithoutKernelQueueLease": 0,
+          "stationWaitForCycle": 0,
+          "exclusiveLeaseHasForeignOccupant": 1,
+          "drainerBlockedByPendingOwner": 0,
+          "noStopEntryWithoutEgressLease": 0,
+          "stationLeaseProgressTimeout": 0,
+          "total": 2
+        },
+        "stations": [
+          {
+            "stationId": "lift-01-inbound",
+            "kind": "inbound",
+            "demandCount": 4,
+            "readyDemandCount": 1,
+            "claimedDemandCount": 0,
+            "sourceBufferOccupancy": 4,
+            "sourceBufferCapacity": 4,
+            "targetDepth": 2,
+            "physicalDepth": 1,
+            "nearCoveredDepth": 1,
+            "farForecastDepth": 0,
+            "queueReservationCount": 1,
+            "activeServiceDepth": 0,
+            "activeServiceBlockedCount": 0,
+            "activeServiceBlockedReasonCounts": {},
+            "longestActiveServiceWaitSec": 0,
+            "activeAssignmentQueueLeaseCount": 0,
+            "tasklessStandbySoftReserveCount": 1,
+            "physicalQueueSlotLeaseCount": 1,
+            "routeLeaseCount": 1,
+            "coordinator": {
+              "mode": "shadow",
+              "decision": "match-head-reservation",
+              "targetReserveDepth": 1,
+              "queueCoverageGap": 0,
+              "activeServiceGap": 1,
+              "stationNeedsReservation": false,
+              "eligibleTasklessVehicleCount": 3,
+              "dispatchableReserveCandidateCount": 1,
+              "candidateReasonCounts": {
+                "busy-moving": 1,
+                "busy-task": 4,
+                "dispatchable-reserve": 1,
+                "no-station-route": 2
+              }
+            },
+            "serviceTransition": {
+              "mode": "shadow",
+              "headReservationVehicleId": "SH-05",
+              "headReservationSlot": 1,
+              "headDemandId": "load:source-load-00192",
+              "headDemandStatus": "ready",
+              "activeServiceVehicleId": null,
+              "activeServiceTaskId": null,
+              "readyToStartService": true,
+              "gap": "ready-reservation-not-bound"
+            },
+            "headReservationSupply": {
+              "mode": "shadow",
+              "gap": "head-reservation-present",
+              "readyDemandCount": 1,
+              "claimedDemandCount": 0,
+              "targetReserveDepth": 1,
+              "nearCoveredDepth": 1,
+              "physicalHeadReservationVehicleId": "SH-05",
+              "physicalHeadReservationSlot": 1,
+              "physicalReservationCount": 1,
+              "approachingReservationCount": 0,
+              "forecastReservationCount": 0,
+              "dispatchableReserveCandidateCount": 1,
+              "dominantCandidateReason": "busy-task",
+              "candidateBucketCounts": {
+                "dispatchable": 1,
+                "busy": 5,
+                "routeInfeasible": 2,
+                "held": 0,
+                "noTarget": 0,
+                "unavailable": 0
+              },
+              "candidateReasonCounts": {
+                "busy-moving": 1,
+                "busy-task": 4,
+                "dispatchable-reserve": 1,
+                "no-station-route": 2
+              }
+            },
+            "demands": [
+              {
+                "id": "load:source-load-00197",
+                "kind": "source-load",
+                "status": "announced",
+                "stationId": "lift-01-inbound",
+                "loadId": "source-load-00197",
+                "taskId": null,
+                "nodeId": "lift-01-inbound-buffer-02"
+              },
+              {
+                "id": "load:source-load-00198",
+                "kind": "source-load",
+                "status": "announced",
+                "stationId": "lift-01-inbound",
+                "loadId": "source-load-00198",
+                "taskId": null,
+                "nodeId": "lift-01-inbound-buffer-01"
+              },
+              {
+                "id": "load:source-load-00200",
+                "kind": "source-load",
+                "status": "announced",
+                "stationId": "lift-01-inbound",
+                "loadId": "source-load-00200",
+                "taskId": null,
+                "nodeId": "lift-01-inbound"
+              },
+              {
+                "id": "load:source-load-00192",
+                "kind": "source-load",
+                "status": "ready",
+                "stationId": "lift-01-inbound",
+                "loadId": "source-load-00192",
+                "taskId": null,
+                "nodeId": "lift-01-inbound-buffer-03"
+              }
+            ],
+            "vehicleCommitments": [
+              {
+                "vehicleId": "SH-05",
+                "kind": "queueReservation",
+                "stationId": "lift-01-inbound",
+                "phase": "parked",
+                "taskId": null,
+                "loadId": null,
+                "currentNodeId": "column-top-a-c09",
+                "targetNodeId": null,
+                "plannedGoalNodeId": "column-top-a-c09",
+                "currentQueueSlot": 1,
+                "targetQueueSlot": null,
+                "plannedQueueSlot": 1,
+                "routeLeavesTopLevel": false,
+                "waitReason": null,
+                "currentWaitSec": 0,
+                "blockingVehicleId": null,
+                "blockingReservationId": null,
+                "predecessorTaskId": null,
+                "predecessorVehicleId": null,
+                "predecessorDropoffNodeId": null,
+                "predecessorState": null,
+                "predecessorLoaded": null,
+                "predecessorWaitReason": null,
+                "predecessorCurrentNodeId": null,
+                "predecessorTargetNodeId": null,
+                "predecessorQueueSlot": null
+              }
+            ],
+            "routeLeases": [
+              {
+                "stationId": "lift-01-inbound",
+                "vehicleId": "SH-05",
+                "taskId": null,
+                "loadId": null,
+                "kind": "physicalQueueSlot",
+                "phase": "occupied",
+                "resourceKey": "station:lift-01-inbound:queue-slot:1",
+                "nodeId": "column-top-a-c09",
+                "slotIndex": 1,
+                "routeNodeIds": []
+              }
+            ],
+            "outboundVisits": []
+          },
+          {
+            "stationId": "lift-02-inbound",
+            "kind": "inbound",
+            "demandCount": 4,
+            "readyDemandCount": 0,
+            "claimedDemandCount": 1,
+            "sourceBufferOccupancy": 4,
+            "sourceBufferCapacity": 4,
+            "targetDepth": 2,
+            "physicalDepth": 0,
+            "nearCoveredDepth": 0,
+            "farForecastDepth": 1,
+            "queueReservationCount": 0,
+            "activeServiceDepth": 1,
+            "activeServiceBlockedCount": 1,
+            "activeServiceBlockedReasonCounts": {
+              "node-target-near": 1
+            },
+            "longestActiveServiceWaitSec": 0.2,
+            "activeAssignmentQueueLeaseCount": 1,
+            "tasklessStandbySoftReserveCount": 0,
+            "physicalQueueSlotLeaseCount": 0,
+            "routeLeaseCount": 6,
+            "coordinator": {
+              "mode": "shadow",
+              "decision": "no-ready-demand",
+              "targetReserveDepth": 0,
+              "queueCoverageGap": 0,
+              "activeServiceGap": 0,
+              "stationNeedsReservation": false,
+              "eligibleTasklessVehicleCount": 3,
+              "dispatchableReserveCandidateCount": 1,
+              "candidateReasonCounts": {
+                "busy-moving": 1,
+                "busy-task": 4,
+                "dispatchable-reserve": 1,
+                "no-station-route": 2
+              }
+            },
+            "serviceTransition": {
+              "mode": "shadow",
+              "headReservationVehicleId": null,
+              "headReservationSlot": null,
+              "headDemandId": "load:source-load-00239",
+              "headDemandStatus": "claimed",
+              "activeServiceVehicleId": "SH-03",
+              "activeServiceTaskId": "task-0345",
+              "readyToStartService": false,
+              "gap": "active-service-blocked"
+            },
+            "headReservationSupply": {
+              "mode": "shadow",
+              "gap": "active-service-present",
+              "readyDemandCount": 0,
+              "claimedDemandCount": 1,
+              "targetReserveDepth": 0,
+              "nearCoveredDepth": 0,
+              "physicalHeadReservationVehicleId": null,
+              "physicalHeadReservationSlot": null,
+              "physicalReservationCount": 0,
+              "approachingReservationCount": 0,
+              "forecastReservationCount": 0,
+              "dispatchableReserveCandidateCount": 1,
+              "dominantCandidateReason": "busy-task",
+              "candidateBucketCounts": {
+                "dispatchable": 1,
+                "busy": 5,
+                "routeInfeasible": 2,
+                "held": 0,
+                "noTarget": 0,
+                "unavailable": 0
+              },
+              "candidateReasonCounts": {
+                "busy-moving": 1,
+                "busy-task": 4,
+                "dispatchable-reserve": 1,
+                "no-station-route": 2
+              }
+            },
+            "demands": [
+              {
+                "id": "load:source-load-00240",
+                "kind": "source-load",
+                "status": "announced",
+                "stationId": "lift-02-inbound",
+                "loadId": "source-load-00240",
+                "taskId": null,
+                "nodeId": "lift-02-inbound-buffer-02"
+              },
+              {
+                "id": "load:source-load-00241",
+                "kind": "source-load",
+                "status": "announced",
+                "stationId": "lift-02-inbound",
+                "loadId": "source-load-00241",
+                "taskId": null,
+                "nodeId": "lift-02-inbound-buffer-01"
+              },
+              {
+                "id": "load:source-load-00242",
+                "kind": "source-load",
+                "status": "announced",
+                "stationId": "lift-02-inbound",
+                "loadId": "source-load-00242",
+                "taskId": null,
+                "nodeId": "lift-02-inbound"
+              },
+              {
+                "id": "load:source-load-00239",
+                "kind": "source-load",
+                "status": "claimed",
+                "stationId": "lift-02-inbound",
+                "loadId": "source-load-00239",
+                "taskId": "task-0345",
+                "nodeId": "lift-02-inbound-buffer-03"
+              }
+            ],
+            "vehicleCommitments": [
+              {
+                "vehicleId": "SH-03",
+                "kind": "activeInboundService",
+                "stationId": "lift-02-inbound",
+                "phase": "service",
+                "taskId": "task-0345",
+                "loadId": "source-load-00239",
+                "currentNodeId": "column-bottom-b-c22",
+                "targetNodeId": "column-bottom-a-c22",
+                "plannedGoalNodeId": "column-top-a-c23",
+                "currentQueueSlot": null,
+                "targetQueueSlot": null,
+                "plannedQueueSlot": 1,
+                "routeLeavesTopLevel": true,
+                "waitReason": "node-target-near",
+                "currentWaitSec": 0.2,
+                "blockingVehicleId": "SH-01",
+                "blockingReservationId": null,
+                "predecessorTaskId": null,
+                "predecessorVehicleId": null,
+                "predecessorDropoffNodeId": null,
+                "predecessorState": null,
+                "predecessorLoaded": null,
+                "predecessorWaitReason": null,
+                "predecessorCurrentNodeId": null,
+                "predecessorTargetNodeId": null,
+                "predecessorQueueSlot": null
+              }
+            ],
+            "routeLeases": [
+              {
+                "stationId": "lift-02-inbound",
+                "vehicleId": "SH-03",
+                "taskId": "task-0345",
+                "loadId": "source-load-00239",
+                "kind": "approachSegmentLease",
+                "phase": "approaching",
+                "resourceKey": "node:column-bottom-a-c22",
+                "nodeId": "column-bottom-a-c22",
+                "slotIndex": null,
+                "routeNodeIds": [
+                  "column-bottom-b-c22",
+                  "column-bottom-a-c22",
+                  "module-02-spine-bottom-a",
+                  "module-02-spine-middle",
+                  "module-02-spine-top-b",
+                  "module-02-spine-top-a"
+                ]
+              },
+              {
+                "stationId": "lift-02-inbound",
+                "vehicleId": "SH-03",
+                "taskId": "task-0345",
+                "loadId": "source-load-00239",
+                "kind": "approachSegmentLease",
+                "phase": "approaching",
+                "resourceKey": "node:module-02-spine-bottom-a",
+                "nodeId": "module-02-spine-bottom-a",
+                "slotIndex": null,
+                "routeNodeIds": [
+                  "column-bottom-b-c22",
+                  "column-bottom-a-c22",
+                  "module-02-spine-bottom-a",
+                  "module-02-spine-middle",
+                  "module-02-spine-top-b",
+                  "module-02-spine-top-a"
+                ]
+              },
+              {
+                "stationId": "lift-02-inbound",
+                "vehicleId": "SH-03",
+                "taskId": "task-0345",
+                "loadId": "source-load-00239",
+                "kind": "approachSegmentLease",
+                "phase": "approaching",
+                "resourceKey": "node:module-02-spine-middle",
+                "nodeId": "module-02-spine-middle",
+                "slotIndex": null,
+                "routeNodeIds": [
+                  "column-bottom-b-c22",
+                  "column-bottom-a-c22",
+                  "module-02-spine-bottom-a",
+                  "module-02-spine-middle",
+                  "module-02-spine-top-b",
+                  "module-02-spine-top-a"
+                ]
+              },
+              {
+                "stationId": "lift-02-inbound",
+                "vehicleId": "SH-03",
+                "taskId": "task-0345",
+                "loadId": "source-load-00239",
+                "kind": "approachSegmentLease",
+                "phase": "approaching",
+                "resourceKey": "node:module-02-spine-top-a",
+                "nodeId": "module-02-spine-top-a",
+                "slotIndex": null,
+                "routeNodeIds": [
+                  "column-bottom-b-c22",
+                  "column-bottom-a-c22",
+                  "module-02-spine-bottom-a",
+                  "module-02-spine-middle",
+                  "module-02-spine-top-b",
+                  "module-02-spine-top-a"
+                ]
+              },
+              {
+                "stationId": "lift-02-inbound",
+                "vehicleId": "SH-03",
+                "taskId": "task-0345",
+                "loadId": "source-load-00239",
+                "kind": "approachSegmentLease",
+                "phase": "approaching",
+                "resourceKey": "node:module-02-spine-top-b",
+                "nodeId": "module-02-spine-top-b",
+                "slotIndex": null,
+                "routeNodeIds": [
+                  "column-bottom-b-c22",
+                  "column-bottom-a-c22",
+                  "module-02-spine-bottom-a",
+                  "module-02-spine-middle",
+                  "module-02-spine-top-b",
+                  "module-02-spine-top-a"
+                ]
+              },
+              {
+                "stationId": "lift-02-inbound",
+                "vehicleId": "SH-03",
+                "taskId": "task-0345",
+                "loadId": "source-load-00239",
+                "kind": "queueSlotLease",
+                "phase": "planned",
+                "resourceKey": "station:lift-02-inbound:queue-slot:1",
+                "nodeId": "column-top-a-c23",
+                "slotIndex": 1,
+                "routeNodeIds": []
+              }
+            ],
+            "outboundVisits": []
+          },
+          {
+            "stationId": "lift-01-outbound",
+            "kind": "outbound",
+            "demandCount": 4,
+            "readyDemandCount": 4,
+            "claimedDemandCount": 0,
+            "sourceBufferOccupancy": 0,
+            "sourceBufferCapacity": 0,
+            "targetDepth": 3,
+            "physicalDepth": 0,
+            "nearCoveredDepth": 0,
+            "farForecastDepth": 0,
+            "queueReservationCount": 0,
+            "activeServiceDepth": 0,
+            "activeServiceBlockedCount": 0,
+            "activeServiceBlockedReasonCounts": {},
+            "longestActiveServiceWaitSec": 0,
+            "activeAssignmentQueueLeaseCount": 0,
+            "tasklessStandbySoftReserveCount": 0,
+            "physicalQueueSlotLeaseCount": 0,
+            "routeLeaseCount": 0,
+            "coordinator": {
+              "mode": "shadow",
+              "decision": "wait-for-reserve-candidate",
+              "targetReserveDepth": 3,
+              "queueCoverageGap": 3,
+              "activeServiceGap": 4,
+              "stationNeedsReservation": true,
+              "eligibleTasklessVehicleCount": 0,
+              "dispatchableReserveCandidateCount": 0,
+              "candidateReasonCounts": {}
+            },
+            "serviceTransition": {
+              "mode": "shadow",
+              "headReservationVehicleId": null,
+              "headReservationSlot": null,
+              "headDemandId": "outbound-task:task-0002",
+              "headDemandStatus": "ready",
+              "activeServiceVehicleId": null,
+              "activeServiceTaskId": null,
+              "readyToStartService": false,
+              "gap": "waiting-for-head-reservation"
+            },
+            "headReservationSupply": {
+              "mode": "shadow",
+              "gap": "unknown",
+              "readyDemandCount": 4,
+              "claimedDemandCount": 0,
+              "targetReserveDepth": 3,
+              "nearCoveredDepth": 0,
+              "physicalHeadReservationVehicleId": null,
+              "physicalHeadReservationSlot": null,
+              "physicalReservationCount": 0,
+              "approachingReservationCount": 0,
+              "forecastReservationCount": 0,
+              "dispatchableReserveCandidateCount": 0,
+              "dominantCandidateReason": null,
+              "candidateBucketCounts": {
+                "dispatchable": 0,
+                "busy": 0,
+                "routeInfeasible": 0,
+                "held": 0,
+                "noTarget": 0,
+                "unavailable": 0
+              },
+              "candidateReasonCounts": {}
+            },
+            "demands": [
+              {
+                "id": "outbound-task:task-0002",
+                "kind": "outbound-task",
+                "status": "ready",
+                "stationId": "lift-01-outbound",
+                "loadId": "outbound-seed-c01-r14-0001",
+                "taskId": "task-0002",
+                "nodeId": "column-bottom-b-c08"
+              },
+              {
+                "id": "outbound-task:task-0006",
+                "kind": "outbound-task",
+                "status": "ready",
+                "stationId": "lift-01-outbound",
+                "loadId": "outbound-seed-c02-r14-0015",
+                "taskId": "task-0006",
+                "nodeId": "column-bottom-b-c08"
+              },
+              {
+                "id": "outbound-task:task-0015",
+                "kind": "outbound-task",
+                "status": "ready",
+                "stationId": "lift-01-outbound",
+                "loadId": "outbound-seed-c04-r12-0043",
+                "taskId": "task-0015",
+                "nodeId": "column-bottom-b-c08"
+              },
+              {
+                "id": "outbound-task:task-0018",
+                "kind": "outbound-task",
+                "status": "ready",
+                "stationId": "lift-01-outbound",
+                "loadId": "outbound-seed-c03-r12-0030",
+                "taskId": "task-0018",
+                "nodeId": "column-bottom-b-c08"
+              }
+            ],
+            "vehicleCommitments": [],
+            "routeLeases": [],
+            "outboundVisits": []
+          },
+          {
+            "stationId": "lift-02-outbound",
+            "kind": "outbound",
+            "demandCount": 4,
+            "readyDemandCount": 2,
+            "claimedDemandCount": 2,
+            "sourceBufferOccupancy": 0,
+            "sourceBufferCapacity": 0,
+            "targetDepth": 3,
+            "physicalDepth": 0,
+            "nearCoveredDepth": 1,
+            "farForecastDepth": 0,
+            "queueReservationCount": 0,
+            "activeServiceDepth": 1,
+            "activeServiceBlockedCount": 0,
+            "activeServiceBlockedReasonCounts": {},
+            "longestActiveServiceWaitSec": 0,
+            "activeAssignmentQueueLeaseCount": 0,
+            "tasklessStandbySoftReserveCount": 0,
+            "physicalQueueSlotLeaseCount": 0,
+            "routeLeaseCount": 7,
+            "coordinator": {
+              "mode": "shadow",
+              "decision": "hold-active-service",
+              "targetReserveDepth": 3,
+              "queueCoverageGap": 2,
+              "activeServiceGap": 3,
+              "stationNeedsReservation": true,
+              "eligibleTasklessVehicleCount": 0,
+              "dispatchableReserveCandidateCount": 0,
+              "candidateReasonCounts": {}
+            },
+            "serviceTransition": {
+              "mode": "shadow",
+              "headReservationVehicleId": null,
+              "headReservationSlot": null,
+              "headDemandId": "outbound-task:task-0174",
+              "headDemandStatus": "ready",
+              "activeServiceVehicleId": "SH-02",
+              "activeServiceTaskId": "task-0343",
+              "readyToStartService": false,
+              "gap": "none"
+            },
+            "headReservationSupply": {
+              "mode": "shadow",
+              "gap": "head-reservation-present",
+              "readyDemandCount": 2,
+              "claimedDemandCount": 2,
+              "targetReserveDepth": 3,
+              "nearCoveredDepth": 1,
+              "physicalHeadReservationVehicleId": null,
+              "physicalHeadReservationSlot": null,
+              "physicalReservationCount": 0,
+              "approachingReservationCount": 0,
+              "forecastReservationCount": 0,
+              "dispatchableReserveCandidateCount": 0,
+              "dominantCandidateReason": null,
+              "candidateBucketCounts": {
+                "dispatchable": 0,
+                "busy": 0,
+                "routeInfeasible": 0,
+                "held": 0,
+                "noTarget": 0,
+                "unavailable": 0
+              },
+              "candidateReasonCounts": {}
+            },
+            "demands": [
+              {
+                "id": "outbound-task:task-0174",
+                "kind": "outbound-task",
+                "status": "ready",
+                "stationId": "lift-02-outbound",
+                "loadId": "outbound-seed-c19-r14-0153",
+                "taskId": "task-0174",
+                "nodeId": "column-bottom-b-c22"
+              },
+              {
+                "id": "outbound-task:task-0187",
+                "kind": "outbound-task",
+                "status": "ready",
+                "stationId": "lift-02-outbound",
+                "loadId": "outbound-seed-c20-r14-0167",
+                "taskId": "task-0187",
+                "nodeId": "column-bottom-b-c22"
+              },
+              {
+                "id": "outbound-task:task-0343",
+                "kind": "outbound-task",
+                "status": "claimed",
+                "stationId": "lift-02-outbound",
+                "loadId": "source-load-00230",
+                "taskId": "task-0343",
+                "nodeId": "column-bottom-b-c22"
+              },
+              {
+                "id": "outbound-task:task-0344",
+                "kind": "outbound-task",
+                "status": "claimed",
+                "stationId": "lift-02-outbound",
+                "loadId": "source-load-00220",
+                "taskId": "task-0344",
+                "nodeId": "column-bottom-b-c22"
+              }
+            ],
+            "vehicleCommitments": [
+              {
+                "vehicleId": "SH-02",
+                "kind": "activeOutboundService",
+                "stationId": "lift-02-outbound",
+                "phase": "service",
+                "taskId": "task-0343",
+                "loadId": "source-load-00230",
+                "currentNodeId": "column-bottom-b-c21",
+                "targetNodeId": "module-02-spine-bottom-b",
+                "plannedGoalNodeId": null,
+                "currentQueueSlot": null,
+                "targetQueueSlot": null,
+                "plannedQueueSlot": null,
+                "routeLeavesTopLevel": true,
+                "waitReason": null,
+                "currentWaitSec": 0,
+                "blockingVehicleId": null,
+                "blockingReservationId": null,
+                "predecessorTaskId": null,
+                "predecessorVehicleId": null,
+                "predecessorDropoffNodeId": null,
+                "predecessorState": null,
+                "predecessorLoaded": null,
+                "predecessorWaitReason": null,
+                "predecessorCurrentNodeId": null,
+                "predecessorTargetNodeId": null,
+                "predecessorQueueSlot": null
+              }
+            ],
+            "routeLeases": [
+              {
+                "stationId": "lift-02-outbound",
+                "vehicleId": "SH-02",
+                "taskId": "task-0343",
+                "loadId": "source-load-00230",
+                "kind": "protectedThroatLease",
+                "phase": "occupied",
+                "resourceKey": "station:lift-02-outbound:dock-bottom-corridor:column-bottom-b-c21",
+                "nodeId": "column-bottom-b-c21",
+                "slotIndex": null,
+                "routeNodeIds": [
+                  "column-bottom-b-c21"
+                ]
+              },
+              {
+                "stationId": "lift-02-outbound",
+                "vehicleId": "SH-03",
+                "taskId": "task-0345",
+                "loadId": "source-load-00239",
+                "kind": "protectedThroatLease",
+                "phase": "occupied",
+                "resourceKey": "station:lift-02-outbound:dock-workcell:column-bottom-b-c22",
+                "nodeId": "column-bottom-b-c22",
+                "slotIndex": null,
+                "routeNodeIds": [
+                  "column-bottom-b-c22"
+                ]
+              },
+              {
+                "stationId": "lift-02-outbound",
+                "vehicleId": "SH-02",
+                "taskId": "task-0343",
+                "loadId": "source-load-00230",
+                "kind": "queueSlotLease",
+                "phase": "planned",
+                "resourceKey": "station:lift-02-outbound:outbound-slot:0",
+                "nodeId": "column-bottom-a-c21",
+                "slotIndex": 0,
+                "routeNodeIds": []
+              },
+              {
+                "stationId": "lift-02-outbound",
+                "vehicleId": "SH-02",
+                "taskId": "task-0343",
+                "loadId": "source-load-00230",
+                "kind": "protectedThroatLease",
+                "phase": "approaching",
+                "resourceKey": "station:lift-02-outbound:protected-throat:column-bottom-b-c22",
+                "nodeId": "column-bottom-b-c22",
+                "slotIndex": null,
+                "routeNodeIds": [
+                  "column-bottom-b-c22"
+                ]
+              },
+              {
+                "stationId": "lift-02-outbound",
+                "vehicleId": "SH-03",
+                "taskId": "task-0345",
+                "loadId": "source-load-00239",
+                "kind": "protectedThroatLease",
+                "phase": "occupied",
+                "resourceKey": "station:lift-02-outbound:protected-throat:column-bottom-b-c22",
+                "nodeId": "column-bottom-b-c22",
+                "slotIndex": null,
+                "routeNodeIds": [
+                  "column-bottom-b-c22"
+                ]
+              },
+              {
+                "stationId": "lift-02-outbound",
+                "vehicleId": "SH-06",
+                "taskId": null,
+                "loadId": null,
+                "kind": "protectedThroatLease",
+                "phase": "approaching",
+                "resourceKey": "station:lift-02-outbound:protected-throat:column-bottom-b-c22",
+                "nodeId": "column-bottom-b-c22",
+                "slotIndex": null,
+                "routeNodeIds": [
+                  "column-bottom-b-c23",
+                  "column-bottom-b-c22"
+                ]
+              },
+              {
+                "stationId": "lift-02-outbound",
+                "vehicleId": "SH-06",
+                "taskId": null,
+                "loadId": null,
+                "kind": "protectedThroatLease",
+                "phase": "occupied",
+                "resourceKey": "station:lift-02-outbound:protected-throat:column-bottom-b-c23",
+                "nodeId": "column-bottom-b-c23",
+                "slotIndex": null,
+                "routeNodeIds": [
+                  "column-bottom-b-c23",
+                  "column-bottom-b-c22"
+                ]
+              }
+            ],
+            "outboundVisits": [
+              {
+                "id": "outbound-visit:task-0343",
+                "stationId": "lift-02-outbound",
+                "taskId": "task-0343",
+                "vehicleId": "SH-02",
+                "dropoffNodeId": "column-bottom-b-c22",
+                "passNodeId": "column-bottom-a-c21",
+                "fifoSeq": 101,
+                "phase": "servicing",
+                "currentSlotIndex": null,
+                "targetSlotIndex": null,
+                "issuedAtSec": 3078.2,
+                "lastProgressAtSec": 3101.6,
+                "currentNodeId": "column-bottom-b-c21",
+                "targetNodeId": "module-02-spine-bottom-b",
+                "plannedGoalNodeId": null,
+                "waitReason": null
+              },
+              {
+                "id": "outbound-visit:task-0344",
+                "stationId": "lift-02-outbound",
+                "taskId": "task-0344",
+                "vehicleId": "SH-07",
+                "dropoffNodeId": "column-bottom-b-c22",
+                "passNodeId": "column-bottom-a-c21",
+                "fifoSeq": 104,
+                "phase": "requested",
+                "currentSlotIndex": null,
+                "targetSlotIndex": null,
+                "issuedAtSec": 3085.4,
+                "lastProgressAtSec": 3085.4,
+                "currentNodeId": "module-boundary-01-spine-bottom-a",
+                "targetNodeId": "column-bottom-a-c15",
+                "plannedGoalNodeId": "storage-r12-c15",
+                "waitReason": null
+              }
+            ]
+          }
+        ],
+        "inboundDemandLedger": {
+          "schemaVersion": "shadow-inbound-demand-ledger.v1",
+          "entryCount": 9,
+          "statusCounts": {
+            "announced": 6,
+            "ready": 1,
+            "claimed": 1,
+            "completed": 1
+          },
+          "stationSummaries": [
+            {
+              "stationId": "lift-01-inbound",
+              "total": 4,
+              "statusCounts": {
+                "announced": 3,
+                "ready": 1,
+                "claimed": 0,
+                "completed": 0
+              }
+            },
+            {
+              "stationId": "lift-02-inbound",
+              "total": 5,
+              "statusCounts": {
+                "announced": 3,
+                "ready": 0,
+                "claimed": 1,
+                "completed": 1
+              }
+            }
+          ],
+          "entries": [
+            {
+              "id": "load:source-load-00197",
+              "stationId": "lift-01-inbound",
+              "status": "announced",
+              "source": "source-buffer",
+              "loadId": "source-load-00197",
+              "taskId": null,
+              "nodeId": "lift-01-inbound-buffer-02",
+              "loadState": "waiting",
+              "taskState": null,
+              "vehicleId": null
+            },
+            {
+              "id": "load:source-load-00198",
+              "stationId": "lift-01-inbound",
+              "status": "announced",
+              "source": "source-buffer",
+              "loadId": "source-load-00198",
+              "taskId": null,
+              "nodeId": "lift-01-inbound-buffer-01",
+              "loadState": "waiting",
+              "taskState": null,
+              "vehicleId": null
+            },
+            {
+              "id": "load:source-load-00200",
+              "stationId": "lift-01-inbound",
+              "status": "announced",
+              "source": "source-buffer",
+              "loadId": "source-load-00200",
+              "taskId": null,
+              "nodeId": "lift-01-inbound",
+              "loadState": "waiting",
+              "taskState": null,
+              "vehicleId": null
+            },
+            {
+              "id": "load:source-load-00192",
+              "stationId": "lift-01-inbound",
+              "status": "ready",
+              "source": "source-buffer",
+              "loadId": "source-load-00192",
+              "taskId": null,
+              "nodeId": "lift-01-inbound-buffer-03",
+              "loadState": "waiting",
+              "taskState": null,
+              "vehicleId": null
+            },
+            {
+              "id": "load:source-load-00240",
+              "stationId": "lift-02-inbound",
+              "status": "announced",
+              "source": "source-buffer",
+              "loadId": "source-load-00240",
+              "taskId": null,
+              "nodeId": "lift-02-inbound-buffer-02",
+              "loadState": "waiting",
+              "taskState": null,
+              "vehicleId": null
+            },
+            {
+              "id": "load:source-load-00241",
+              "stationId": "lift-02-inbound",
+              "status": "announced",
+              "source": "source-buffer",
+              "loadId": "source-load-00241",
+              "taskId": null,
+              "nodeId": "lift-02-inbound-buffer-01",
+              "loadState": "waiting",
+              "taskState": null,
+              "vehicleId": null
+            },
+            {
+              "id": "load:source-load-00242",
+              "stationId": "lift-02-inbound",
+              "status": "announced",
+              "source": "source-buffer",
+              "loadId": "source-load-00242",
+              "taskId": null,
+              "nodeId": "lift-02-inbound",
+              "loadState": "waiting",
+              "taskState": null,
+              "vehicleId": null
+            },
+            {
+              "id": "load:source-load-00239",
+              "stationId": "lift-02-inbound",
+              "status": "claimed",
+              "source": "source-and-task",
+              "loadId": "source-load-00239",
+              "taskId": "task-0345",
+              "nodeId": "lift-02-inbound-buffer-03",
+              "loadState": "waiting",
+              "taskState": "assigned",
+              "vehicleId": "SH-03"
+            },
+            {
+              "id": "task:task-0342",
+              "stationId": "lift-02-inbound",
+              "status": "completed",
+              "source": "task",
+              "loadId": "source-load-00238",
+              "taskId": "task-0342",
+              "nodeId": "column-top-a-c22",
+              "loadState": "carried",
+              "taskState": "in-progress",
+              "vehicleId": "SH-08"
+            }
+          ]
+        },
+        "stationKernel": {
+          "schemaVersion": "station-kernel-shadow.v1",
+          "mode": "shadow",
+          "demandTokenCount": 10,
+          "leaseCount": 3,
+          "demandStatusCounts": {
+            "announced": 6,
+            "ready": 1,
+            "claimed": 1,
+            "servicing": 1,
+            "picked": 1,
+            "cancelled": 0
+          },
+          "leasePhaseCounts": {
+            "approaching": 0,
+            "occupied": 1,
+            "serviceGranted": 2,
+            "servicing": 0,
+            "revoking": 0
+          },
+          "stationSummaries": [
+            {
+              "stationId": "lift-01-inbound",
+              "sourceBufferOccupancy": 4,
+              "activeDemandTokenCount": 4,
+              "readyDemandTokenCount": 1,
+              "claimedDemandTokenCount": 0,
+              "servicingDemandTokenCount": 0,
+              "arrivalIntentTokenCount": 4,
+              "inboundTaskDemandTokenCount": 0,
+              "reserveDemandTokenCount": 4,
+              "reserveTargetDepth": 2,
+              "legacyReserveTargetDepth": 2,
+              "reserveCoverageDepth": 1,
+              "physicalReserveCoverageDepth": 1,
+              "reserveCoverageGap": 1,
+              "leaseCount": 1,
+              "sourceOnlyReadyShadowCount": 1
+            },
+            {
+              "stationId": "lift-02-inbound",
+              "sourceBufferOccupancy": 4,
+              "activeDemandTokenCount": 4,
+              "readyDemandTokenCount": 0,
+              "claimedDemandTokenCount": 1,
+              "servicingDemandTokenCount": 0,
+              "arrivalIntentTokenCount": 3,
+              "inboundTaskDemandTokenCount": 2,
+              "reserveDemandTokenCount": 4,
+              "reserveTargetDepth": 2,
+              "legacyReserveTargetDepth": 2,
+              "reserveCoverageDepth": 1,
+              "physicalReserveCoverageDepth": 0,
+              "reserveCoverageGap": 1,
+              "leaseCount": 1,
+              "sourceOnlyReadyShadowCount": 0
+            }
+          ],
+          "demandTokens": [
+            {
+              "id": "station-arrival:source-load-00192",
+              "stationId": "lift-01-inbound",
+              "fifoSeq": 183,
+              "source": "arrival-intent",
+              "taskId": null,
+              "loadId": "source-load-00192",
+              "readyAtSec": 2171.2,
+              "state": "ready"
+            },
+            {
+              "id": "station-arrival:source-load-00197",
+              "stationId": "lift-01-inbound",
+              "fifoSeq": 186,
+              "source": "arrival-intent",
+              "taskId": null,
+              "loadId": "source-load-00197",
+              "readyAtSec": 2226.4,
+              "state": "announced"
+            },
+            {
+              "id": "station-arrival:source-load-00198",
+              "stationId": "lift-01-inbound",
+              "fifoSeq": 187,
+              "source": "arrival-intent",
+              "taskId": null,
+              "loadId": "source-load-00198",
+              "readyAtSec": 2234.8,
+              "state": "announced"
+            },
+            {
+              "id": "station-arrival:source-load-00200",
+              "stationId": "lift-01-inbound",
+              "fifoSeq": 189,
+              "source": "arrival-intent",
+              "taskId": null,
+              "loadId": "source-load-00200",
+              "readyAtSec": 2255.8,
+              "state": "announced"
+            },
+            {
+              "id": "station-arrival:source-load-00240",
+              "stationId": "lift-02-inbound",
+              "fifoSeq": 283,
+              "source": "arrival-intent",
+              "taskId": null,
+              "loadId": "source-load-00240",
+              "readyAtSec": 3060.6,
+              "state": "announced"
+            },
+            {
+              "id": "station-arrival:source-load-00241",
+              "stationId": "lift-02-inbound",
+              "fifoSeq": 284,
+              "source": "arrival-intent",
+              "taskId": null,
+              "loadId": "source-load-00241",
+              "readyAtSec": 3072.4,
+              "state": "announced"
+            },
+            {
+              "id": "station-demand:task-0342",
+              "stationId": "lift-02-inbound",
+              "fifoSeq": 285,
+              "source": "inbound-task",
+              "taskId": "task-0342",
+              "loadId": "source-load-00238",
+              "readyAtSec": 3074.6,
+              "state": "picked"
+            },
+            {
+              "id": "station-arrival:source-load-00242",
+              "stationId": "lift-02-inbound",
+              "fifoSeq": 286,
+              "source": "arrival-intent",
+              "taskId": null,
+              "loadId": "source-load-00242",
+              "readyAtSec": 3092.6,
+              "state": "announced"
+            },
+            {
+              "id": "station-demand:task-0345",
+              "stationId": "lift-02-inbound",
+              "fifoSeq": 287,
+              "source": "inbound-task",
+              "taskId": "task-0345",
+              "loadId": "source-load-00239",
+              "readyAtSec": 3095.4,
+              "state": "claimed"
+            },
+            {
+              "id": "station-demand:task-0343",
+              "stationId": "lift-02-outbound",
+              "fifoSeq": 101,
+              "source": "outbound-task",
+              "taskId": "task-0343",
+              "loadId": "source-load-00230",
+              "readyAtSec": 3078.2,
+              "state": "servicing"
+            }
+          ],
+          "queueLeases": [
+            {
+              "id": "station-lease:lift-01-inbound:SH-05:queue",
+              "stationId": "lift-01-inbound",
+              "vehicleId": "SH-05",
+              "admissionCauseId": "inbound-queue-reserve-before-outbound-assignment",
+              "serviceDemandId": "station-arrival:source-load-00192",
+              "targetKind": "queue-slot",
+              "targetNodeId": "column-top-a-c09",
+              "slotIndex": 1,
+              "phase": "occupied",
+              "issuedAtSec": 2762,
+              "expiresAtSec": 3165,
+              "lastProgressAtSec": 2831.8,
+              "boundedRouteNodeIds": [
+                "column-top-a-c09"
+              ],
+              "fifoSeq": 473
+            },
+            {
+              "id": "station-lease:lift-02-inbound:SH-03:service",
+              "stationId": "lift-02-inbound",
+              "vehicleId": "SH-03",
+              "admissionCauseId": "task-0345",
+              "serviceDemandId": "station-demand:task-0345",
+              "targetKind": "queue-slot",
+              "targetNodeId": "column-top-a-c23",
+              "slotIndex": 1,
+              "phase": "service-granted",
+              "issuedAtSec": 3095.4,
+              "expiresAtSec": 3165,
+              "lastProgressAtSec": 3095.4,
+              "boundedRouteNodeIds": [
+                "column-bottom-b-c22",
+                "column-bottom-a-c22",
+                "module-02-spine-bottom-a",
+                "module-02-spine-middle",
+                "module-02-spine-top-b",
+                "module-02-spine-top-a",
+                "column-top-a-c22",
+                "column-top-a-c23"
+              ],
+              "fifoSeq": 505
+            },
+            {
+              "id": "station-lease:lift-02-outbound:SH-02:service-envelope",
+              "stationId": "lift-02-outbound",
+              "vehicleId": "SH-02",
+              "admissionCauseId": "task-0343",
+              "serviceDemandId": "station-demand:task-0343",
+              "targetKind": "service-envelope",
+              "targetNodeId": "column-bottom-b-c22",
+              "slotIndex": null,
+              "phase": "service-granted",
+              "issuedAtSec": 3101.6,
+              "expiresAtSec": 3165,
+              "lastProgressAtSec": 3101.6,
+              "boundedRouteNodeIds": [
+                "column-bottom-a-c21",
+                "column-bottom-b-c21",
+                "module-02-spine-bottom-b",
+                "column-bottom-b-c22"
+              ],
+              "fifoSeq": 506
+            }
+          ]
+        },
+        "stationPairCoordinators": [
+          {
+            "pairId": "lift-01",
+            "mode": "shadow",
+            "inboundStationId": "lift-01-inbound",
+            "outboundStationId": "lift-01-outbound",
+            "inboundQueueSlotNodeIds": [
+              "column-top-a-c09",
+              "column-top-a-c10",
+              "column-top-a-c11"
+            ],
+            "outboundQueueSlotNodeIds": [
+              "column-bottom-a-c07",
+              "column-bottom-a-c08",
+              "column-bottom-a-c09"
+            ],
+            "protectedThroatNodeIds": [
+              "column-bottom-b-c05",
+              "column-bottom-b-c04",
+              "column-bottom-b-c03",
+              "column-bottom-b-c06",
+              "lift-01-outbound-queue-01-entry-access",
+              "lift-01-outbound-queue-01-service-exit",
+              "column-bottom-b-c08",
+              "column-bottom-b-c09",
+              "column-bottom-b-c10",
+              "column-bottom-b-c11"
+            ],
+            "inboundDemandCount": 4,
+            "outboundDemandCount": 4,
+            "queueReservationCount": 1,
+            "physicalSlotOccupancyCount": 1,
+            "activeServiceCount": 0,
+            "routeLeaseCount": 1
+          },
+          {
+            "pairId": "lift-02",
+            "mode": "shadow",
+            "inboundStationId": "lift-02-inbound",
+            "outboundStationId": "lift-02-outbound",
+            "inboundQueueSlotNodeIds": [
+              "column-top-a-c23",
+              "column-top-a-c24",
+              "column-top-a-c25"
+            ],
+            "outboundQueueSlotNodeIds": [
+              "column-bottom-a-c21",
+              "column-bottom-a-c20",
+              "column-bottom-a-c19"
+            ],
+            "protectedThroatNodeIds": [
+              "column-bottom-b-c19",
+              "column-bottom-b-c18",
+              "column-bottom-b-c17",
+              "column-bottom-b-c20",
+              "lift-02-outbound-queue-01-entry-access",
+              "lift-02-outbound-queue-01-service-exit",
+              "column-bottom-b-c22",
+              "column-bottom-b-c23",
+              "column-bottom-b-c24",
+              "column-bottom-b-c25"
+            ],
+            "inboundDemandCount": 4,
+            "outboundDemandCount": 4,
+            "queueReservationCount": 0,
+            "physicalSlotOccupancyCount": 0,
+            "activeServiceCount": 2,
+            "routeLeaseCount": 13
+          }
+        ],
+        "violations": [
+          {
+            "code": "station-exclusive-lease-has-foreign-occupant",
+            "severity": "critical",
+            "stationId": "lift-02-outbound",
+            "vehicleId": "SH-02",
+            "detail": "lift-02-outbound active pass outbound-station-pass:103 for SH-02 includes column-bottom-b-c22, but SH-03 occupies it."
+          },
+          {
+            "code": "station-duplicate-route-lease",
+            "severity": "watch",
+            "stationId": "lift-02-outbound",
+            "vehicleId": "SH-02",
+            "detail": "lift-02-outbound has 3 station route lease owners on station:lift-02-outbound:protected-throat:column-bottom-b-c22: SH-02, SH-03, SH-06."
+          }
+        ]
+      }
+    },
+    "minVehicleSeparationM": 1.25,
+    "maxObservedSpeedMps": 2,
+    "physicalViolationCount": 0
+  },
+  "vehicles": [
+    {
+      "id": "SH-01",
+      "state": "returning",
+      "loaded": false,
+      "taskId": null,
+      "currentNodeId": "column-bottom-a-c23",
+      "targetNodeId": "column-bottom-a-c22",
+      "currentEdgeId": "column-bottom-a-c22-column-bottom-a-c23",
+      "routeIndex": 0,
+      "routeNodeIds": [
+        "column-bottom-a-c23",
+        "column-bottom-a-c22",
+        "module-02-spine-bottom-a",
+        "column-bottom-a-c21",
+        "column-bottom-a-c20",
+        "column-bottom-a-c19",
+        "column-bottom-a-c18",
+        "column-bottom-a-c17",
+        "column-bottom-a-c16",
+        "column-bottom-a-c15",
+        "module-boundary-01-spine-bottom-a",
+        "column-bottom-a-c14",
+        "column-bottom-a-c13",
+        "column-bottom-a-c12",
+        "column-bottom-a-c11",
+        "column-bottom-a-c10",
+        "column-bottom-a-c09",
+        "column-bottom-a-c08",
+        "column-bottom-b-c08",
+        "parking-03"
+      ],
+      "plannedRouteNodeIds": [
+        "column-bottom-a-c23",
+        "column-bottom-a-c22",
+        "module-02-spine-bottom-a",
+        "column-bottom-a-c21",
+        "column-bottom-a-c20",
+        "column-bottom-a-c19",
+        "column-bottom-a-c18",
+        "column-bottom-a-c17",
+        "column-bottom-a-c16",
+        "column-bottom-a-c15",
+        "module-boundary-01-spine-bottom-a",
+        "column-bottom-a-c14",
+        "column-bottom-a-c13",
+        "column-bottom-a-c12",
+        "column-bottom-a-c11",
+        "column-bottom-a-c10",
+        "column-bottom-a-c09",
+        "column-bottom-a-c08",
+        "column-bottom-b-c08",
+        "parking-03"
+      ],
+      "plannedGoalNodeId": "parking-03",
+      "localRouteNodeIds": [],
+      "localRouteReason": null,
+      "waitReason": null,
+      "waitingSinceSec": null,
+      "currentWaitSec": 0,
+      "blockingVehicleId": null,
+      "blockedTimeSec": 377.361932,
+      "idleTimeSec": 134,
+      "busyTimeSec": 2776,
+      "legRemainingM": 0.85,
+      "phaseRemainingSec": 0,
+      "x": 33.35,
+      "z": 20,
+      "speedMps": 2
+    },
+    {
+      "id": "SH-02",
+      "state": "loaded-moving",
+      "loaded": true,
+      "taskId": "task-0343",
+      "currentNodeId": "column-bottom-b-c21",
+      "targetNodeId": "module-02-spine-bottom-b",
+      "currentEdgeId": "column-bottom-b-c21-module-02-spine-bottom-b",
+      "routeIndex": 0,
+      "routeNodeIds": [
+        "column-bottom-b-c21",
+        "module-02-spine-bottom-b",
+        "column-bottom-b-c22"
+      ],
+      "plannedRouteNodeIds": [
+        "column-bottom-b-c21",
+        "module-02-spine-bottom-b",
+        "column-bottom-b-c22"
+      ],
+      "plannedGoalNodeId": "column-bottom-b-c22",
+      "localRouteNodeIds": [],
+      "localRouteReason": null,
+      "waitReason": null,
+      "waitingSinceSec": null,
+      "currentWaitSec": 0,
+      "blockingVehicleId": null,
+      "blockedTimeSec": 471.995028,
+      "idleTimeSec": 371.4,
+      "busyTimeSec": 2650.6,
+      "legRemainingM": 1.25,
+      "phaseRemainingSec": 0,
+      "x": 30,
+      "z": 21.6,
+      "speedMps": 0
+    },
+    {
+      "id": "SH-03",
+      "state": "waiting-blocked",
+      "loaded": false,
+      "taskId": "task-0345",
+      "currentNodeId": "column-bottom-b-c22",
+      "targetNodeId": "column-bottom-a-c22",
+      "currentEdgeId": null,
+      "routeIndex": 0,
+      "routeNodeIds": [
+        "column-bottom-b-c22",
+        "column-bottom-a-c22",
+        "module-02-spine-bottom-a",
+        "module-02-spine-middle",
+        "module-02-spine-top-b",
+        "module-02-spine-top-a",
+        "column-top-a-c22",
+        "column-top-a-c23"
+      ],
+      "plannedRouteNodeIds": [
+        "column-bottom-b-c22",
+        "column-bottom-a-c22",
+        "module-02-spine-bottom-a",
+        "module-02-spine-middle",
+        "module-02-spine-top-b",
+        "module-02-spine-top-a",
+        "column-top-a-c22",
+        "column-top-a-c23"
+      ],
+      "plannedGoalNodeId": "column-top-a-c23",
+      "localRouteNodeIds": [],
+      "localRouteReason": null,
+      "waitReason": "node-target-near",
+      "waitingSinceSec": 3104.8,
+      "currentWaitSec": 0.2,
+      "blockingVehicleId": "SH-01",
+      "blockedTimeSec": 402.073027,
+      "idleTimeSec": 182.2,
+      "busyTimeSec": 2832.6,
+      "legRemainingM": 0,
+      "phaseRemainingSec": 0,
+      "x": 32.5,
+      "z": 21.6,
+      "speedMps": 0
+    },
+    {
+      "id": "SH-04",
+      "state": "idle",
+      "loaded": false,
+      "taskId": null,
+      "currentNodeId": "column-bottom-b-c27",
+      "targetNodeId": null,
+      "currentEdgeId": null,
+      "routeIndex": 0,
+      "routeNodeIds": [
+        "column-bottom-b-c27"
+      ],
+      "plannedRouteNodeIds": [],
+      "plannedGoalNodeId": null,
+      "localRouteNodeIds": [],
+      "localRouteReason": null,
+      "waitReason": null,
+      "waitingSinceSec": null,
+      "currentWaitSec": 0,
+      "blockingVehicleId": null,
+      "blockedTimeSec": 448.362323,
+      "idleTimeSec": 178.4,
+      "busyTimeSec": 2705.4,
+      "legRemainingM": 0,
+      "phaseRemainingSec": 0,
+      "x": 38.75,
+      "z": 21.6,
+      "speedMps": 0
+    },
+    {
+      "id": "SH-05",
+      "state": "idle",
+      "loaded": false,
+      "taskId": null,
+      "currentNodeId": "column-top-a-c09",
+      "targetNodeId": null,
+      "currentEdgeId": null,
+      "routeIndex": 0,
+      "routeNodeIds": [
+        "column-top-a-c09"
+      ],
+      "plannedRouteNodeIds": [
+        "column-top-a-c09"
+      ],
+      "plannedGoalNodeId": "column-top-a-c09",
+      "localRouteNodeIds": [],
+      "localRouteReason": "inbound-queue-standby",
+      "waitReason": null,
+      "waitingSinceSec": null,
+      "currentWaitSec": 0,
+      "blockingVehicleId": null,
+      "blockedTimeSec": 440.392268,
+      "idleTimeSec": 419.6,
+      "busyTimeSec": 2571.8,
+      "legRemainingM": 0,
+      "phaseRemainingSec": 0,
+      "x": 13.75,
+      "z": -0.8,
+      "speedMps": 0
+    },
+    {
+      "id": "SH-06",
+      "state": "waiting-blocked",
+      "loaded": false,
+      "taskId": null,
+      "currentNodeId": "column-bottom-b-c23",
+      "targetNodeId": "column-bottom-b-c22",
+      "currentEdgeId": null,
+      "routeIndex": 0,
+      "routeNodeIds": [
+        "column-bottom-b-c23",
+        "column-bottom-b-c22",
+        "parking-07"
+      ],
+      "plannedRouteNodeIds": [
+        "column-bottom-b-c23",
+        "column-bottom-b-c22",
+        "parking-07"
+      ],
+      "plannedGoalNodeId": "parking-07",
+      "localRouteNodeIds": [],
+      "localRouteReason": null,
+      "waitReason": "node-occupied",
+      "waitingSinceSec": 3096.6,
+      "currentWaitSec": 8.4,
+      "blockingVehicleId": "SH-03",
+      "blockedTimeSec": 312.673466,
+      "idleTimeSec": 572.8,
+      "busyTimeSec": 2490.8,
+      "legRemainingM": 0,
+      "phaseRemainingSec": 0,
+      "x": 33.75,
+      "z": 21.6,
+      "speedMps": 0
+    },
+    {
+      "id": "SH-07",
+      "state": "moving-to-pickup",
+      "loaded": false,
+      "taskId": "task-0344",
+      "currentNodeId": "module-boundary-01-spine-bottom-a",
+      "targetNodeId": "column-bottom-a-c15",
+      "currentEdgeId": "module-boundary-01-spine-bottom-a-column-bottom-a-c15",
+      "routeIndex": 0,
+      "routeNodeIds": [
+        "module-boundary-01-spine-bottom-a",
+        "column-bottom-a-c15",
+        "storage-r14-c15",
+        "storage-r13-c15",
+        "storage-r12-c15"
+      ],
+      "plannedRouteNodeIds": [
+        "module-boundary-01-spine-bottom-a",
+        "column-bottom-a-c15",
+        "storage-r14-c15",
+        "storage-r13-c15",
+        "storage-r12-c15"
+      ],
+      "plannedGoalNodeId": "storage-r12-c15",
+      "localRouteNodeIds": [],
+      "localRouteReason": null,
+      "waitReason": null,
+      "waitingSinceSec": null,
+      "currentWaitSec": 0,
+      "blockingVehicleId": null,
+      "blockedTimeSec": 315.277081,
+      "idleTimeSec": 126.2,
+      "busyTimeSec": 2889.8,
+      "legRemainingM": 0.300681,
+      "phaseRemainingSec": 0,
+      "x": 22.199,
+      "z": 20,
+      "speedMps": 0.849
+    },
+    {
+      "id": "SH-08",
+      "state": "loaded-moving",
+      "loaded": true,
+      "taskId": "task-0342",
+      "currentNodeId": "module-02-spine-middle",
+      "targetNodeId": "column-middle-c22",
+      "currentEdgeId": "module-02-spine-middle-column-middle-c22",
+      "routeIndex": 0,
+      "routeNodeIds": [
+        "module-02-spine-middle",
+        "column-middle-c22",
+        "storage-r08-c22",
+        "storage-r09-c22",
+        "storage-r10-c22",
+        "storage-r11-c22"
+      ],
+      "plannedRouteNodeIds": [
+        "module-02-spine-middle",
+        "column-middle-c22",
+        "storage-r08-c22",
+        "storage-r09-c22",
+        "storage-r10-c22",
+        "storage-r11-c22"
+      ],
+      "plannedGoalNodeId": "storage-r11-c22",
+      "localRouteNodeIds": [],
+      "localRouteReason": null,
+      "waitReason": null,
+      "waitingSinceSec": null,
+      "currentWaitSec": 0,
+      "blockingVehicleId": null,
+      "blockedTimeSec": 370.788419,
+      "idleTimeSec": 236.8,
+      "busyTimeSec": 2734.4,
+      "legRemainingM": 1.25,
+      "phaseRemainingSec": 0,
+      "x": 31.25,
+      "z": 10.4,
+      "speedMps": 0
+    }
+  ],
+  "tasks": [
+    {
+      "id": "task-0002",
+      "kind": "outbound",
+      "state": "queued",
+      "pickupNodeId": "storage-r14-c01",
+      "dropoffNodeId": "column-bottom-b-c08",
+      "vehicleId": null,
+      "waitReason": "route-unavailable"
+    },
+    {
+      "id": "task-0006",
+      "kind": "outbound",
+      "state": "queued",
+      "pickupNodeId": "storage-r14-c02",
+      "dropoffNodeId": "column-bottom-b-c08",
+      "vehicleId": null,
+      "waitReason": "route-unavailable"
+    },
+    {
+      "id": "task-0015",
+      "kind": "outbound",
+      "state": "queued",
+      "pickupNodeId": "storage-r12-c04",
+      "dropoffNodeId": "column-bottom-b-c08",
+      "vehicleId": null,
+      "waitReason": "route-unavailable"
+    },
+    {
+      "id": "task-0018",
+      "kind": "outbound",
+      "state": "queued",
+      "pickupNodeId": "storage-r12-c03",
+      "dropoffNodeId": "column-bottom-b-c08",
+      "vehicleId": null,
+      "waitReason": "route-unavailable"
+    },
+    {
+      "id": "task-0174",
+      "kind": "outbound",
+      "state": "queued",
+      "pickupNodeId": "storage-r14-c19",
+      "dropoffNodeId": "column-bottom-b-c22",
+      "vehicleId": null,
+      "waitReason": "route-unavailable"
+    },
+    {
+      "id": "task-0187",
+      "kind": "outbound",
+      "state": "queued",
+      "pickupNodeId": "storage-r14-c20",
+      "dropoffNodeId": "column-bottom-b-c22",
+      "vehicleId": null,
+      "waitReason": "route-unavailable"
+    },
+    {
+      "id": "task-0342",
+      "kind": "inbound",
+      "state": "in-progress",
+      "pickupNodeId": "column-top-a-c22",
+      "dropoffNodeId": "storage-r11-c22",
+      "vehicleId": "SH-08",
+      "waitReason": null
+    },
+    {
+      "id": "task-0343",
+      "kind": "outbound",
+      "state": "in-progress",
+      "pickupNodeId": "storage-r07-c17",
+      "dropoffNodeId": "column-bottom-b-c22",
+      "vehicleId": "SH-02",
+      "waitReason": null
+    },
+    {
+      "id": "task-0344",
+      "kind": "outbound",
+      "state": "assigned",
+      "pickupNodeId": "storage-r12-c15",
+      "dropoffNodeId": "column-bottom-b-c22",
+      "vehicleId": "SH-07",
+      "waitReason": null
+    },
+    {
+      "id": "task-0345",
+      "kind": "inbound",
+      "state": "assigned",
+      "pickupNodeId": "column-top-a-c22",
+      "dropoffNodeId": "storage-r10-c23",
+      "vehicleId": "SH-03",
+      "waitReason": null
+    }
+  ]
+}
