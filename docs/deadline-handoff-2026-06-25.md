@@ -10,7 +10,7 @@ If the 3D tick simulator is not fully fixed and verified by that time, stop feat
 - Local path: `/Users/lukegogogo/codex projects/four-way-shuttle-sim-2.0`
 - Branch: `codex/traffic-v2-flow-debug`
 - Remote tracking branch: `origin/codex/traffic-v2-flow-debug`
-- Current HEAD at this checkpoint: `a0e3193 docs: save round14 ChatGPT Pro review`
+- Current HEAD before the current uncommitted fix batch: `8a86470 checkpoint: document shuttle traffic v2 diagnostics`
 - This file was started at local time: `2026-06-25 00:16 PDT`
 
 Known dirty tracked files at this checkpoint:
@@ -366,6 +366,187 @@ Deadlock watch detail:
   - Later-hour `intent-without-route-or-hold` still appears for outbound tasks around `column-bottom-b-c08`, so the earlier planned-route handoff fix does not cover every route gap.
   - Long-wait-with-progress windows remain.
   - 24h stability is not proven.
+
+### C01/C02 Adjacent Faceoff Recovery WIP
+
+Started after the 6h gate above. The next concrete failure to isolate was the
+counted deadlock around `11185s` in
+`output/review/physical-6h-after-shadow-intent-cleanup.json`.
+
+Root failure pattern:
+
+- `SH-02`: loaded inbound, at `column-middle-c02`, wants `column-middle-c01`.
+- `SH-08`: empty outbound, at `column-middle-c01`, wants `column-middle-c02`.
+- Both are in the yellow-line middle aisle and block each other as an adjacent node swap.
+- A third vehicle (`SH-05`) can clear the escape side, but the deadlock detector counted the pair before the active conflict arbitration had timed out.
+
+Code changes currently uncommitted:
+
+- `packages/shuttle-sim-core/src/index.ts`
+  - Added loaded-inbound vs empty-adjacent faceoff handling in top-lift swap recovery.
+  - If the empty vehicle has no legal side escape, the loaded inbound first tries to retarget to another reachable inbound dropoff.
+  - If retargeting is not possible, the code proactively clears an unloaded third-party blocker from the loaded inbound escape side.
+  - `deadlockCandidateHasActiveRecovery` now treats an unexpired candidate-pair conflict session as active recovery, instead of confirming a deadlock while arbitration is still inside its timeout window.
+  - It still allows later deadlock confirmation once the conflict session times out and the same cycle persists.
+- `packages/shuttle-sim-core/src/index.test.ts`
+  - Added focused regression coverage for loaded-inbound retarget, third-party middle-aisle yielder recognition, unexpired pair conflict sessions, and proactive escape-blocker clearance.
+
+Focused verification already passed:
+
+```bash
+./node_modules/.bin/vitest run packages/shuttle-sim-core/src/index.test.ts \
+  -t "(deadlock recovery|third-party middle-aisle yielder|third-party escape blocker|pair conflict session has not timed out)" \
+  --maxWorkers=1
+
+pnpm -r --if-present typecheck
+```
+
+Intermediate runs that did **not** solve the 6h failure:
+
+| Run | Duration | Result |
+| --- | ---: | --- |
+| `output/review/physical-6h-after-c01-deadlock-retarget.json` | 21600s | Completed, PPH `441.333`, physical violations `0`, but deadlocks still `1`. |
+| `output/review/physical-12000s-after-third-party-active-recovery.json` | 12000s | Completed, PPH `436.5`, critical anomalies `0`, but deadlocks still `1`. |
+| `output/review/physical-12000s-after-proactive-c01-escape-clearance.json` | 12000s | Completed, PPH `435.9`, critical anomalies `0`, but deadlocks still `1`. |
+
+Latest target gate after adding the conflict-session recovery window:
+
+- File: `output/review/physical-12000s-after-conflict-session-recovery-window.json`
+- Checkpoints: `output/review/physical-12000s-after-conflict-session-recovery-window-checkpoints/`
+- Final simulated time: `12000s`
+- Run status: `completed`
+- Stop reason: `reached-duration`
+- Inbound PPH: `228.3`
+- Outbound PPH: `207.6`
+- Total PPH: `435.9`
+- Physical violations: `0`
+- Deadlocks: `0`
+- Livelocks: `0`
+- Station contract critical violations: `0`
+- Minimum vehicle separation: `1.325473m`
+- AMR anomalies: `2`
+- Critical AMR anomalies: `0`
+- Shadow samples: `2400`
+- Shadow samples with violations: `27`
+- Remaining shadow top violations:
+  - `planned-route-overlap`: `21`
+  - `lift-fifo-inversion`: `5`
+  - `intent-without-route-or-hold`: `1`
+
+Interpretation:
+
+- This is the first target gate where the known `11185s` c01/c02 faceoff is not counted as a confirmed deadlock.
+- The fix appears to correct a too-early deadlock classification, not magically remove every inefficiency.
+- This is still **not** enough to call the simulator solved. It only proves the targeted 12000s window.
+- Next gate must be a 6h run with the same stop conditions. If that passes, run the 24h audit. If either fails, document the exact failing window and do not hide it.
+
+### 6h Gate After Conflict-Session Recovery Window
+
+Run started after the 12000s target gate above.
+
+- File: `output/review/physical-6h-after-conflict-session-recovery-window.json`
+- Checkpoints: `output/review/physical-6h-after-conflict-session-recovery-window-checkpoints/`
+- Intended duration: `21600s`
+- Actual final simulated time: `16200s`
+- Run status: `stopped-critical`
+- Stop reason: `critical-evidence`
+- Inbound PPH at stop: `218.222`
+- Outbound PPH at stop: `204.667`
+- Total PPH at stop: `422.889`
+- Physical violations: `0`
+- Deadlocks: `0`
+- Livelocks: `0`
+- Station contract critical violations: `2`
+- AMR anomalies: `15`
+- Critical AMR anomalies: `9`
+
+What improved:
+
+- The previous `11185s` c01/c02 adjacent faceoff did not recur as a confirmed deadlock.
+- The run passed that known failure window and reached `16200s`.
+
+What failed:
+
+- At `16200s`, several AMRs were stationary for a full 10-minute window with zero completed tasks.
+- Critical vehicles:
+  - `SH-01`: `column-bottom-a-c21`, waits `node-occupied`, blocker `SH-05`.
+  - `SH-02`: `column-bottom-b-c19`, waits `outbound-station-await-transition`.
+  - `SH-05`: `module-02-spine-bottom-a`, state `loaded-moving`, target `column-bottom-a-c22`, but `currentEdgeId=null`, `legRemainingM=0`, `waitReason=null`, and zero movement.
+  - `SH-07`: `column-bottom-b-c21`, waits `node-occupied`, blocker `SH-08`.
+  - `SH-08`: `module-02-spine-bottom-b`, waits `node-occupied`, blocker `SH-05`.
+- `lift-02-outbound` had critical station contract violations:
+  - `station-exclusive-lease-has-foreign-occupant`: active pass for `SH-07` includes `module-02-spine-bottom-b`, occupied by `SH-08`.
+  - `station-lease-progress-timeout`: active pass for `SH-07` exceeded `expectedCompleteBySec=15122.8`.
+
+Interpretation:
+
+- The c01/c02 deadlock classifier/recovery fix helped one specific failure class.
+- The deeper unresolved issue is the station/throat ownership contract around `lift-02-outbound` and `lift-02-inbound`.
+- A vehicle can end up visually/physically stationary with `state=loaded-moving` and no wait reason. That is a state-machine classification bug and makes downstream blockers hard to clear.
+- The next fix should focus on outbound station pass ownership, active/requested visit ordering, and bottom throat drain/clearance progress, not on general pathfinding.
+
+### Failed Attempt Reverted: Fully Authoritative Outbound Station Goal
+
+Tried change:
+
+- For loaded outbound tasks controlled by an outbound station, make `outboundStationAuthoritativeGoalNodeId()` the only source of truth.
+- If the station coordinator returned `null`, the vehicle would hold at `outbound-station-await-transition` instead of falling back to ordinary dropoff routing.
+
+Validation:
+
+- File: `output/review/physical-16500s-after-station-controlled-outbound-goal.json`
+- Intended duration: `16500s`
+- Actual final simulated time: `3000s`
+- Run status: `stopped-critical`
+- Inbound PPH at stop: `192`
+- Outbound PPH at stop: `205.2`
+- Total PPH at stop: `397.2`
+- Critical anomalies: `8`
+
+Why it was rejected:
+
+- It failed much earlier than the previous version.
+- `SH-02` and `SH-05` became stationary at inbound top queue nodes with `inbound-column-predecessor-wait` / `inbound-lift-fifo-wait`.
+- `SH-04` and `SH-08` entered a node-occupied stationary pair around `column-middle-c28` / `storage-r08-c28`.
+- The attempted rule was too broad: it made station coordinator absence of a goal behave like a hard stop in early flow, not just at the failing bottom outbound throat.
+
+Action taken:
+
+- The attempted code and test were reverted.
+- The failing output file is kept as evidence so this path is not retried blindly.
+
+### Failed Attempt Reverted: Honor Outbound Clearance Local Route As Goal
+
+Tried change:
+
+- Let `agentGoalNodeId()` honor `localRouteReason = outbound-station-await-transition-clearance` the same way it already honors `bottom-lane-meter-clearance`.
+- Rationale: in the `16200s` checkpoint, `SH-05` appeared to be repeatedly installed onto a local clearance route from `module-02-spine-bottom-a` to `column-bottom-a-c22`, then losing that route before movement.
+
+Validation:
+
+- File: `output/review/physical-16500s-after-outbound-clearance-goal.json`
+- Intended duration: `16500s`
+- Actual final simulated time: `3600s`
+- Run status: `stopped-critical`
+- Inbound PPH at stop: `222`
+- Outbound PPH at stop: `139`
+- Total PPH at stop: `361`
+- Critical anomalies: `11`
+
+Why it was rejected:
+
+- It failed earlier than the previous best usable version.
+- At `3600s`, six vehicles had stationary/no-task risk windows, including:
+  - `SH-01` blocked by `SH-03` at `column-bottom-a-c18`.
+  - `SH-02` in `local-yield-hold` at `storage-r14-c21`.
+  - `SH-03` stationary at `column-bottom-a-c19` with no wait reason.
+  - `SH-07` and `SH-08` in `outbound-station-await-transition`.
+- The local clearance route was probably a symptom, not a safe root-level fix. Letting it execute changed early queue dynamics and made the system worse.
+
+Action taken:
+
+- The attempted code and test changes were reverted.
+- Keep the output file as evidence. Do not retry this narrow local-route goal change without a broader station-throat ownership model.
 
 ## If The Deadline Arrives Before Full Fix
 
