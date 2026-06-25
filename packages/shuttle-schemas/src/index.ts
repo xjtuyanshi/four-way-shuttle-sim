@@ -990,6 +990,11 @@ export const ShadowStationContractInvariantCountsSchema = z.object({
   duplicateRouteLease: z.number().int().nonnegative().default(0),
   kernelQueueLeaseWithoutRouteLease: z.number().int().nonnegative().default(0),
   routeLeaseWithoutKernelQueueLease: z.number().int().nonnegative().default(0),
+  stationWaitForCycle: z.number().int().nonnegative().default(0),
+  exclusiveLeaseHasForeignOccupant: z.number().int().nonnegative().default(0),
+  drainerBlockedByPendingOwner: z.number().int().nonnegative().default(0),
+  noStopEntryWithoutEgressLease: z.number().int().nonnegative().default(0),
+  stationLeaseProgressTimeout: z.number().int().nonnegative().default(0),
   total: z.number().int().nonnegative().default(0)
 });
 

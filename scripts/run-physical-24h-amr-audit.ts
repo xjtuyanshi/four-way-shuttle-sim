@@ -230,11 +230,11 @@ const storageSelectionPolicy = enumArg('--storage-selection-policy', ['sequentia
 const collisionAvoidance = enumArg('--collision-avoidance', ['on', 'off'] as const, 'on');
 const outputPath = resolve(stringArg('--out') ?? 'output/review/physical-24h-amr-audit.json');
 const checkpointDir = resolve(stringArg('--checkpoint-dir') ?? outputPath.replace(/\.json$/i, '-checkpoints'));
-const runChangeNote = stringArg('--change-note') ?? 'unspecified change';
+const runChangeNote = stringArg('--change-note') ?? stringArg('--change-label') ?? 'unspecified change';
 const runReason = stringArg('--run-reason');
 const runProblemsObserved = stringListArg('--problems-observed');
 const runProblemsSolved = stringListArg('--problems-solved');
-const runDecision = stringArg('--run-decision');
+const runDecision = stringArg('--run-decision') ?? stringArg('--decision');
 const rollingLogPath = resolve(stringArg('--run-log') ?? 'output/review/sim-run-rolling-log.json');
 const rollingLogHtmlPath = resolve(stringArg('--run-log-html') ?? 'output/review/sim-run-rolling-log.html');
 const stopOnCritical = process.argv.includes('--stop-on-critical');
@@ -398,7 +398,29 @@ if (hourlyPph.at(-1)?.timeSec !== finalState.simTimeSec && finalState.simTimeSec
 recordCheckpoint(finalState, finalState.simTimeSec);
 
 const finalWaitingByVehicleId = waitingMapForState(finalState);
-const stationQueueLeaseTransitions = summarizeStationQueueLeaseTransitions(sim.getEventLog());
+const finalEventLog = sim.getEventLog();
+const stationQueueLeaseTransitions = summarizeStationQueueLeaseTransitions(finalEventLog);
+const noStopRecoveryDiagnostics = summarizeNoStopRecoveryDiagnostics(finalEventLog);
+const noStopBottomAYieldDiagnostics = summarizeNoStopBottomAYieldDiagnostics(finalEventLog);
+const noStopWaitCycleDecisionDiagnostics = summarizeNoStopWaitCycleDecisionDiagnostics(finalEventLog);
+const finalStationContractCriticalCount = finalState.traffic.shadowLedger.stationContracts.violations
+  .filter((violation) => violation.severity === 'critical').length;
+const criticalAnomalyCount = anomalies.filter((anomaly) => anomaly.severity === 'critical').length + finalStationContractCriticalCount;
+const reachedRequestedDuration = finalState.simTimeSec >= durationSec - 1e-9;
+const runStatus = criticalAnomalyCount > 0
+    ? 'stopped-critical'
+    : finalState.status === 'running' && reachedRequestedDuration
+      ? 'completed'
+      : finalState.status;
+const stopReason = runStatus === 'completed'
+  ? 'reached-duration'
+  : runStatus === 'stopped-critical'
+    ? 'critical-evidence'
+    : finalState.status === 'error'
+      ? 'simulation-error'
+      : finalState.status !== 'running'
+        ? `simulation-${finalState.status}`
+        : 'interrupted-before-duration';
 const result = {
   schemaVersion: 'shuttle.amrAudit24h.v1',
   scenarioId: scenario.id,
@@ -409,6 +431,8 @@ const result = {
   finalSimTimeSec: finalState.simTimeSec,
   finalTickIndex: sim.getClock().tickIndex,
   status: finalState.status,
+  runStatus,
+  stopReason,
   wallClockMs: Date.now() - startedAtMs,
   assumptions: {
     shuttleCount,
@@ -446,11 +470,15 @@ const result = {
     livelocks: finalState.kpis.livelockCount,
     physicalViolations: finalState.traffic.physicalViolationCount,
     minVehicleSeparationM: finalState.traffic.minVehicleSeparationM,
+    stationContractCriticalViolations: finalStationContractCriticalCount,
     physicalViolationFirstSec,
     physicalViolationSessions
   },
   shadowLedger: summarizeShadowLedger(finalState),
   stationQueueLeaseTransitions,
+  noStopRecoveryDiagnostics,
+  noStopBottomAYieldDiagnostics,
+  noStopWaitCycleDecisionDiagnostics,
   hourlyPph,
   tenMinuteWindows,
   amrSummary: summarizeVehicles(),
@@ -468,6 +496,7 @@ const result = {
     stuckDefinition: 'A vehicle is flagged when it moves less than stationaryPathM during a 10-minute window while not idle for most of that window.',
     smallAreaLoopDefinition: 'A vehicle is flagged when it travels at least smallLoopPathM within a bounding box no wider than smallLoopBboxM and has a high path/net-displacement ratio.',
     pingPongDefinition: 'A vehicle is flagged when it transitions repeatedly among a very small number of nodes.',
+    longWaitDefinition: 'Long blocked windows are split into long-wait-no-task-window when the AMR completes zero tasks, and long-wait-with-progress-window when it still completes work during that window.',
     precision: `Vehicle movement is audited every ${auditEverySec}s and rolled up into ${tenMinuteSec}s windows.`
   }
 };
@@ -486,6 +515,8 @@ console.log(JSON.stringify({
   outputPath,
   wallClockMs: result.wallClockMs,
   finalSimTimeSec: result.finalSimTimeSec,
+  runStatus: result.runStatus,
+  stopReason: result.stopReason,
   totalPph: result.pph.total,
   inboundPph: result.pph.inbound,
   outboundPph: result.pph.outbound,
@@ -501,21 +532,29 @@ function appendRollingRunLog(result: any): void {
   mkdirSync(dirname(rollingLogPath), { recursive: true });
   mkdirSync(dirname(rollingLogHtmlPath), { recursive: true });
   const existing = readRollingRunLog();
+  const narrative = buildRunNarrative(runChangeNote, result);
   const entry = {
     id: `${new Date().toISOString()}-${outputPath.split('/').pop() ?? 'audit'}`,
     createdAt: new Date().toISOString(),
     changeNote: runChangeNote,
+    changeLabel: runChangeNote,
     outputPath,
     checkpointDir,
     durationSec: result.durationSec,
     finalSimTimeSec: result.finalSimTimeSec,
+    runStatus: result.runStatus,
+    stopReason: result.stopReason,
     wallClockMs: result.wallClockMs,
     scenarioHash: result.scenarioHash,
     commitSha: result.commitSha,
     assumptions: result.assumptions,
     pph: result.pph,
     shadowLedgerSummary: summarizeRunShadowLedger(result.shadowLedger),
-    narrative: buildRunNarrative(runChangeNote, result),
+    narrative,
+    runReason: narrative.runReason,
+    problemsObserved: narrative.problemsObserved,
+    problemsSolved: narrative.problemsSolved,
+    decision: narrative.decision,
     hourlyPph: result.hourlyPph ?? [],
     tenMinuteWindows: result.tenMinuteWindows ?? [],
     amrSummary: result.amrSummary ?? [],
@@ -547,7 +586,10 @@ function rerenderRollingRunLog(): void {
     schemaVersion: 'sim-run-rolling-log.v2',
     updatedAt: new Date().toISOString(),
     htmlPath: rollingLogHtmlPath,
-    runs: existing.runs
+    runs: existing.runs.map((run: any) => ({
+      ...run,
+      narrative: inferRunNarrative(run)
+    }))
   };
   writeFileSync(rollingLogPath, `${JSON.stringify(updated, null, 2)}\n`);
   writeFileSync(rollingLogHtmlPath, renderRollingRunLogHtml(updated));
@@ -784,6 +826,28 @@ function inferRunNarrative(run: any): RunNarrative {
     };
   }
 
+  if (
+    normalizedChange.includes('station-transition-boundary-fix') ||
+    normalizedChange.includes('station transition boundary fix')
+  ) {
+    const hasCritical = anomalies.some((anomaly: any) => anomaly.severity === 'critical');
+    return {
+      runReason: '验证 outbound station transition boundary：只有真正的 yellow-grid pass point、合法 physical head slot、module-spine 近场头位或已在 service envelope 内的车，才能被 station-owned coordinator 接管。',
+      problemsObserved: [
+        anomalySummary,
+        waitingSummary,
+        pphSummary,
+        ...shadowLedgerProblems
+      ],
+      problemsSolved: anomalies.length === 0 && waiting.length === 0 && !hasCritical
+        ? ['本窗口没有复现远端 approach 被误判为 station throat、orphan interior 被错误恢复 active transition，且结束无等待车辆。']
+        : ['本轮验证了 station transition 边界，但仍保留 anomaly / final waiting / shadow watch 作为后续问题证据。'],
+      decision: anomalies.length === 0 && !hasCritical && waiting.length === 0
+        ? '保留为 station 接管边界候选修复；下一步扩大到 1h，并继续跟踪 shadow watch planned-route-overlap / orphaned-yield-hold。'
+        : '不要扩大到 24h；先回查本轮 anomaly、final waiting 或 shadow contract violation。'
+    };
+  }
+
   if (normalizedChange.includes('baseline after spine endpoint yield')) {
     return {
       runReason: '冻结 storage-prefix reachability 修复前的 physical-tick baseline，后续每次重跑都能和同一个失败模式对比。',
@@ -856,6 +920,45 @@ function inferRunNarrative(run: any): RunNarrative {
         : anomalies.length > 0
         ? '不要直接扩大到 1h/24h；先回查 watch anomaly，确认是否需要修 route-unavailable 或放宽 anomaly 判定。'
         : '本窗口通过；继续扩大到下一档 physical tick gate。'
+    };
+  }
+
+  if (
+    normalizedChange.includes('station-wait-cycle-egress') ||
+    normalizedChange.includes('incumbent egress') ||
+    normalizedChange.includes('incumbent/drainer egress')
+  ) {
+    const criticalAnomalyCount = anomalies.filter((anomaly: any) => anomaly.severity === 'critical').length;
+    const stationContractProblem = shadowLedgerProblems.find((problem) => problem.includes('Station contract'));
+    const crossedKnownFailurePoint = Number(run.finalSimTimeSec ?? 0) > 2537;
+    const completedOneHour = Number(run.finalSimTimeSec ?? 0) >= 3600;
+    const noFinalWaiting = waiting.length === 0;
+    const noCriticalAnomaly = criticalAnomalyCount === 0;
+    const solvedKnownCycle = crossedKnownFailurePoint && !stationContractProblem;
+    return {
+      runReason: '验证 outbound station wait-for cycle 修复：pending outbound owner 不能阻止已经占据冲突节点的 incumbent/drainer 排空。',
+      problemsObserved: [
+        anomalySummary,
+        waitingSummary,
+        pphSummary,
+        ...(stationContractProblem ? [stationContractProblem] : []),
+        ...(completedOneHour && Number(pph.total ?? 0) < 430
+          ? ['虽然稳定性改善，但 1h total PPH 仍低于早期窗口，后续需要分析 outbound-station visit capacity 和 vehicle-unavailable。']
+          : [])
+      ],
+      problemsSolved: solvedKnownCycle
+        ? [
+          '已越过前两轮 2537s station wait-for cycle 早停点。',
+          noCriticalAnomaly && noFinalWaiting
+            ? '本轮没有 critical AMR stuck，结束时也没有 waiting/blocking 车辆。'
+            : '已解决已知 station cycle，但仍有 critical/final-wait 证据需要保留。'
+        ]
+        : [
+          '本轮仍未解决已知 station wait-for cycle；保留 checkpoint，不能扩大测试窗口。'
+        ],
+      decision: solvedKnownCycle && completedOneHour && noCriticalAnomaly && noFinalWaiting
+        ? '保留这一版作为 station-cycle 修复候选；下一步进入 2h gate，并专门分析 1h PPH 下滑和 top blocked reasons。'
+        : '不要扩大窗口；先修复剩余 station invariant、critical anomaly 或 final waiting。'
     };
   }
 
@@ -1084,6 +1187,8 @@ function renderRollingRunLogHtml(log: { updatedAt: string; runs: any[] }): strin
       '解决的问题 / 验证的问题': shortText((run.narrative?.problemsSolved || []).join(' '), 140),
       '下一步决定': shortText(run.externalReview?.decision || run.narrative?.decision, 140),
       '仿真时长': seconds(run.finalSimTimeSec),
+      'Run Status': run.runStatus || run.status || 'unknown',
+      'Stop Reason': run.stopReason || '',
       '实际耗时': seconds((run.wallClockMs || 0) / 1000),
       In: fmt(run.pph?.inbound, 1),
       Out: fmt(run.pph?.outbound, 1),
@@ -1094,7 +1199,7 @@ function renderRollingRunLogHtml(log: { updatedAt: string; runs: any[] }): strin
     const overview = '<article class="run">' +
       '<h2>实验记录总览</h2>' +
       '<p class="subtle">每次运行都会追加到这里，新结果在最上方。总览表直接记录为什么重新跑、遇到的问题、解决/验证的问题和下一步决定，避免只看 PPH 数字却不知道为什么重跑。</p>' +
-      renderTable(['#','记录时间','本轮做了什么','为什么重新跑','遇到的问题','解决的问题 / 验证的问题','下一步决定','仿真时长','实际耗时','In','Out','Total','Anomalies','输出文件'], overviewRows) +
+      renderTable(['#','记录时间','本轮做了什么','为什么重新跑','遇到的问题','解决的问题 / 验证的问题','下一步决定','仿真时长','Run Status','Stop Reason','实际耗时','In','Out','Total','Anomalies','输出文件'], overviewRows) +
       '</article>';
     const renderRunCard = (run, index, extraClass = '') => {
       const anomalies = run.anomalies || [];
@@ -1111,7 +1216,7 @@ function renderRollingRunLogHtml(log: { updatedAt: string; runs: any[] }): strin
       }));
       return '<article class="run ' + esc(extraClass) + '">' +
         '<h2>' + (index === 0 ? '最新一轮：' : '') + esc(run.changeNote || 'unspecified change') + '</h2>' +
-        '<p class="subtle">' + esc(run.createdAt) + ' · sim ' + seconds(run.finalSimTimeSec) + ' · wall ' + seconds((run.wallClockMs || 0) / 1000) + ' · <code>' + esc(run.outputPath) + '</code></p>' +
+        '<p class="subtle">' + esc(run.createdAt) + ' · sim ' + seconds(run.finalSimTimeSec) + ' · ' + esc(run.runStatus || run.status || 'unknown') + (run.stopReason ? ' / ' + esc(run.stopReason) : '') + ' · wall ' + seconds((run.wallClockMs || 0) / 1000) + ' · <code>' + esc(run.outputPath) + '</code></p>' +
         renderNarrative(run) +
         '<div class="grid">' +
           '<div class="metric"><span>Total PPH</span><strong>' + fmt(run.pph?.total, 1) + '</strong></div>' +
@@ -1553,7 +1658,11 @@ function finalizeTenMinuteWindow(state: ShuttleSimState, startSec: number, endSe
     tenMinuteWindows.push(row);
     updateAggregate(row);
     for (const code of row.riskCodes) {
-      const severity = row.riskLevel === 'critical' ? 'critical' : code === 'small-area-loop' || code === 'node-ping-pong' ? 'warn' : 'watch';
+      const severity = row.riskLevel === 'critical'
+        ? 'critical'
+        : row.riskLevel === 'warn'
+          ? 'warn'
+          : 'watch';
       addAnomaly(
         row.endSec,
         row.windowIndex,
@@ -1568,6 +1677,9 @@ function finalizeTenMinuteWindow(state: ShuttleSimState, startSec: number, endSe
           loopinessIndex: row.loopinessIndex,
           blockedSec: row.blockedSec,
           idleSec: row.idleSec,
+          completedTasks: row.completedTasks,
+          completedInboundTasks: row.completedInboundTasks,
+          completedOutboundTasks: row.completedOutboundTasks,
           uniqueNodeCount: row.uniqueNodeCount,
           nodeTransitions: row.nodeTransitions,
           endWaitReason: row.endWaitReason,
@@ -1618,14 +1730,15 @@ function createVehicleWindowRow(
     stationary ? 'stationary-active-window' : null,
     smallAreaLoop ? 'small-area-loop' : null,
     nodePingPong ? 'node-ping-pong' : null,
-    longWait ? 'long-wait-window' : null,
+    longWait && completedTasks.length === 0 ? 'long-wait-no-task-window' : null,
+    longWait && completedTasks.length > 0 ? 'long-wait-with-progress-window' : null,
     zeroTaskMoving ? 'zero-task-moving-window' : null
   ].filter((code): code is string => code !== null);
   const riskLevel: VehicleWindowRow['riskLevel'] = assignedWithoutRoute || stationary
     ? 'critical'
-    : smallAreaLoop || nodePingPong || longWait
+    : smallAreaLoop || nodePingPong || (longWait && completedTasks.length === 0)
       ? 'warn'
-      : bboxDiagonalM <= thresholds.confinedRunBboxM && accumulator.pathLengthM > 1
+    : (longWait && completedTasks.length > 0) || (bboxDiagonalM <= thresholds.confinedRunBboxM && accumulator.pathLengthM > 1)
         ? 'watch'
         : 'ok';
   return {
@@ -2010,6 +2123,155 @@ function summarizeStationQueueLeaseTransitions(eventLog: EventLogEntry[]): Stati
   };
 }
 
+function summarizeNoStopRecoveryDiagnostics(eventLog: EventLogEntry[]) {
+  const events = eventLog.filter((event) => event.eventType === 'no-stop-recovery-diagnostic');
+  const byStage = new Map<string, number>();
+  const priorRecoveries = new Map<string, number>();
+  const exactSccSignatures = new Map<string, number>();
+  let breakerDispatches = 0;
+  let breakerReturnedTrue = 0;
+  let breakerReturnedFalse = 0;
+  for (const event of events) {
+    const stage = event.reason ?? 'unknown';
+    byStage.set(stage, (byStage.get(stage) ?? 0) + 1);
+    const priorRecovery = stringDetail(event, 'priorRecoveryThatConsumedTick');
+    if (priorRecovery) {
+      priorRecoveries.set(priorRecovery, (priorRecoveries.get(priorRecovery) ?? 0) + 1);
+    }
+    const exactScc = stringDetail(event, 'exactSccVehicleIds');
+    if (exactScc) {
+      exactSccSignatures.set(exactScc, (exactSccSignatures.get(exactScc) ?? 0) + 1);
+    }
+    if (booleanDetail(event, 'breakerInvoked')) {
+      breakerDispatches += 1;
+      if (booleanDetail(event, 'breakerReturned') === true) {
+        breakerReturnedTrue += 1;
+      } else if (booleanDetail(event, 'breakerReturned') === false) {
+        breakerReturnedFalse += 1;
+      }
+    }
+  }
+  const samples = events
+    .filter((event) =>
+      Boolean(stringDetail(event, 'exactSccVehicleIds')) ||
+      Boolean(stringDetail(event, 'priorRecoveryThatConsumedTick')) ||
+      event.reason?.includes('dispatch')
+    )
+    .slice(-80)
+    .map((event) => ({
+      timeSec: event.timeSec,
+      tickIndex: numberDetail(event, 'tickIndex'),
+      stage: event.reason,
+      candidates: stringDetail(event, 'candidateVehicleIds'),
+      exactScc: stringDetail(event, 'exactSccVehicleIds'),
+      upstreamWaiters: stringDetail(event, 'upstreamWaiterIds'),
+      waitForEdges: stringDetail(event, 'waitForEdges'),
+      recoveryName: stringDetail(event, 'recoveryName'),
+      priorRecoveryThatConsumedTick: stringDetail(event, 'priorRecoveryThatConsumedTick'),
+      breakerInvoked: booleanDetail(event, 'breakerInvoked'),
+      breakerReturned: booleanDetail(event, 'breakerReturned')
+    }));
+
+  return {
+    totalEvents: events.length,
+    firstSec: events[0]?.timeSec ?? null,
+    lastSec: events.at(-1)?.timeSec ?? null,
+    byStage: rankedCountRows(byStage, 20, 'stage'),
+    priorRecoveries: rankedCountRows(priorRecoveries, 20, 'recoveryName'),
+    exactSccSignatures: rankedCountRows(exactSccSignatures, 20, 'vehicleIds'),
+    breaker: {
+      dispatches: breakerDispatches,
+      returnedTrue: breakerReturnedTrue,
+      returnedFalse: breakerReturnedFalse
+    },
+    samples
+  };
+}
+
+function summarizeNoStopBottomAYieldDiagnostics(eventLog: EventLogEntry[]) {
+  const events = eventLog.filter((event) => event.eventType === 'no-stop-bottom-a-yield-diagnostic');
+  const byStage = new Map<string, number>();
+  const byVehicle = new Map<string, number>();
+  const blockerPairs = new Map<string, number>();
+  for (const event of events) {
+    const stage = event.reason ?? 'unknown';
+    byStage.set(stage, (byStage.get(stage) ?? 0) + 1);
+    byVehicle.set(event.vehicleId ?? 'unknown', (byVehicle.get(event.vehicleId ?? 'unknown') ?? 0) + 1);
+    const blockerVehicleId = stringDetail(event, 'blockerVehicleId') ?? 'unknown';
+    const pairKey = `${event.vehicleId ?? 'unknown'}->${blockerVehicleId}`;
+    blockerPairs.set(pairKey, (blockerPairs.get(pairKey) ?? 0) + 1);
+  }
+  return {
+    totalEvents: events.length,
+    firstSec: events[0]?.timeSec ?? null,
+    lastSec: events.at(-1)?.timeSec ?? null,
+    byStage: rankedCountRows(byStage, 20, 'stage'),
+    byVehicle: rankedCountRows(byVehicle, 20, 'vehicleId'),
+    blockerPairs: rankedCountRows(blockerPairs, 20, 'pair'),
+    samples: events.slice(-80).map((event) => ({
+      timeSec: event.timeSec,
+      vehicleId: event.vehicleId,
+      stage: event.reason,
+      fromNodeId: event.fromNodeId,
+      toNodeId: event.toNodeId,
+      blockerVehicleId: stringDetail(event, 'blockerVehicleId'),
+      blockerCurrentNodeId: stringDetail(event, 'blockerCurrentNodeId'),
+      blockerTargetNodeId: stringDetail(event, 'blockerTargetNodeId'),
+      blockerLoaded: booleanDetail(event, 'blockerLoaded'),
+      guardFailures: stringDetail(event, 'guardFailures'),
+      route: stringDetail(event, 'route'),
+      installRejectReason: stringDetail(event, 'installRejectReason'),
+      forbiddenNodeIds: stringDetail(event, 'forbiddenNodeIds'),
+      candidates: stringDetail(event, 'candidates')
+    }))
+  };
+}
+
+function summarizeNoStopWaitCycleDecisionDiagnostics(eventLog: EventLogEntry[]) {
+  const events = eventLog.filter((event) => event.eventType === 'no-stop-wait-cycle-decision');
+  const byStage = new Map<string, number>();
+  const byVehicle = new Map<string, number>();
+  const blockerPairs = new Map<string, number>();
+  for (const event of events) {
+    const stage = event.reason ?? 'unknown';
+    byStage.set(stage, (byStage.get(stage) ?? 0) + 1);
+    byVehicle.set(event.vehicleId ?? 'none', (byVehicle.get(event.vehicleId ?? 'none') ?? 0) + 1);
+    const blockerVehicleId = stringDetail(event, 'blockerVehicleId') ?? 'none';
+    const pairKey = `${event.vehicleId ?? 'none'}->${blockerVehicleId}`;
+    blockerPairs.set(pairKey, (blockerPairs.get(pairKey) ?? 0) + 1);
+  }
+  return {
+    totalEvents: events.length,
+    firstSec: events[0]?.timeSec ?? null,
+    lastSec: events.at(-1)?.timeSec ?? null,
+    byStage: rankedCountRows(byStage, 24, 'stage'),
+    byVehicle: rankedCountRows(byVehicle, 20, 'vehicleId'),
+    blockerPairs: rankedCountRows(blockerPairs, 24, 'pair'),
+    samples: events.slice(-120).map((event) => ({
+      timeSec: event.timeSec,
+      vehicleId: event.vehicleId,
+      stage: event.reason,
+      fromNodeId: event.fromNodeId,
+      toNodeId: event.toNodeId,
+      candidateVehicleIds: stringDetail(event, 'candidateVehicleIds'),
+      noStopCandidateVehicleIds: stringDetail(event, 'noStopCandidateVehicleIds'),
+      orderedCandidates: stringDetail(event, 'orderedCandidates'),
+      vehicleLoaded: booleanDetail(event, 'vehicleLoaded'),
+      vehicleWaitReason: stringDetail(event, 'vehicleWaitReason'),
+      vehicleBlockingVehicleId: stringDetail(event, 'vehicleBlockingVehicleId'),
+      blockerVehicleId: stringDetail(event, 'blockerVehicleId'),
+      blockerLoaded: booleanDetail(event, 'blockerLoaded'),
+      blockerCurrentNodeId: stringDetail(event, 'blockerCurrentNodeId'),
+      blockerTargetNodeId: stringDetail(event, 'blockerTargetNodeId'),
+      blockerWaitReason: stringDetail(event, 'blockerWaitReason'),
+      blockerBlockingVehicleId: stringDetail(event, 'blockerBlockingVehicleId'),
+      sessionId: stringDetail(event, 'sessionId'),
+      sessionWinnerVehicleId: stringDetail(event, 'sessionWinnerVehicleId'),
+      sessionYielderVehicleId: stringDetail(event, 'sessionYielderVehicleId')
+    }))
+  };
+}
+
 function rankedCountRows<Key extends string>(
   map: Map<string, number>,
   limit: number,
@@ -2029,6 +2291,11 @@ function stringDetail(event: EventLogEntry, key: string): string | null {
 function numberDetail(event: EventLogEntry, key: string): number | null {
   const value = event.details[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function booleanDetail(event: EventLogEntry, key: string): boolean | null {
+  const value = event.details[key];
+  return typeof value === 'boolean' ? value : null;
 }
 
 function topShadowLedgerHotspots(map: Map<string, ShadowLedgerHotspot>, limit: number) {

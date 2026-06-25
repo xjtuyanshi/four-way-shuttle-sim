@@ -1,650 +1,625 @@
-# ChatGPT Pro Review Response - Round 14
+## 结论
 
-- Date: 2026-06-24
-- Reviewer surface: ChatGPT Pro Extended
-- Repo: xjtuyanshi/four-way-shuttle-sim
-- Branch: codex/traffic-v2-flow-debug
-- Commit reviewed: 95d63f9
-- Handoff sent: docs/chatgpt-pro-review-handoff-2026-06-24-round14.md
+这不是“站台应该拥有多长的 approach lane”问题，而是一个更窄、更基础的契约缺口：
 
-## Response
+> **`module-02-spine-middle` 是 no-stop 冲突区，但当前系统没有在进入前原子获得“穿过公共节点并到达下一合法停靠点”的 clear-through permit。**
 
-Reviewer decision：Request changes
+站台 coordinator 应当拥有需求、排队、服务顺序；**no-stop spine 的通行权必须由拓扑级 traffic resource 持有**。Wait-for graph 负责识别 SCC 和触发恢复，但不应取代正常通行许可。
 
-当前分支不能接受为 24h/customer-review 候选，但不需要推倒重写。
+---
 
-30m 和短 3D smoke 证明物理运动、安全距离和基础吞吐并没有整体崩坏；40m 稳定等待闭环则证明 station/dock corridor 的活性与资源所有权契约仍不正确。
+# 1. 根因判断
 
-我没有在 GitHub ref 中读取到所列失败 JSON、checkpoint 和 rolling log 文件，因此具体 2400s 状态以已提交 handoff 为事实源；代码结构判断基于 95d63f9 当前源文件。
+## 1.1 SH-07 / SH-08 是端点互换，不是普通 station queue 冲突
 
-核心判断
+最终关系是：
 
-这不是一个真正的“三车环”，而是：
+```text
+SH-02 ──> SH-07 <──> SH-08
+```
 
-SH-01 -> 等待 SH-02 的 dock protection
-SH-02 -> 等待 SH-01 占据的 c18
-SH-07 -> 等待 SH-01 占据的 c18
+真正的 SCC 只有：
 
-其中真正的强连通等待环是：
+```text
+SH-07 <──> SH-08
+```
 
-SH-01 <-> SH-02
+空间关系大致是：
 
-SH-07 是被这个二车环吸住的第三个受害者。
+```text
+SH-07: column-middle-c21
+       -> module-02-spine-middle
+       -> module-02-spine-bottom-a   // SH-08 当前所在
 
-根本错误是：
+SH-08: module-02-spine-bottom-a
+       -> module-02-spine-middle
+       -> column-middle-c21          // SH-07 当前所在
+```
 
-系统让 SH-02 获得了足以阻止 SH-01 离开的 station/dock 优先权，但 SH-02 自己又需要 SH-01 当前占据的物理节点。
+它们不是争抢一个可停车 queue slot，而是在容量为 1 的 no-stop 公共节点两侧尝试互换端点。没有一辆车先横向让入合法 hold pocket，这个状态在物理上不可解。
 
-这违反了非抢占物理资源最基本的规则：
+当前 `agentRefreshNoStopContinuationBlock` 只是查看目标 no-stop 节点之后的一个节点是否已占用或正被 targeting；它没有原子提交“公共节点 + continuation + 首个合法 hold”的整个 clear-through movement。于是两个车辆可以先各自保有一个端点，最后互相等待。
 
-尚未进入 exclusive 状态的未来 owner，不能阻止现有 occupant 释放它所占的资源。
+因此：
 
-“envelope owner precedence”只能在完整 drain 已完成、exclusive lease 已合法生效之后成立。在 shared/draining 阶段，必须是 incumbent/drainer precedence。
+* `physicalViolations = 0` 表明安全层工作正常。
+* deadlock 和 station wait-for cycle 表明活性层、资源所有权和恢复契约失败。
+* 把 station active visit 扩大到 broad approach ownership，只会把局部 no-stop 冲突扩散成站台级互斥，与你们三次 rejected run 的 PPH 崩塌完全一致。
 
-1. 当前 station/dock/lane arbitration 是否已经过度碎片化？
+## 1.2 当前 wait-for 棰测会把 SH-02 错当成 cycle member
 
-是，证据已经足够，不应再增加局部 precedence/yield 例外。
+`deadlockCandidateVehicleIds()` 不是 SCC 算法。它从每个 waiter 沿单一 blocker 链向前走，一旦发现重复，就把整个 `seen` 集合全部加入 cycle。对于：
 
-当前实现实际上有两套控制面：
+```text
+SH-02 -> SH-07 -> SH-08 -> SH-07
+```
 
-Schema 中的 StationKernel、station coordinator 和 service transition 都明确是 mode: "shadow"，即诊断模型，不是实际 movement authority。
+它会把 SH-02、SH-07、SH-08 全部标成 cycle，尽管 SH-02 只是 SCC 上游的排队者。
 
-实际 outbound runtime 同时维护：
+与此同时，no-stop candidate collector 只是收集所有满足 wait reason 和节点条件的车辆，没有先缩减到真实 SCC。
 
-activeVisitRequestId
+这会产生三个后果：
 
-mode
+1. breaker 可能先处理 SCC 外的 SH-02；
+2. pairwise heuristic 可能选择与真正 cycle 无关的恢复；
+3. 某个“看似成功”的恢复返回 `true` 后，本 tick 结束，但 SH-07/SH-08 仍保持闭环。
 
-envelopeOwnerRequestId
+## 1.3 breaker 存在全局饥饿
 
-slotOwnerRequestId
+`tryBreakAgentRefreshWaitCycle()` 排在多种全车队恢复动作之后。前面任意一个 recovery 返回 `true`，函数就立即退出，本 tick 不再检查 no-stop cycle。
 
-serviceOwnerRequestId
+这不是单纯的函数顺序问题，而是调度模型错误：
 
-activeTransition
+* 恢复动作按“函数优先级”串行；
+* 没有按物理 resource region 分区；
+* 没有保证已持续存在的 SCC 最终获得执行机会；
+* 一个完全无关区域里的持续小恢复可以无限压制 module-02 的恢复。
 
-drainEpoch
+## 1.4 即使 breaker 被调用，也可能无声失败
 
-这些都是可能独立变化的 mutable ownership indicators。
+`tryYieldEmptyBottomASpineAwayFromNoStopCycle()` 包含大量布尔 guard，并且 yield pocket 必须通过 `agentRefreshLocalRouteNodesClear()`。
 
-这使系统可能同时表达：
+但 `agentRefreshLocalRouteNodesClear()` 只返回 `boolean`。它把以下原因全部压扁成同一个 `false`：
 
-逻辑上 SH-02 是 active station visit
-物理上 SH-01 仍占据 corridor
-dock policy 保护 SH-02
-node occupancy 保护 SH-01
-drain 规则又只覆盖部分 envelope
+* 当前物理 occupant；
+* `nodeClaimedByOtherVehicle`；
+* 普通 node reservation；
+* reservation 时间窗重叠。
 
-这就是 Round 14 的稳定闭环。
+所以现在无法区分：
 
-另外，2400s 时 shadow ledger 仍为零违规，而当前 station invariant 只检查 demand coverage、重复 commitment、route/kernel lease 配对等，没有检查 foreign occupant、wait-for cycle 或 no-stop entry。
+```text
+没有合法 pocket
+pocket 被真实车辆占用
+pocket 被 planned/local claim 占用
+pocket 被过期或过宽的 reservation 占用
+route 合法，但某个 station-derived claim 阻止了它
+```
 
-最小可行重构
+## 1.5 成功安装的 yield route 也可能在下一 tick 被覆盖
 
-不要重写 task、routing、physics 或 dashboard。只重构 station 周边一个小型 topology-defined conflict region 的 movement arbitration。
+side-yield breaker 会直接改写 `routeNodeIds`、`targetNodeId`、`localRouteNodeIds` 和 `localRouteReason`。
 
-建议引入一个 authoritative：
+但是正常 route planner 只在 committed local route 仍被判定 clear 时才继续使用它；否则会退回 nominal/planned route。
 
-TypeScript
-StationConflictRegionKernel
+而 `installAgentRefreshPlannedRoute()` 会清空 `localRouteNodeIds` 和 `localRouteReason`。
 
-它只负责：
+所以可能出现：
 
-进入共享 dock/throat region
-region 内通行
-进入 service envelope
-clear-through
-普通非 station 车辆的 transit
+```text
+tick N:
+breaker returns true
+temporary-yield route 已安装
 
-保留现有：
+tick N+1:
+一个 claim/reservation 使 committed local route 判定不 clear
+正常 planner 重装 planned route
+temporary-yield 被无声覆盖
+SH-07/SH-08 再次形成同一循环
+```
 
-task assignment；
+## 1.6 为什么 unit test 过，但 1h 仍失败
 
-station FIFO request；
+现有 focused test 直接调用：
 
-shortest path；
+```ts
+tryBreakAgentRefreshWaitCycle([...])
+```
 
-generic occupancy；
+然后立即检查 route 是否已被修改；它没有继续经过完整 tick、全局 recovery 调度、reservation 变化、下一 tick replanning 和 action completion。
 
-collision/swept-footprint；
+甚至“loaded middle-access 在 distractor 前处理”的测试，也是手工传入 candidate list 后直接调用 breaker，并未验证真实 `updateDeadlockSmokeCounters()` 调度路径。
 
-3D physical tick。
+因此测试证明的只是：
 
-逻辑 FIFO 与物理 lease 必须分开：
+> 在一个静态、人工构造、无隐藏动态 claim 的瞬间，某个 heuristic 能找到一条 route。
 
-Station FIFO token:
-  表示 SH-02 是下一个 station head
+它没有证明：
 
-Station movement lease:
-  表示 SH-02 此刻真的可以进入共享物理区域
+* candidate collector 会选中正确 SCC；
+* breaker 本 tick 会被调度；
+* route 不会被覆盖；
+* reservation 不会阻止第一步；
+* loser 实际开始移动；
+* winner 最终穿过；
+* cycle 不会重新形成。
 
-SH-02 可以长期保持 FIFO head，但在 SH-01 排空之前不能拥有会阻止 SH-01 出口的 spatial lease。
+## 1.7 为什么 10m/30m 过，而 1h 才失败
 
-2. bottom-a 混合交通应该怎样运行？
+原因不是 1h 使用了不同物理模型，而是当前控制是**反应式恢复，而非预防式 admission**。
 
-首先，c18 不能同时充当：
+10m/30m 尚未碰到这一精确相位组合：
 
-普通车辆等待点；
+* loaded outbound 到达 middle access；
+* empty pickup/reposition 同时到达 bottom-a spine；
+* 双方 continuation 分别被对方当前节点占住；
+* lateral pocket 又受动态 claim/reservation 影响；
+* 同时其他区域存在 recovery 活动。
 
-outbound station approach；
+一旦运行时间足够长，任务波、station queue、storage exit 和空车 reposition 的相位逐渐错开，命中这个稀有状态只是时间问题。
 
-lane crossing；
+基线 deadlock 计数只有在 candidate 至少持续 30 秒后才增加，因此 `deadlocks = 1` 不是最后一两个 tick 的瞬时快照，而是一个已经持续存在的控制失败。
 
-station protection boundary；
+另外，当前 audit 默认每 5 秒采样，`longWaitSec=300`、`stationaryActiveSec=540`。这些阈值适合长周期 AMR 行为审计，不适合判定 no-stop resource 是否在几秒内失去活性。
 
-多方向车辆的 immediate target。
+---
 
-它应被建模为 no-hold conflict cell。车辆可以穿过，但不能在没有下游保证的情况下进入并停住。
+# 2. 最小架构改动建议
 
-在当前三车状态下，正确顺序如下。
+## 2.1 采用四层资源契约，而不是单一 station ownership
 
-第一步：SH-01 是 incumbent drainer
+建议明确以下所有权：
 
-SH-01 已经物理占据 column-bottom-a-c18。无论它是不是 station 车辆，它都先于后来的 exclusive station grant。
+| 层                    | 权威 owner                   | 含义                         |
+| -------------------- | -------------------------- | -------------------------- |
+| Demand ledger        | Station coordinator        | 哪些 inbound/outbound 服务需求存在 |
+| Queue lease          | Station coordinator        | 哪辆 AMR 被预留给哪个 station/slot |
+| Physical occupancy   | 3D world state             | 节点、边、footprint 当前真实占用      |
+| Service lease        | Station coordinator        | 哪辆 AMR 当前获得装卸服务            |
+| Clear-through permit | **NoStopRegionKernel**     | 谁可以穿过某个 no-stop 冲突区        |
+| Recovery action      | Traffic recovery scheduler | 已形成 SCC 时谁让行、让到哪里          |
 
-应当发生：
+现有 shadow station contract 已经分别统计 demand、queue reservation、physical occupancy、active service 和 route lease，这部分方向是正确的，应继续扩展，而不是推倒重做。
 
-station mode = draining
-active exclusive station lease = null
-SH-01 registered as drainer
-new entries to c18 closed
+## 2.2 新增一个很窄的 `NoStopConflictRegion`
 
-如果 column-bottom-b-c18 以及到第一个安全停止点的路径可用，给 SH-01 一个 bounded drain lease：
+每个 `module-XX-spine-middle` 定义一个拓扑资源，例如：
 
-c18 -> bottom-b-c18 -> first safe egress
+```ts
+type NoStopRegionState =
+  | { mode: 'free' }
+  | { mode: 'leased'; permit: ClearThroughPermit }
+  | { mode: 'recovering'; action: RecoveryAction };
 
-此时 outbound-lift-dock-protected 不得阻止它。
-
-第二步：SH-02 保留 FIFO head，但不拥有 corridor
-
-SH-02 可以保留：
-
-outbound station request
-FIFO sequence
-queue/meter slot lease
-
-但不能保留：
-
-dock corridor ownership
-service envelope ownership
-阻止 SH-01 排空的 movement priority
-
-换句话说：
-
-SH-02 是下一个，不等于 SH-02 现在拥有 c18。
-
-plannedGoal=column-bottom-a-c21 只是 intent，不是空间 lease。
-
-第三步：SH-07 在 region 外等待
-
-SH-07 不是 station queue follower，而是普通 inbound transit requester。
-
-它应在 c19 或更上游的合法 hold 点等待；在没有 transit lease 时，不得继续把 c18 保持为可执行 immediate target。
-
-第四步：SH-01 排空后，才授予 SH-02 station transition
-
-当且仅当：
-
-region 中没有 foreign occupant
-没有 foreign active edge 正在进入
-没有 foreign immediate committed target
-service + clear-through bounded segment 可用
-
-才原子授予 SH-02：
-
-approach -> service -> clear-through
-
-此时关闭 SH-07 所在入口，SH-07 等 SH-02 release 后再获得 transit lease。
-
-一个重要的反向检查
-
-如果 SH-01 到达 c18 后发现 bottom-b-c18 无法使用，那么真正的错误发生得更早：
-
-SH-01 不应该在没有 egress lease 的情况下进入 c18。
-
-因此正常契约应是：
-
-reserve safe egress
--> reserve conflict cell/edges
--> enter
--> release behind
-
-而不是：
-
-先进入 c18
--> 再等待下游和 station policy
-
-如果 c17/c19 也属于 no-stop 节点，它们同样不能被当作长期物理队列；station logical queue 应放在真正合法的 meter/pocket，或把 physical station WIP 暂时限制为 1。
-
-3. 是否应该由一个 station kernel 统一授权？
-
-是，但要统一的是“策略授权”，不是取代底层物理 occupancy。
-
-正确分层应是：
-
-Station queue kernel
-  维护 demand/FIFO/head
-
-Station conflict-region kernel
-  维护 transit/drain/station-entry/service/clear lease
-
-Generic traffic/physics
-  最终执行节点占用、边运动、swept footprint 和碰撞检查
-
-可以在代码上属于同一个 StationKernel，但内部必须保持这两个 ledger 分离。
-
-当前 schema 已经具备接近正确的词汇：
-
-queue-slot
-bounded-approach
-service-envelope
-clear-through
-
-问题是它们目前仍然只存在于 shadow diagnostics。
-
-建议的 authoritative lease
-TypeScript
-type StationMovementLease = {
+type ClearThroughPermit = {
   id: string;
-  stationId: string;
+  regionId: string;
   vehicleId: string;
-  requestId: string | null;
-
-  kind:
-    | 'transit'
-    | 'drain'
-    | 'station-enter'
-    | 'station-service'
-    | 'station-clear';
-
-  phase: 'granted' | 'entered' | 'clearing';
-
-  entryGateId: string;
-  exitNodeId: string;
-
-  protectedNodeIds: string[];
-  protectedEdgeIds: string[];
-
-  issuedAtSec: number;
-  lastProgressAtSec: number;
-  deadlineSec: number;
+  entryNodeId: string;
+  noStopNodeId: string;
+  exitHoldNodeId: string;
+  routePrefix: string[];
+  navigationRevision: number;
+  issuedAtTick: number;
+  progressDeadlineTick: number;
 };
+```
 
-region runtime 应改成 discriminated union，使非法组合不能表达：
-
-TypeScript
-type StationRegionState =
-  | {
-      mode: 'shared';
-      activeLease: null;
-      drainEpoch: null;
-    }
-  | {
-      mode: 'draining';
-      activeLease: null;
-      drainEpoch: DrainEpoch;
-    }
-  | {
-      mode: 'exclusive';
-      activeLease: StationMovementLease;
-      drainEpoch: null;
-    }
-  | {
-      mode: 'clearing';
-      activeLease: StationMovementLease;
-      drainEpoch: null;
-    };
+`routePrefix` 必须覆盖：
 
-然后：
+```text
+当前位置/入口
+-> no-stop 公共节点
+-> continuation
+-> 第一个允许停止的节点
+```
 
-envelopeOwnerRequestId
+只有当整个 prefix 同时满足以下条件时才能 grant：
 
-serviceOwnerRequestId
+* 无其他 conflicting permit；
+* 所需出口不是被不能移动的 incumbent 占用；
+* node/edge/zone reservation 可满足；
+* swept footprint 安全；
+* 最终节点允许 hold。
 
-dock owner
+这不是 DES。车辆仍然在每个 3D tick 中连续运动，permit 只是进入冲突区前的离散通行授权。
 
-active transition owner
+## 2.3 已经形成 SH-07/SH-08 状态时，permit 本身不够
 
-全部从 activeLease 派生，不再分别写入。
+双方已经分别占住对方需要的出口。因此 region kernel 应先进入：
 
-slotOwnerRequestId 可以继续存在，但只能表示 region 外部的 queue slot，不得自动赋予 corridor 权限。
+```text
+recovering
+```
 
-单一调用点
+选择 yielder，并生成一个有生命周期的 `RecoveryAction`：
 
-所有进入或在 station region 内移动的车辆都调用：
+```text
+observed
+-> selected
+-> route-installed
+-> first-leg-started
+-> conflict-cleared
+-> completed
+```
 
-TypeScript
-authorizeStationRegionMove(
-  vehicle,
-  fromNodeId,
-  toNodeId,
-  boundedRoutePrefix
-)
+winner 只有在 yielder 离开其 continuation 后，才获得 clear-through permit。
 
-返回：
+## 2.4 SH-07 与 SH-08 的优先级
 
-TypeScript
-allow
-hold(reason, blockerVehicleId, leaseId)
-grant(lease)
+推荐决策顺序：
 
-旧的：
+1. **已进入冲突区者先完成撤离**；
+2. 已持有且仍有效的 permit；
+3. 能否为 loser 找到真实可执行的合法 lateral hold；
+4. loaded service movement 优先于 empty pickup/reposition；
+5. waiting age；
+6. vehicle ID 作为确定性 tie-break。
 
-outbound-lift-dock-protected
-envelope-owned
-envelope-yielding exception
-foreign-forward-clearing exception
+因此在你描述的典型状态中：
 
-不能继续作为独立 policy blockers。它们应被 region kernel 的一个决策取代。
+* SH-07：loaded、正在向 outbound dropoff 清货；
+* SH-08：empty、向上去 pickup；
+* SH-08 存在安全 lateral bottom-a hold；
 
-node-occupied 仍应保留，因为它是物理事实；但 kernel 不得生成一个会与该物理事实形成反向等待的 lease。
+则应让 SH-08 横向退出，SH-07 获得 permit。
 
-4. 应添加什么 invariant 和 regression test？
-最重要的 invariant
-在 station conflict region 内，不允许存在 vehicle/resource wait-for cycle。
+但不要硬编码“loaded 永远获胜”。若 SH-08 已经进入 region，或者只有 SH-07 能安全进入旁侧 storage pocket，则可执行性必须高于业务优先级。
 
-具体到本次：
+站台只向 region kernel 提交：
 
-SH-01 waits for station lease owned by SH-02
-SH-02 waits for node occupied by SH-01
+```text
+priorityClass = loaded-outbound-service
+stationVisitId
+waitingAge
+```
 
-应在第一次形成时立即报错，不应等到 300–600 秒后才被 long-wait detector 发现。
+它不直接拥有 bottom-a、middle column 或 broad throat。
 
-当前 audit 默认 longWaitSec=300、stationaryActiveSec=540，对于资源闭环检测过晚。
+## 2.5 长期拆分 `OutboundStationRuntime`
 
-建议新增四个硬 invariant
-A. Exclusive lease 不得包含 foreign occupant
-TypeScript
-state.mode === 'exclusive'
-  => occupants(region).every(v => v.id === activeLease.vehicleId)
-B. Foreign occupant 存在时必须处于 draining
-TypeScript
-foreignOccupants(region).length > 0
-  => state.mode === 'draining'
-  && activeLease === null
-  && every foreign occupant is a registered drainer
-C. No-hold cell 进入必须带 egress lease
-TypeScript
-move enters conflict/no-stop node
-  => lease.routePrefix ends at service slot or safe node outside region
-D. Lease 必须有 bounded progress
-TypeScript
-active lease:
-  current time - lastProgressAtSec <= expected transition deadline
+当前 runtime 同时包含：
 
-不能只依赖最终 deadlock count。
+* `activeVisitRequestId`
+* `envelopeOwnerRequestId`
+* `slotOwnerRequestId`
+* `serviceOwnerRequestId`
+* `activeTransition`
+* `drainEpoch`
 
-精确的 SH-01/SH-02/SH-07 regression test
+这些属于四个不同资源域，却被放在一个可任意组合的 mutable object 中。
 
-构造：
+长期应拆为：
 
-SH-01: c18, wants bottom-b-c18, ordinary inbound transit
-SH-02: c17, station FIFO head, loaded outbound
-SH-07: c19, ordinary loaded inbound transit
+```text
+OutboundDemandQueue
+OutboundSlotLease
+OutboundServiceLease
+TrafficClearThroughPermit
+```
 
-必须依次断言：
+但这不是当前 SH-07/SH-08 修复的前置条件。当前最小改动就是先增加 no-stop region permit，停止扩大 station envelope。
 
-SH-02 保持 FIFO head；
+---
 
-SH-02 尚未获得 exclusive spatial lease；
+# 3. 下一步最应该加的 instrumentation
 
-region 进入 draining；
-
-SH-01 获得 drain lease；
-
-SH-07 不得再进入/target c18；
-
-SH-01 先离开 region；
-
-之后才 grant SH-02；
-
-SH-02 完成 service/clear-through；
-
-最后 SH-07 获得 transit；
-
-全程：
-
-无 wait-for SCC；
-
-无 generic deadlock breaker；
-
-无 reverse ping-pong；
-
-无 physical violation。
-
-再加两个单点测试：
-
-does not grant station-exclusive lease while a foreign vehicle occupies the region
-
-does not admit a transit vehicle into a no-hold conflict cell without reserving its safe egress
-Shadow ledger 也必须扩展
-
-至少新增：
-
-stationWaitForCycle
-exclusiveLeaseHasForeignOccupant
-drainerBlockedByPendingOwner
-noStopEntryWithoutEgressLease
-stationLeaseProgressTimeout
-
-否则仍会出现“shadow 0 violation，但三台车静止 600s”的 false green。
-
-5. 下一步最小安全实施计划
-P0：先做一次纯诊断复现，不改行为
-
-不要先写第五个 clearing exception。
-
-在 1500–2400s 范围记录：
-
-每个 station region 的 mode
-active request / active lease
-current occupants
-entry gate claims
-每次 allow/deny decision
-deny reason 与 blocker
-SH-01 进入 c18 的时刻
-SH-02 被标成 owner/head/active visit 的时刻
-第一次形成 SH-01 <-> SH-02 wait-for cycle 的时刻
-
-关键要回答：
-
-SH-01 是先进入 c18，之后 SH-02 才获得保护？
-还是 SH-02 已有合法 exclusive lease，SH-01 仍被错误放入 c18？
-
-这决定 bug 位于：
-
-grant-before-drain
-
-还是：
-
-entry-gate bypass
-
-但两者都由同一个 region contract 修复。
-
-建议把 wait-for SCC 检测加入诊断，第一次形成循环时立刻保存 checkpoint，而不是等 600s 窗口结束。
-
-P1：建立 topology-defined region
-
-在 scenario 初始化时构造并缓存：
-
-TypeScript
-type StationConflictRegionPlan = {
-  id: string;
-  stationId: string;
-
-  interiorNodeIds: string[];
-  interiorEdgeIds: string[];
-
-  entryGateEdges: string[];
-  safeExitNodeIds: string[];
-
-  queueSlotNodeIds: string[];
-  serviceNodeId: string;
-  clearThroughNodeIds: string[];
-};
-
-不要每 tick 从完整动态 route 推导 region，也不要把整条 bottom-a lane 变成 exclusive。
-
-第一版可以每个 region 同时只允许一个 bounded movement lease；只要 region 足够小，这比扩大全 route lease安全得多。正确性稳定后再增加 compatibility matrix。
-
-P2：把现有 runtime 收敛到一个 authority
-
-保留现有 request/FIFO。
-
-替换：
-
-多个 owner ID
-独立 dock blocker
-独立 envelope blocker
-独立 yielding precedence
-
-为：
-
-一个 StationRegionState
-一个 activeLease
-一个 authorizeStationRegionMove()
-
-drainEpoch 和 activeLease 必须互斥。
-
-在迁移期间可以保留旧函数做 assertion：
-
-TypeScript
-if (legacyDecision !== kernelDecision) {
-  emit critical diagnostic;
+## 3.1 证明 breaker 未调用
+
+每个 tick 记录：
+
+```ts
+{
+  type: 'no-stop-recovery-dispatch',
+  tick,
+  regionId,
+  observedWaiters,
+  exactSccVehicleIds,
+  upstreamWaiterIds,
+  candidateVehicleIds,
+  breakerScheduled: boolean,
+  breakerInvoked: boolean,
+  priorRecoveryThatConsumedTick: string | null
 }
+```
 
-但只能有 kernel 的结果实际控制 movement，不能两个 controller 同时投票。
+判据：
 
-P3：focused 和 full-core gate
+```text
+cycleObserved=true
+&& exactScc=[SH-07,SH-08]
+&& breakerInvoked=false
+```
 
-先跑新回归：
+若同时存在 `priorRecoveryThatConsumedTick`，就直接证明是全局 early-return starvation。
 
-Bash
-./node_modules/.bin/vitest run \
-  packages/shuttle-sim-core/src/index.test.ts \
-  -t "station conflict region|drains incumbent before outbound station lease|no-hold conflict cell" \
-  --maxWorkers=1
+## 3.2 证明 breaker 调用但返回 false
 
-再跑当前 15 个相关测试：
+所有布尔 helper 改为可解释结果，至少在 diagnostics 模式：
 
-Bash
-./node_modules/.bin/vitest run \
-  packages/shuttle-sim-core/src/high-inbound.test.ts \
-  packages/shuttle-sim-core/src/lift-approach.test.ts \
-  packages/shuttle-sim-core/src/index.test.ts \
-  -t "keeps a 12-shuttle high-inbound stress run active|uses configured lift approach staging capacity|keeps unready top-lift inbound work|outbound station|envelope-yielding candidate" \
-  --maxWorkers=1
+```ts
+type RecoveryAttemptResult =
+  | { ok: true; actionId: string; routeNodeIds: string[] }
+  | {
+      ok: false;
+      stage:
+        | 'candidate-guard'
+        | 'priority'
+        | 'pocket-enumeration'
+        | 'route-contract'
+        | 'physical-clearance'
+        | 'claim-clearance'
+        | 'reservation-clearance';
+      code: string;
+      resourceId?: string;
+      blockingVehicleId?: string;
+      blockingReservationId?: string;
+  };
+```
 
-然后：
+尤其要把 `tryYieldEmptyBottomASpineAwayFromNoStopCycle()` 每个 guard 的真假和每个 pocket rejection 原因记录下来。
 
-Bash
-./node_modules/.bin/vitest run packages/shuttle-sim-core --maxWorkers=1
-./node_modules/.bin/vitest run packages/shuttle-sim-core
+判据：
 
-要求 0 failed。
+```text
+breakerInvoked=true
+&& result=false
+&& reject stage/code 明确
+```
 
-P4：确定性 replay
+## 3.3 证明 recovery route 被覆盖
 
-加入一个 pre-knot snapshot regression：
+为每辆车增加：
 
-从 cycle 出现前的 snapshot 恢复
-运行至少 120s
-与 direct run 比较 event/state hash
+```ts
+navigationRevision: number
+lastNavigationWriter: string
+lastNavigationActionId: string | null
+```
 
-并断言：
+所有关键 route 写操作必须经过统一入口：
 
-stationWaitForCycle = 0
-exclusiveLeaseHasForeignOccupant = 0
-leaseProgressTimeout = 0
-P5：physical ladder
+```ts
+commitNavigationMutation(vehicle, {
+  writer,
+  actionId,
+  previousRouteHash,
+  nextRoute,
+  reason
+});
+```
 
-先不要再次直接跑 24h。
+第一批必须覆盖：
 
-顺序建议：
+* `installAgentRefreshSideYieldRoute`
+* `installAgentRefreshPlannedRoute`
+* `restoreMissingTaskRouteAtCurrentNode`
+* outbound station transition route
+* taskless storage/standby dispatch
+* conflict-session unwind
 
-45–60m exact scenario
-2h
-6h
-24h
+breaker 成功时保存：
 
-修复后的首轮不要只跑到 2400s，应至少越过原失败点 10–20 分钟。
+```text
+actionId
+installedRevision
+installedRouteHash
+```
 
-首个 gate 可用原配置，但加强观测：
+在：
 
-Bash
-./node_modules/.bin/tsx scripts/run-physical-24h-amr-audit.ts \
-  --duration-sec 3600 \
-  --audit-every-sec 1 \
-  --ten-minute-sec 600 \
-  --hourly-sec 3600 \
-  --shuttles 8 \
-  --regions 2 \
-  --inbound-pph 3600 \
-  --outbound-pph 3600 \
-  --initial-fill-policy zone-balanced-50 \
-  --storage-selection-policy sequential \
-  --collision-avoidance on \
-  --long-wait-sec 60 \
-  --stationary-active-sec 120 \
-  --stop-on-critical \
-  --out output/review/physical-60m-after-station-region-kernel.json
+* 本 tick 结束；
+* 下一 tick pre-advance；
+* 下一 tick post-advance；
+* 后续 2/5 tick；
 
-降低这些检测阈值只是为了更早失败，不能作为行为修复。
+检查 revision。
 
-每一级要求：
+证明被覆盖的条件：
 
-physicalViolations = 0
-deadlocks = 0
-livelocks = 0
-stationWaitForCycle = 0
-exclusiveLeaseHasForeignOccupant = 0
-noStopEntryWithoutEgressLease = 0
-stationLeaseProgressTimeout = 0
+```text
+recovery action = route-installed
+&& vehicle 尚未开始第一步
+&& navigationRevision > installedRevision
+&& lastNavigationActionId !== recoveryActionId
+```
 
-并且：
+必须打印覆盖它的具体 writer，而不是只报“route changed”。
 
-active AMR 不得整整一个 10m 窗口 0 tasks + 0m path + blocked；
+## 3.4 证明被隐藏 reservation/claim 阻塞
 
-更强的实时 gate：active AMR 不得无进展超过 120s；
+把 `agentRefreshLocalRouteNodesClear()` 保留为便捷 boolean wrapper，但底层增加：
 
-每个 10m throughput 不得相对前三个稳定窗口中位数突然下降超过约 25–30%；
+```ts
+explainAgentRefreshLocalRouteClearance(...)
+```
 
-outbound 不能连续窗口塌缩；
+输出每个 route node 的：
 
-snapshot/restore deterministic hash 一致；
+* physical occupant；
+* moving target claimant；
+* local-route claimant；
+* node/edge/zone reservation；
+* reservation ID、owner、reason、start/end；
+* station queue/service lease；
+* no-stop permit；
+* conflict recovery action。
 
-35–50m 时间段应做一次 3D replay/visual smoke，而不只是重新看前 7 分钟。
+目前这些原因全部被压成 `false`，这是最需要修复的 observability 缺口。
 
-明确停止修改的内容
+## 3.5 增加 region-scoped ring buffer
 
-本轮应停止：
+不要依赖 5 秒 audit snapshot。为每个 no-stop region 保留最近 30 秒的内存 ring buffer：
 
-再加 foreign vehicle may clear if... 特例；
+```text
+occupancy
+route tails
+target claims
+reservations
+permits
+wait-for edges
+route mutations
+recovery attempts
+```
 
-再加一层 envelope owner/yielder precedence；
+首次形成 SCC 时自动写 checkpoint，保留形成前 10 秒和形成后 20 秒。
 
-用 loaded/outbound 全局优先级解决；
+## 3.6 统一最终 verdict
 
-改 shortest-path heuristic；
+当前 handoff 出现：
 
-扩大 lease 到完整 route 或整条 bottom-a；
+```text
+critical anomaly count = 0
+station contract = critical wait-for cycle
+```
 
-把 c18 capacity 改成 2；
+这是报告聚合错误。以下任意来源出现 critical，都必须进入同一个：
 
-放松 collision/occupancy；
+```text
+runVerdict = failed
+```
 
-让 SH-01 通过车辆 ID 或固定节点特例倒车；
+来源包括：
 
-降低 PPH、等待或 anomaly 通过阈值；
+* physical safety；
+* no-stop region contract；
+* station contract；
+* wait-for SCC；
+* permit leak；
+* recovery overwrite；
+* AMR long-stuck/small-loop。
 
-依赖 generic deadlock breaker 在运行后修复这个环。
+---
 
-最小安全动作
+# 4. 具体代码路径的修改优先级
 
-下一步只做两件事：
+## P0：先建立可证伪证据，不改变通行行为
 
-加入第一次形成 SH-01 <-> SH-02 wait-for cycle 时的诊断 checkpoint 和确定性三车 regression；
+### `packages/shuttle-sim-core/src/index.ts`
 
-把 bottom-a station conflict region 的 movement authorization 收敛到一个 authoritative bounded lease，确保 drainEpoch 与 exclusive lease 互斥。
+1. 将 wait-for 检测改为真正的 Tarjan SCC。
+2. 明确区分：
 
-不要在完成这两件事之前继续跑 2h/6h/24h。
+   * `exactSccVehicleIds`
+   * `upstreamWaiterIds`
+3. 加 breaker dispatch trace。
+4. 将 route-clear boolean 改为 explainable result。
+5. 增加 `navigationRevision` 和 route mutation journal。
+6. 增加 recovery action lifecycle。
+
+### `packages/shuttle-sim-core/src/index.test.ts`
+
+增加四类测试：
+
+* 真实 `step()` 驱动的 SH-07/SH-08 场景，而非直接调用 private breaker；
+* 加入 SH-02 作为 SCC 上游 waiter，验证它不被算作 cycle member；
+* 加入另一个无关区域的持续 recovery，验证 no-stop breaker 不会饥饿；
+* 分别注入 occupancy、local claim、node reservation、edge/zone reservation，验证 rejection code。
+
+## P1：修复 recovery 调度
+
+停止在 `updateDeadlockSmokeCounters()` 中使用“第一个 recovery 成功就全局 return”的模型。
+
+改为：
+
+```text
+detect all recovery proposals
+-> group by resource region
+-> select at most one action per region
+-> commit mutually non-conflicting actions
+```
+
+至少必须保证：
+
+* module-01 的恢复不能压制 module-02；
+* SCC persistence 越长，调度优先级越高；
+* 同一 SCC 不能连续安装无进展动作；
+* upstream waiter 不参与 yielder 选择。
+
+## P2：shadow-mode `NoStopRegionKernel`
+
+在 `agentRefreshNoStopContinuationBlock()` 附近计算 shadow decision：
+
+```text
+legacy blocker result
+shadow permit decision
+actual movement outcome
+```
+
+记录 divergence，但暂不影响车辆。
+
+Shadow 模式要求同 seed 下运动、完成任务和关键 event hash 与 accepted baseline 一致。
+
+## P3：窄范围 authoritative cutover
+
+只对拓扑识别出的：
+
+```text
+module-XX-spine-middle conflict region
+```
+
+启用 authoritative clear-through permit。
+
+替换的是 no-stop admission 决策，不是：
+
+* broad station approach；
+* bottom-a storage exits；
+* ordinary middle aisle；
+* 所有 outbound routes。
+
+原有 physical occupancy、reservation、swept-footprint collision check 保持最终安全 authority。
+
+## P4：再整理 station runtime
+
+等 no-stop region 通过 1h/12h 后，再拆分 station runtime 的多 owner 字段。不要把这次修复演变成一次大范围 station rewrite。
+
+---
+
+# 5. 应停止继续打补丁的方向
+
+1. **停止 active visit 拥有 broad approach、throat 或 bottom-a storage exit。** 三次 rejected run 已经给出充分反证。
+
+2. **停止为具体 SH 编号、节点组合或 wait reason 增加更多 pair-specific `if`。** 这会继续扩大 heuristic 顺序依赖。
+
+3. **停止把 planned route、FIFO head 或 active visit 直接当作 physical lease。** 计划、排队和空间所有权是不同资源。
+
+4. **停止让 breaker 直接改 route 后立即返回成功，却没有 action lifecycle 和 postcondition。**
+
+5. **停止只调整 breaker 函数顺序。** 把 no-stop breaker临时挪到最前面可以作为诊断实验，但不是最终架构；最终必须按 resource region 调度。
+
+6. **停止依赖 300 秒 long-wait 指标发现 no-stop deadlock。** 对 no-stop SCC 来说，几秒已经是控制失败。
+
+7. **停止用放松 no-stop、collision、footprint 或 reservation 检查换 PPH。** 当前 safety 是有效的，不能牺牲它修 liveness。
+
+8. **停止在 1h canonical failure 没过之前跑 12h/24h。**
+
+---
+
+# 6. 验证 ladder 和 stop rule
+
+以下阈值建议作为第一版 gate；A 必须是相同 seed、相同配置的 accepted restore baseline，B 是候选改动。
+
+| 阶段  | 必做验证                                                                       | Pass gate                                                                                                          | Stop rule                                                                                      |
+| --- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| 微场景 | SH-07/08；加入 SH-02 tail；无关 recovery；四种 reservation/claim；强制 route overwrite | exact SCC 只含 07/08；1 tick 内产生 action；action 实际开始并完成；所有 rejection 可解释                                               | 任一不可解释 `false`、route 无声覆盖、错误选择 SH-02                                                           |
+| 10m | canonical seed + 至少 2 个 alternate seed；shadow 与 active 分开                  | physical=0；critical=0；permit leak=0；未处理 SCC 不超过 1 tick；active total PPH ≥ A 的 95%，每方向 ≥ A 的 90%                    | total PPH < A 的 90% 或任一方向 <80%；任何 physical/critical；任何 recovery overwrite                      |
+| 30m | 同配置 A/B；检查每个 10m AMR 窗口                                                    | 结束时无 wait cycle；无 unresolved action；总 PPH ≥ A 的 95%；无连续 backlog 增长                                                 | 同一 region SCC 重复形成且原因相同；连续 3 个 10m backlog 上升；PPH <90% A                                       |
+| 1h  | 当前失败 seed 必须通过，另加 2 seeds；当前 seed 重复运行应完全确定                                | deadlock=0；station/no-stop critical=0；physical=0；permit/action leak=0；总 PPH ≥ A 的 95%（当前 A≈459，即约436）；每方向 ≥ A 的90% | 任意 SCC 未在动作安装后 2 ticks 内消失；no-stop 无进展 >30s；任一 active AMR 连续 3 个 10m 窗口零完成且持续 assigned/blocked |
+| 12h | 至少 2 seeds；逐小时 PPH、queue slope、P95/P99 waits、per-AMR windows               | 所有安全/契约项为0；最后6小时 queue 无正斜率；每小时 PPH 无持续衰减；无累计 permit/recovery 泄漏                                                   | 连续2小时 PPH < A 的85%；连续3小时 backlog 增长；任何 critical、permit timeout 或相同 SCC recurrence storm        |
+| 24h | canonical customer candidate；建议另一个 seed 至少跑12h                             | 24h physical/critical/deadlock=0；最终无 cycle；总 PPH ≥ A 的95%；各小时分布稳定；per-AMR 无异常长期失衡；3D checkpoint 无视觉违约              | 任一 hard safety/contract failure；任何 unresolved action；队列非稳态增长；小时吞吐持续下降                          |
+
+额外要求：
+
+* **Shadow 模式**：除新增 diagnostics 外，相同 seed 的运动与任务结果应与 A 一致。
+* **Active 模式**：首次 diverge 必须能由 permit grant/reject 或 recovery action 解释。
+* 3D 视觉检查至少覆盖：
+
+  * first permit grant；
+  * SH-08 lateral yield；
+  * SH-07 clear-through；
+  * recovery completion/rejoin；
+  * 1h、6h、12h、24h checkpoint。
+
+最终判断是：
+
+> 站台 coordinator 方向没有错，但它不应拥有 SH-07/SH-08 所争的 spine。应由窄范围 `NoStopConflictRegionKernel` 原子授予 clear-through permit；真实 SCC scheduler 负责异常恢复；station 只提供服务优先级。当前最先该做的不是再加 movement exception，而是把“是否调用、为何失败、是否被覆盖、被谁 reservation 阻塞”四件事变成可直接证明的运行证据。
