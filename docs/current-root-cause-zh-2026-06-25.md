@@ -162,6 +162,6 @@ lift-02-outbound active pass outbound-station-pass:103 for SH-02 includes column
 当前可交接 commit：
 
 - branch：`codex/traffic-v2-flow-debug`
-- commit：`d16e06c checkpoint: document traffic v2 station throat blocker`
+- commit：`decd47b checkpoint: document station throat audit blockers`
 
 这个 commit 是“已保存、可继续分析”的状态，不是最终解决状态。
